@@ -34,7 +34,22 @@ Recorded here because they are the axioms the whole check rests on, and because 
 - `dont_count_slow_torrents` exempts torrents by transfer rate, not by state, so it can prevent the wedge.
 - Seed criteria live on `/api/v3/indexer` (per indexer), not on the download client.
 
-**Status: `assumed`.** None is conformance-tested yet — that is P2. Until then this check rests on documentation and on one observed production incident.
+**Measured against the live homelab instance on 2026-08-26 (qBittorrent 5.2.3):**
+
+- `max_active_uploads` is a real preference and read `3` there. #393 did not record it.
+- **Per-category share limits exist and have a three-way encoding.**
+  `GET /api/v2/torrents/categories` returns, per category, `ratio_limit`,
+  `seeding_time_limit`, `inactive_seeding_time_limit` and `share_limit_action`.
+  Observed: `-2` means **use the global limit**, `-1` means **unlimited**, and
+  `>= 0` is the category's own limit. Both homelab categories (`tv`, `movies`)
+  are `-2`, so they inherit.
+
+**Status of the rest: `assumed`.** The slot-accounting axioms are not
+conformance-tested — that is P2. Until then this check rests on documentation
+plus one observed production incident. Three assumptions in this project have
+already turned out wrong when finally measured (a non-existent `enable` key,
+Sonarr omitting `value` rather than sending null, and the entire qBittorrent
+login protocol), so treat the untested ones with suspicion.
 
 ---
 
@@ -770,6 +785,7 @@ The premises, in report order:
 | `qbt.slow_exempt_off` | `dont_count_slow_torrents` is false |
 | `qbt.no_global_ratio` | `max_ratio_enabled` is false |
 | `qbt.no_global_seed_time` | `max_seeding_time_enabled` is false |
+| `qbt.no_category_limits` | no category sets its own share limit (all inherit or are unlimited) |
 | `arr.indexer_without_seed_criteria` | at least one enabled torrent indexer has no seed criteria set |
 
 The last premise is why P0a read `/api/v3/indexer`. Seed criteria are **per indexer**, so a stack wedges if *any one* enabled torrent indexer lacks them — torrents grabbed from it seed forever and fill the slots. Requiring *every* indexer to lack them would miss the mixed case, which is the common one.
@@ -992,6 +1008,7 @@ NEEDS: tuple[str, ...] = (
     "qbt.dont_count_slow_torrents",
     "qbt.max_ratio_enabled",
     "qbt.max_seeding_time_enabled",
+    "qbt.categories",
     "arr.indexer_seed_criteria",
 )
 
@@ -1043,6 +1060,33 @@ def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool:
     )
 
 
+USE_GLOBAL = -2
+
+
+def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
+    """True when no category overrides the global share limits.
+
+    Measured on 5.2.3: each category carries ``ratio_limit`` and
+    ``seeding_time_limit`` where ``-2`` means inherit the global setting, ``-1``
+    means unlimited, and ``>= 0`` is the category's own limit. A category with
+    its own limit releases its torrents' slots even when the global limits are
+    off, so it breaks the wedge for anything filed under it.
+    """
+    if not is_known(qbt.categories):
+        return None
+    categories = qbt.categories.value or {}
+    if not isinstance(categories, dict):
+        return None
+    for category in categories.values():
+        if not isinstance(category, dict):
+            continue
+        for key in ("ratio_limit", "seeding_time_limit"):
+            value = category.get(key, USE_GLOBAL)
+            if isinstance(value, (int, float)) and value >= 0:
+                return False
+    return True
+
+
 def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download."""
     premises: tuple[Premise, ...] = (
@@ -1051,6 +1095,7 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
+        premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise("arr.indexer_without_seed_criteria", _indexer_without_seed_criteria(arrs)),
     )
     return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises)
