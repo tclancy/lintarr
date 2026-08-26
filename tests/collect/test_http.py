@@ -67,3 +67,22 @@ def test_headers_are_sent_with_requests():
     )
     c.get_json("/x")
     assert seen["x-api-key"] == "secret-key"
+
+
+def test_send_rejects_mutating_verbs():
+    c = _client(lambda r: httpx.Response(200, json={}))
+    for verb in ("DELETE", "PUT", "PATCH"):
+        with pytest.raises(ReadOnlyViolation):
+            c._send(verb, "/api/v2/torrents/delete")
+
+
+def test_underlying_httpx_client_is_not_casually_reachable():
+    c = _client(lambda r: httpx.Response(200, json={}))
+    assert not hasattr(c, "_client")
+
+
+def test_rejected_mutating_verb_is_not_recorded_in_methods_used():
+    c = _client(lambda r: httpx.Response(200, json={}))
+    with pytest.raises(ReadOnlyViolation):
+        c._send("DELETE", "/api/v2/torrents/delete")
+    assert c.methods_used == ()

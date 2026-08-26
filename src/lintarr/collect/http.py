@@ -37,7 +37,7 @@ class ReadOnlyClient:
     ) -> None:
         self._auth_path = auth_path
         self._methods: list[str] = []
-        self._client = httpx.Client(
+        self.__client = httpx.Client(
             base_url=base_url, transport=transport, timeout=_TIMEOUT, headers=headers
         )
 
@@ -46,7 +46,7 @@ class ReadOnlyClient:
         return tuple(self._methods)
 
     def close(self) -> None:
-        self._client.close()
+        self.__client.close()
 
     def __enter__(self) -> "ReadOnlyClient":
         return self
@@ -54,10 +54,12 @@ class ReadOnlyClient:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    def _send(self, method: str, path: str, **kw: Any) -> httpx.Response:
+    def _send(self, method: Literal["GET", "POST"], path: str, **kw: Any) -> httpx.Response:
+        if method not in ("GET", "POST"):
+            raise ReadOnlyViolation(f"method {method!r} is not GET or POST")
         self._methods.append(method)
         try:
-            response = self._client.request(method, path, **kw)
+            response = self.__client.request(method, path, **kw)
         except httpx.HTTPError as exc:
             raise ServiceError("unreachable", f"{path}: {type(exc).__name__}") from exc
         if response.status_code in (401, 403):
