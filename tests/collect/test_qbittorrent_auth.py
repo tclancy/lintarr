@@ -1,3 +1,14 @@
+# Measured against a live qBittorrent 5.2.3 instance on 2026-08-26:
+#
+#   correct password:    HTTP 204, empty body
+#   wrong password:      HTTP 401, body "Unauthorized"
+#   unauthenticated GET: HTTP 403, body "Forbidden"
+#
+# These fixtures encode that observation, not the documented protocol
+# (HTTP 200 "Ok."/"Fails.") the implementation originally assumed — see
+# issue #7. The 200-based fixtures below cover the older, documented
+# protocol generation, which some releases still speak.
+
 import httpx
 import pytest
 
@@ -12,34 +23,45 @@ def _client(handler) -> ReadOnlyClient:
     return ReadOnlyClient("http://qbt", transport=httpx.MockTransport(handler), auth_path=AUTH_PATH)
 
 
+def test_204_empty_body_authenticates():
+    """The real qBittorrent 5.2.3 success response: 204, no body at all."""
+    c = _client(lambda r: httpx.Response(204))
+    authenticate(c, CFG)
+    assert c.methods_used == ("POST",)
+
+
 def test_ok_body_authenticates():
+    """Legacy protocol generation: 200 with body 'Ok.'."""
     c = _client(lambda r: httpx.Response(200, text="Ok."))
     authenticate(c, CFG)
     assert c.methods_used == ("POST",)
 
 
+def test_401_unauthorized_is_unauthorised():
+    """The real qBittorrent 5.2.3 bad-credentials response: 401 'Unauthorized'."""
+    c = _client(lambda r: httpx.Response(401, text="Unauthorized"))
+    with pytest.raises(ServiceError) as e:
+        authenticate(c, CFG)
+    assert e.value.kind == "unauthorised"
+
+
 def test_fails_body_is_unauthorised_not_banned():
+    """Legacy protocol generation: 200 with body 'Fails.'."""
     c = _client(lambda r: httpx.Response(200, text="Fails."))
     with pytest.raises(ServiceError) as e:
         authenticate(c, CFG)
     assert e.value.kind == "unauthorised"
 
 
-def test_forbidden_is_reported_as_banned():
-    """403 on login means the IP is banned, which is a different fix to bad creds."""
-    c = _client(lambda r: httpx.Response(403, text="banned"))
-    with pytest.raises(ServiceError) as e:
-        authenticate(c, CFG)
-    assert e.value.kind == "banned"
+def test_forbidden_is_unauthorised_not_a_guessed_ban():
+    """403 is reported as unauthorised, not banned.
 
-
-def test_unauthorized_401_is_not_reported_as_banned():
-    """A 401 is characteristically a reverse proxy (Authelia forward-auth) in front.
-
-    Calling that a ban states a falsehood as fact and sends the user to wait
-    out an hour-long ban that does not exist.
+    The real ban response shape has never been measured against a live
+    instance (issue #7) — guessing one mapping already produced the exact
+    defect this fixes (a wrong password reported as an hour-long ban that
+    did not exist). The message must not claim a ban is in effect.
     """
-    c = _client(lambda r: httpx.Response(401, text="unauthorized"))
+    c = _client(lambda r: httpx.Response(403, text="Forbidden"))
     with pytest.raises(ServiceError) as e:
         authenticate(c, CFG)
     assert e.value.kind == "unauthorised"
