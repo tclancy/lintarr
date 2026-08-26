@@ -27,7 +27,18 @@ def test_only_verb_other_than_get_is_the_qbittorrent_login():
                 return httpx.Response(200, json=[])
         return httpx.Response(404)
 
-    collect_stack(load_config(ENV), transport=httpx.MockTransport(handle))
+    facts = collect_stack(load_config(ENV), transport=httpx.MockTransport(handle))
+
+    # The verb assertion below is only meaningful if collection actually
+    # happened. Without these, a regression that silently dropped arr (or
+    # qBittorrent) collection would still produce a passing test.
+    assert facts.qbits, "no qBittorrent instance was collected — verb assertion would be vacuous"
+    assert facts.arrs, "no arr instance was collected — verb assertion would be vacuous"
+    assert facts.errors == (), f"expected a clean run, got errors: {facts.errors}"
+
+    seen_paths = {p for _, p in seen}
+    assert "/api/v3/system/status" in seen_paths, "arr path was never exercised"
+    assert "/api/v3/indexer" in seen_paths, "arr path was never exercised"
 
     non_get = [(m, p) for m, p in seen if m != "GET"]
     assert non_get == [("POST", "/api/v2/auth/login")]
