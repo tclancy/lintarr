@@ -8,19 +8,34 @@ from lintarr.facts import is_known
 CFG = ArrConfig(name="main", kind="sonarr", url="http://sonarr", api_key="k")
 
 
-def _indexer(name, *, enable=True, protocol="torrent", fields=None):
-    default = [
+def _indexer(name, *, protocol="torrent", fields=None, enable_keys=True):
+    """Build a raw indexer payload.
+
+    ``enable_keys=True``/``False`` includes all three top-level ``enable*``
+    keys set to that value; ``enable_keys=None`` omits them entirely
+    (simulating an arr version that doesn't expose them); a dict merges
+    specific overrides on top of an all-``True`` default.
+    """
+    default_fields = [
         {"name": "minimumSeeders", "value": 1},
         {"name": "seedCriteria.seedRatio", "value": None},
         {"name": "seedCriteria.seedTime", "value": None},
         {"name": "seedCriteria.seasonPackSeedTime", "value": None},
     ]
-    return {
+    indexer = {
         "name": name,
-        "enable": enable,
         "protocol": protocol,
-        "fields": default if fields is None else fields,
+        "fields": default_fields if fields is None else fields,
     }
+    if enable_keys is None:
+        return indexer
+    base = {"enableRss": True, "enableAutomaticSearch": True, "enableInteractiveSearch": True}
+    if isinstance(enable_keys, dict):
+        base.update(enable_keys)
+    else:
+        base = dict.fromkeys(base, bool(enable_keys))
+    indexer.update(base)
+    return indexer
 
 
 def _collect(indexers, version="4.0.15.2941"):
@@ -62,17 +77,35 @@ def test_missing_seed_field_entirely_is_unknown():
     assert arr.indexers[0].seed_ratio.reason == "field-absent"
 
 
-def test_disabled_and_usenet_indexers_are_kept_with_their_flags():
+def test_usenet_indexer_is_kept_with_its_protocol():
+    arr, _ = _collect([_indexer("News", protocol="usenet")])
+    assert (arr.indexers[0].name, arr.indexers[0].protocol) == ("News", "usenet")
+
+
+def test_enable_fields_are_known_when_present():
+    """Real, independent values for the three enable toggles — never collapsed."""
     arr, _ = _collect(
-        [
-            _indexer("Off", enable=False),
-            _indexer("News", protocol="usenet"),
-        ]
+        [_indexer("Off", enable_keys={"enableRss": False, "enableAutomaticSearch": False})]
     )
-    assert [(i.name, i.enabled, i.protocol) for i in arr.indexers] == [
-        ("Off", False, "torrent"),
-        ("News", True, "usenet"),
-    ]
+    idx = arr.indexers[0]
+    assert is_known(idx.enable_rss)
+    assert idx.enable_rss.value is False
+    assert is_known(idx.enable_automatic_search)
+    assert idx.enable_automatic_search.value is False
+    assert is_known(idx.enable_interactive_search)
+    assert idx.enable_interactive_search.value is True
+
+
+def test_missing_enable_fields_are_unknown_not_false():
+    """An indexer with no enable* keys must not be silently read as disabled."""
+    arr, _ = _collect([_indexer("Old", enable_keys=None)])
+    idx = arr.indexers[0]
+    assert not is_known(idx.enable_rss)
+    assert idx.enable_rss.reason == "field-absent"
+    assert not is_known(idx.enable_automatic_search)
+    assert idx.enable_automatic_search.reason == "field-absent"
+    assert not is_known(idx.enable_interactive_search)
+    assert idx.enable_interactive_search.reason == "field-absent"
 
 
 def test_issues_only_get_requests():

@@ -31,8 +31,10 @@ class QbtInstance:
 @dataclass(frozen=True, slots=True)
 class IndexerFacts:
     name: str
-    enabled: bool
     protocol: str
+    enable_rss: Fact[bool]
+    enable_automatic_search: Fact[bool]
+    enable_interactive_search: Fact[bool]
     seed_ratio: Fact[float]
     seed_time: Fact[int]
     season_pack_seed_time: Fact[int]

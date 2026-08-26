@@ -5,6 +5,13 @@ a live Sonarr: /api/v3/downloadclient carries no seed fields, while each
 /api/v3/indexer entry has a ``fields`` list containing
 ``seedCriteria.seedRatio``, ``seedCriteria.seedTime`` and
 ``seedCriteria.seasonPackSeedTime``.
+
+There is also no plain ``enable`` key on an indexer. Verified against a live
+Sonarr/Radarr: an indexer's top-level keys include ``enableRss``,
+``enableAutomaticSearch`` and ``enableInteractiveSearch`` instead — three
+independent toggles, not one. Defaulting an absent key to ``False`` would be
+this project's cardinal sin (a defaulted fact masquerading as a real one), so
+each is read as its own ``Fact`` rather than collapsed into a bare bool.
 """
 
 from typing import Any
@@ -21,6 +28,14 @@ _SEED_FIELDS = {
     "seed_ratio": "seedCriteria.seedRatio",
     "seed_time": "seedCriteria.seedTime",
     "season_pack_seed_time": "seedCriteria.seasonPackSeedTime",
+}
+
+# These live at the indexer's top level, unlike the seed criteria above which
+# are nested inside its ``fields`` list.
+_ENABLE_FIELDS = {
+    "enable_rss": "enableRss",
+    "enable_automatic_search": "enableAutomaticSearch",
+    "enable_interactive_search": "enableInteractiveSearch",
 }
 
 
@@ -42,8 +57,11 @@ def collect_arr(client: ReadOnlyClient, cfg: ArrConfig) -> ArrInstance:
         indexers.append(
             IndexerFacts(
                 name=raw.get("name", ""),
-                enabled=bool(raw.get("enable", False)),
                 protocol=raw.get("protocol", ""),
+                **{
+                    attr: read(raw, key, source=source, version=version)
+                    for attr, key in _ENABLE_FIELDS.items()
+                },
                 **{
                     attr: read(mapping, key, source=source, version=version)
                     for attr, key in _SEED_FIELDS.items()
