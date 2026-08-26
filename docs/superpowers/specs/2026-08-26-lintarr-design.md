@@ -233,9 +233,19 @@ def queue_liveness(f: StackFacts, qbt: QbtInstance) -> Finding:
         premise("qbt.no_global_ratio",      not qbt.max_ratio_enabled),
         premise("qbt.no_global_seed_time",  not qbt.max_seed_time_enabled),
         premise("qbt.no_category_limits",   not qbt.any_category_share_limit),
-        premise("arr.no_per_torrent_goals", not f.any_arr_seed_goal_for(qbt)),
+        premise("arr.indexer_without_goal", f.any_torrent_indexer_lacking_seed_criteria()),
     )
 ```
+
+**Seed criteria are per *indexer*, not per download client** — verified against
+a live Sonarr, where `/api/v3/downloadclient` carries no seed fields at all and
+`/api/v3/indexer` carries `seedCriteria.seedRatio`, `seedCriteria.seedTime` and
+`seedCriteria.seasonPackSeedTime`.
+
+That granularity changes the predicate. A stack wedges if **any one** enabled
+torrent indexer lacks seed criteria, because torrents grabbed from it seed
+forever and accumulate in the slots. Requiring *every* indexer to lack them
+would miss the mixed case, which is the common one.
 
 `any_active_limit_finite` covers all three real queue limits —
 `max_active_downloads`, `max_active_uploads`, `max_active_torrents` — since a
@@ -320,8 +330,8 @@ FAIL  queue-liveness  [qbittorrent/main]              confidence: high
   Your settings — read from your stack, check these yourself:
     qbittorrent.max_active_torrents   = 5      GET /api/v2/app/preferences
     qbittorrent.max_ratio_enabled     = false  GET /api/v2/app/preferences
-    sonarr[main].seed_ratio           = unset  GET /api/v3/downloadclient
-    radarr[main].seed_ratio           = unset  GET /api/v3/downloadclient
+    sonarr[main] 1337x seedRatio      = unset  GET /api/v3/indexer
+    sonarr[main] EZTV  seedRatio      = unset  GET /api/v3/indexer
 
   What we believe about qBittorrent — we could be wrong here:
     seeding torrents occupy an active slot
@@ -348,10 +358,15 @@ only that a hazard *window* exists, true of many healthy stacks.
 **1. `queue-liveness`** *(FAIL-grade)* — completed torrents hold active slots
 forever, so no queued download can start.
 
-Soundness depends on reading **per-torrent seed goals** set by the arrs via
-`/api/v3/downloadclient`, **per-category share limits** (qBt 4.6+), and all
+Soundness depends on reading **per-indexer seed criteria** via `/api/v3/indexer`
+(see above — *not* the download client), **per-category share limits**, and all
 **three** active limits plus `dont_count_slow_torrents`. Global
 `max_ratio_enabled=false` alone does not mean seeding is unlimited.
+
+Per-category share limits are read defensively: where the running qBittorrent
+does not expose them, the fact is `Unknown("field-absent")` and the invariant
+reports `SKIP` rather than guessing. This is the fact discipline earning its
+keep on a field whose availability varies by version.
 
 **2. `hardlink-futility`** *(FAIL-grade, P3)* — hardlinks are enabled but library
 and download roots are on different filesystems, so every "hardlink" is silently
