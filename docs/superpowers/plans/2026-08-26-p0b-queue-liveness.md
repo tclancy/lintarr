@@ -251,7 +251,9 @@ def test_one_false_premise_is_a_pass():
 
 def test_unknown_premise_skips_even_when_others_would_conflict():
     """A missing input must never be read as agreement."""
-    f = conflict_if("inv", "qbt[main]", premise("a", True), premise("b", Unknown("field-absent", "b")))
+    f = conflict_if(
+        "inv", "qbt[main]", premise("a", True), premise("b", Unknown("field-absent", "b"))
+    )
     assert f.outcome is Outcome.SKIP
 
 
@@ -423,9 +425,15 @@ def test_every_fact_in_both_fixtures_is_known():
     """A fixture with an accidental Unknown would silently turn FAIL into SKIP."""
     for build in (wedged_qbt, repaired_qbt):
         q = build()
-        for name in ("queueing_enabled", "max_active_downloads", "max_active_uploads",
-                     "max_active_torrents", "dont_count_slow_torrents", "max_ratio_enabled",
-                     "max_seeding_time_enabled"):
+        for name in (
+            "queueing_enabled",
+            "max_active_downloads",
+            "max_active_uploads",
+            "max_active_torrents",
+            "dont_count_slow_torrents",
+            "max_ratio_enabled",
+            "max_seeding_time_enabled",
+        ):
             assert is_known(getattr(q, name)), f"{build.__name__}.{name} is not Known"
 
 
@@ -937,7 +945,11 @@ def test_closed_form_matches_the_model_exhaustively():
 )
 @settings(max_examples=300, deadline=None)
 def test_closed_form_matches_the_model_on_random_queues(dl, ul, tot, slow, share, n):
-    if n <= max(x for x in (dl, ul, tot) if x >= 0) if any(x >= 0 for x in (dl, ul, tot)) else False:
+    if (
+        n <= max(x for x in (dl, ul, tot) if x >= 0)
+        if any(x >= 0 for x in (dl, ul, tot))
+        else False
+    ):
         return  # too few torrents to exceed any limit; not a wedge scenario
     assert _predicate(dl, ul, tot, slow, share) == simulate(_model(dl, ul, tot, slow, share), n)
 ```
@@ -1099,7 +1111,9 @@ def test_collect_errors_become_error_findings():
 
 
 def test_an_unreachable_service_does_not_let_the_run_look_clean():
-    facts = StackFacts(qbits=(repaired_qbt(),), arrs=NO_GOALS, errors=(("sonarr[main]", "unreachable"),))
+    facts = StackFacts(
+        qbits=(repaired_qbt(),), arrs=NO_GOALS, errors=(("sonarr[main]", "unreachable"),)
+    )
     assert run_outcome(run_checks(facts)) is Outcome.ERROR
 
 
@@ -1292,8 +1306,7 @@ Append to `src/lintarr/cli.py`, and add `from lintarr.outcomes import Outcome, e
 ```python
 _THEREFORE = {
     "queue-liveness": (
-        "completed torrents hold every active slot and no queued\n"
-        "  download can start."
+        "completed torrents hold every active slot and no queued\n  download can start."
     ),
 }
 
@@ -1340,22 +1353,29 @@ def _render_findings(findings) -> str:
 
 @cli.command("check")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
-@click.option("--no-strict", "strict", flag_value=False, default=True,
-              help="Do not treat SKIP or N/A as a non-zero exit.")
+@click.option(
+    "--no-strict",
+    "strict",
+    flag_value=False,
+    default=True,
+    help="Do not treat SKIP or N/A as a non-zero exit.",
+)
 @click.pass_context
 def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     """Check whether this stack's settings can coexist."""
     facts = collect_stack(load_config(os.environ), transport=ctx.obj.get("transport"))
     findings = run_checks(facts)
     if as_json:
-        click.echo(jsonlib.dumps(
-            {
-                "schema": 1,
-                "outcome": str(run_outcome(findings)),
-                "findings": [_finding_to_dict(f) for f in findings],
-            },
-            indent=2,
-        ))
+        click.echo(
+            jsonlib.dumps(
+                {
+                    "schema": 1,
+                    "outcome": str(run_outcome(findings)),
+                    "findings": [_finding_to_dict(f) for f in findings],
+                },
+                indent=2,
+            )
+        )
     else:
         click.echo(_render_findings(findings))
     ctx.exit(exit_code((f.outcome for f in findings), strict=strict))
