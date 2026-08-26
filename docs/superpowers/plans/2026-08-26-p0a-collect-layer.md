@@ -154,8 +154,12 @@ from lintarr.facts import Known, Unknown, is_known, read
 
 
 def test_known_carries_provenance():
-    f = Known(value=5, source="GET /api/v2/app/preferences",
-              read_at=datetime.now(UTC), service_version="v5.2.3")
+    f = Known(
+        value=5,
+        source="GET /api/v2/app/preferences",
+        read_at=datetime.now(UTC),
+        service_version="v5.2.3",
+    )
     assert is_known(f)
     assert f.value == 5
 
@@ -299,20 +303,29 @@ from lintarr.config import load_config
 
 
 def test_single_instance_of_each():
-    cfg = load_config({
-        "QBIT_URL": "http://gluetun:8080", "QBIT_USER": "admin", "QBIT_PASS": "s3cret",
-        "SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "abc",
-    })
+    cfg = load_config(
+        {
+            "QBIT_URL": "http://gluetun:8080",
+            "QBIT_USER": "admin",
+            "QBIT_PASS": "s3cret",
+            "SONARR_URL": "http://sonarr:8989",
+            "SONARR_API_KEY": "abc",
+        }
+    )
     assert [q.name for q in cfg.qbits] == ["main"]
     assert cfg.qbits[0].url == "http://gluetun:8080"
     assert [(a.name, a.kind) for a in cfg.arrs] == [("main", "sonarr")]
 
 
 def test_named_extra_instances():
-    cfg = load_config({
-        "SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "abc",
-        "SONARR_URL__ANIME": "http://anime:8989", "SONARR_API_KEY__ANIME": "def",
-    })
+    cfg = load_config(
+        {
+            "SONARR_URL": "http://sonarr:8989",
+            "SONARR_API_KEY": "abc",
+            "SONARR_URL__ANIME": "http://anime:8989",
+            "SONARR_API_KEY__ANIME": "def",
+        }
+    )
     assert sorted(a.name for a in cfg.arrs) == ["anime", "main"]
 
 
@@ -322,15 +335,20 @@ def test_declared_defaults_to_what_is_configured():
 
 
 def test_declared_can_be_set_explicitly():
-    cfg = load_config({
-        "QBIT_URL": "http://q:8080", "QBIT_USER": "u", "QBIT_PASS": "p",
-        "LINTARR_SERVICES": "qbittorrent,sonarr",
-    })
+    cfg = load_config(
+        {
+            "QBIT_URL": "http://q:8080",
+            "QBIT_USER": "u",
+            "QBIT_PASS": "p",
+            "LINTARR_SERVICES": "qbittorrent,sonarr",
+        }
+    )
     assert cfg.declared == frozenset({"qbittorrent", "sonarr"})
 
 
 def test_url_without_credentials_is_an_error():
     import pytest
+
     with pytest.raises(ValueError, match="SONARR_API_KEY"):
         load_config({"SONARR_URL": "http://sonarr:8989"})
 
@@ -838,8 +856,9 @@ def _handler(prefs=PREFS, version="v5.2.3", categories=None):
 
 
 def _collect(**kw):
-    client = ReadOnlyClient("http://qbt", transport=httpx.MockTransport(_handler(**kw)),
-                            auth_path=AUTH_PATH)
+    client = ReadOnlyClient(
+        "http://qbt", transport=httpx.MockTransport(_handler(**kw)), auth_path=AUTH_PATH
+    )
     return collect_qbt(client, CFG), client
 
 
@@ -1033,8 +1052,12 @@ def _indexer(name, *, enable=True, protocol="torrent", fields=None):
         {"name": "seedCriteria.seedTime", "value": None},
         {"name": "seedCriteria.seasonPackSeedTime", "value": None},
     ]
-    return {"name": name, "enable": enable, "protocol": protocol,
-            "fields": default if fields is None else fields}
+    return {
+        "name": name,
+        "enable": enable,
+        "protocol": protocol,
+        "fields": default if fields is None else fields,
+    }
 
 
 def _collect(indexers, version="4.0.15.2941"):
@@ -1077,10 +1100,12 @@ def test_missing_seed_field_entirely_is_unknown():
 
 
 def test_disabled_and_usenet_indexers_are_kept_with_their_flags():
-    arr, _ = _collect([
-        _indexer("Off", enable=False),
-        _indexer("News", protocol="usenet"),
-    ])
+    arr, _ = _collect(
+        [
+            _indexer("Off", enable=False),
+            _indexer("News", protocol="usenet"),
+        ]
+    )
     assert [(i.name, i.enabled, i.protocol) for i in arr.indexers] == [
         ("Off", False, "torrent"),
         ("News", True, "usenet"),
@@ -1197,9 +1222,13 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "k",
-    "SONARR_URL__ANIME": "http://anime:8989", "SONARR_API_KEY__ANIME": "k2",
+    "QBIT_URL": "http://qbt:8080",
+    "QBIT_USER": "admin",
+    "QBIT_PASS": "pw",
+    "SONARR_URL": "http://sonarr:8989",
+    "SONARR_API_KEY": "k",
+    "SONARR_URL__ANIME": "http://anime:8989",
+    "SONARR_API_KEY__ANIME": "k2",
 }
 
 
@@ -1251,8 +1280,11 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "k",
+    "QBIT_URL": "http://qbt:8080",
+    "QBIT_USER": "admin",
+    "QBIT_PASS": "pw",
+    "SONARR_URL": "http://sonarr:8989",
+    "SONARR_API_KEY": "k",
 }
 
 
@@ -1368,7 +1400,9 @@ from click.testing import CliRunner
 from lintarr.cli import cli
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "hunter2",
+    "QBIT_URL": "http://qbt:8080",
+    "QBIT_USER": "admin",
+    "QBIT_PASS": "hunter2",
 }
 
 
@@ -1380,8 +1414,9 @@ def _transport():
             case "/api/v2/app/version":
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences":
-                return httpx.Response(200, json={"queueing_enabled": True,
-                                                 "max_active_torrents": 5})
+                return httpx.Response(
+                    200, json={"queueing_enabled": True, "max_active_torrents": 5}
+                )
             case "/api/v2/torrents/categories":
                 return httpx.Response(200, json={})
         return httpx.Response(404)
@@ -1475,8 +1510,9 @@ def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     for group in ("qbits", "arrs"):
         for instance in payload[group]:
-            lines.append(f"{instance.get('kind', 'qbittorrent')}[{instance['name']}] "
-                         f"v{instance['version']}")
+            lines.append(
+                f"{instance.get('kind', 'qbittorrent')}[{instance['name']}] v{instance['version']}"
+            )
             for key, value in sorted(instance.items()):
                 if not isinstance(value, dict) or "known" not in value:
                     continue

@@ -147,14 +147,16 @@ read `None` must be distinguishable from unread:
 @dataclass(frozen=True)
 class Known[T]:
     value: T
-    source: str            # "GET /api/v2/app/preferences"
+    source: str  # "GET /api/v2/app/preferences"
     read_at: datetime
     service_version: str
+
 
 @dataclass(frozen=True)
 class Unknown:
     reason: Literal["service-absent", "field-absent", "insufficient-permission"]
     detail: str
+
 
 type Fact[T] = Known[T] | Unknown
 ```
@@ -169,7 +171,7 @@ instances, and multiple download clients per arr, are the common case.
 ```python
 @dataclass(frozen=True)
 class StackFacts:
-    arrs: tuple[ArrInstance, ...]          # each with its own download clients
+    arrs: tuple[ArrInstance, ...]  # each with its own download clients
     download_clients: tuple[QbtInstance, ...]
     filesystem: FilesystemFacts
 ```
@@ -227,12 +229,12 @@ lint.
 @invariant(id="queue-liveness", needs=[...], uses=[...])
 def queue_liveness(f: StackFacts, qbt: QbtInstance) -> Finding:
     return conflict_if(
-        premise("qbt.queueing_enabled",     qbt.queueing),
-        premise("qbt.a_limit_is_binding",   qbt.any_active_limit_finite),
-        premise("qbt.slow_exempt_off",      not qbt.dont_count_slow_torrents),
-        premise("qbt.no_global_ratio",      not qbt.max_ratio_enabled),
-        premise("qbt.no_global_seed_time",  not qbt.max_seed_time_enabled),
-        premise("qbt.no_category_limits",   not qbt.any_category_share_limit),
+        premise("qbt.queueing_enabled", qbt.queueing),
+        premise("qbt.a_limit_is_binding", qbt.any_active_limit_finite),
+        premise("qbt.slow_exempt_off", not qbt.dont_count_slow_torrents),
+        premise("qbt.no_global_ratio", not qbt.max_ratio_enabled),
+        premise("qbt.no_global_seed_time", not qbt.max_seed_time_enabled),
+        premise("qbt.no_category_limits", not qbt.any_category_share_limit),
         premise("arr.indexer_without_goal", f.any_torrent_indexer_lacking_seed_criteria()),
     )
 ```
