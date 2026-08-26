@@ -46,6 +46,31 @@ def _to_dict(facts: StackFacts) -> dict[str, Any]:
     }
 
 
+def _render_fact_lines(key: str, value: dict[str, Any], *, indent: str) -> list[str]:
+    if value["known"]:
+        return [f"{indent}{key:<28} = {value['value']!r:<12} {value['source']}"]
+    return [f"{indent}{key:<28} ? UNKNOWN ({value['reason']})"]
+
+
+def _render_nested_list(key: str, items: list[dict[str, Any]], *, indent: str) -> list[str]:
+    """Render a list of nested dataclass dicts, e.g. an arr's ``indexers``."""
+    lines = [f"{indent}{key}:"]
+    for item in items:
+        identity = ", ".join(
+            f"{k}={v!r}"
+            for k, v in item.items()
+            if k != "name"
+            and not (isinstance(v, dict) and "known" in v)
+            and not isinstance(v, list)
+        )
+        name = item.get("name", "")
+        lines.append(f"{indent}  {name}  ({identity})" if identity else f"{indent}  {name}")
+        for fact_key, fact_value in sorted(item.items()):
+            if isinstance(fact_value, dict) and "known" in fact_value:
+                lines.extend(_render_fact_lines(fact_key, fact_value, indent=f"{indent}    "))
+    return lines
+
+
 def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     for group in ("qbits", "arrs"):
@@ -54,12 +79,10 @@ def _render_human(payload: dict[str, Any]) -> str:
                 f"{instance.get('kind', 'qbittorrent')}[{instance['name']}] v{instance['version']}"
             )
             for key, value in sorted(instance.items()):
-                if not isinstance(value, dict) or "known" not in value:
-                    continue
-                if value["known"]:
-                    lines.append(f"    {key:<28} = {value['value']!r:<12} {value['source']}")
-                else:
-                    lines.append(f"    {key:<28} ? UNKNOWN ({value['reason']})")
+                if isinstance(value, dict) and "known" in value:
+                    lines.extend(_render_fact_lines(key, value, indent="    "))
+                elif isinstance(value, list) and value and isinstance(value[0], dict):
+                    lines.extend(_render_nested_list(key, value, indent="    "))
             lines.append("")
     for err in payload["errors"]:
         lines.append(f"ERROR  {err['instance']}: {err['kind']}")
