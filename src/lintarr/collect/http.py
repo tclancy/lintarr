@@ -55,8 +55,18 @@ class ReadOnlyClient:
         self.close()
 
     def _send(self, method: Literal["GET", "POST"], path: str, **kw: Any) -> httpx.Response:
+        """The single choke point every request passes through.
+
+        The allow-list lives *here* rather than only in ``post_auth`` because
+        POST is qBittorrent's mutation verb: ``/api/v2/torrents/delete``,
+        ``/api/v2/torrents/pause`` and ``/api/v2/app/setPreferences`` are all
+        POSTs. Enforcing at the public wrapper alone would leave ``_send``
+        itself as an open mutation channel.
+        """
         if method not in ("GET", "POST"):
             raise ReadOnlyViolation(f"method {method!r} is not GET or POST")
+        if method == "POST" and (self._auth_path is None or path != self._auth_path):
+            raise ReadOnlyViolation(f"POST to {path!r} is not the allow-listed auth path")
         self._methods.append(method)
         try:
             response = self.__client.request(method, path, **kw)
@@ -79,7 +89,12 @@ class ReadOnlyClient:
             raise ServiceError("bad-response", f"{path}: body is not JSON") from exc
 
     def post_auth(self, path: str, data: dict[str, str]) -> httpx.Response:
-        """The single permitted mutating verb: qBittorrent's login."""
+        """The single permitted mutating verb: qBittorrent's login.
+
+        The same check runs again inside ``_send``. That duplication is
+        deliberate defence in depth: neither layer may be assumed to be the
+        only one standing.
+        """
         if self._auth_path is None or path != self._auth_path:
             raise ReadOnlyViolation(f"POST to {path!r} is not the allow-listed auth path")
         return self._send("POST", path, data=data)

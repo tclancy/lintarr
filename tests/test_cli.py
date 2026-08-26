@@ -2,6 +2,7 @@ import json
 import os
 
 import httpx
+import pytest
 from click.testing import CliRunner
 
 from lintarr.cli import cli
@@ -69,22 +70,67 @@ def test_dump_facts_records_the_source_of_every_known_fact():
     assert payload["qbits"][0]["max_active_torrents"]["source"] == "GET /api/v2/app/preferences"
 
 
-def test_dump_facts_never_prints_credentials():
-    assert "hunter2" not in _run(["dump-facts"]).output
-    assert "hunter2" not in _run(["dump-facts", "--json"]).output
-
-
 _ARR_ENV = {"SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "sonarrkey"}
 _INDEXERS = [
     {
+        "id": 1,
         "name": "1337x",
-        "enable": True,
         "protocol": "torrent",
+        "implementation": "Torznab",
+        # The three real top-level toggles. There is no plain ``enable`` key on
+        # an arr indexer; a fixture carrying one documents a field that does
+        # not exist, and it was exactly that phantom key which produced an
+        # earlier defaulting bug.
+        "enableRss": True,
+        "enableAutomaticSearch": True,
+        "enableInteractiveSearch": False,
         # Only seedRatio is present -> seed_time/season_pack_seed_time are
         # Unknown("field-absent"); seed_ratio is Known(2.0).
-        "fields": [{"name": "seedCriteria.seedRatio", "value": 2.0}],
+        "fields": [
+            {
+                "name": "seedCriteria.seedRatio",
+                "order": 0,
+                "label": "Seed Ratio",
+                "type": "number",
+                "advanced": True,
+                "value": 2.0,
+            }
+        ],
     }
 ]
+
+
+def _run_both_services(args, *, collected):
+    """Run dump-facts over a qBittorrent *and* an arr, proving both were collected.
+
+    Absence assertions ("the password is not in the output") are vacuous
+    unless something was actually collected — deleting qBittorrent collection
+    entirely used to leave the credential test green. *collected* is a list of
+    markers whose presence proves each service's facts reached the output.
+    """
+    result = _run(args, extra_env=_ARR_ENV, transport=_transport(arr_indexers=_INDEXERS))
+    assert result.exit_code == 0, result.output
+    for marker in collected:
+        assert marker in result.output, f"{marker!r} missing — absence assertions would be vacuous"
+    return result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "collected"),
+    [
+        (["dump-facts"], ["qbittorrent[main]", "sonarr[main]", "1337x", "max_active_torrents"]),
+        (["dump-facts", "--json"], ['"qbits"', '"indexers"', '"1337x"', '"max_active_torrents"']),
+    ],
+)
+def test_dump_facts_never_prints_credentials(args, collected):
+    """Neither the qBittorrent password nor the arr api key may reach the output.
+
+    The api key travels in a request header and is the credential most likely
+    to leak into a ``source`` string, so it is covered alongside the password.
+    """
+    output = _run_both_services(args, collected=collected)
+    assert "hunter2" not in output
+    assert "sonarrkey" not in output
 
 
 def test_dump_facts_json_includes_indexer_facts():
@@ -97,11 +143,38 @@ def test_dump_facts_json_includes_indexer_facts():
     assert indexer["seed_ratio"]["value"] == 2.0
     assert indexer["seed_time"]["known"] is False
     assert indexer["seed_time"]["reason"] == "field-absent"
+    assert indexer["protocol"]["known"] is True
+    assert indexer["protocol"]["value"] == "torrent"
+
+
+def test_dump_facts_json_emits_the_service_version_of_every_known_fact():
+    """service_version gates version-ranged axioms; unemitted, it is uncheckable."""
+    transport = _transport(arr_indexers=_INDEXERS)
+    payload = json.loads(
+        _run(["dump-facts", "--json"], extra_env=_ARR_ENV, transport=transport).output
+    )
+    assert payload["qbits"][0]["max_active_torrents"]["service_version"] == "v5.2.3"
+    indexer = payload["arrs"][0]["indexers"][0]
+    assert indexer["seed_ratio"]["service_version"] == "4.0.15.2941"
 
 
 def test_dump_facts_human_mode_includes_indexer_facts():
-    """Regression: human mode used to drop every arr indexer fact silently."""
+    """Regression: human mode used to drop every arr indexer fact silently.
+
+    The assertions name indexer-specific fact keys. ``"field-absent"`` alone
+    was satisfied by qBittorrent's own unknown prefs and ``"1337x"`` only
+    proved the name line rendered, so both survived deleting the fact-
+    rendering loop from ``_render_nested_list`` — the exact regression this
+    test exists to catch.
+    """
     transport = _transport(arr_indexers=_INDEXERS)
     result = _run(["dump-facts"], extra_env=_ARR_ENV, transport=transport)
     assert "1337x" in result.output
-    assert "field-absent" in result.output
+    # A Known indexer fact, an Unknown one, and the enable/protocol facts:
+    # every branch of the nested renderer.
+    assert "seed_ratio" in result.output
+    assert "seed_time" in result.output
+    assert "season_pack_seed_time" in result.output
+    assert "enable_interactive_search" in result.output
+    assert "protocol" in result.output
+    assert "seed_time                    ? UNKNOWN (field-absent)" in result.output

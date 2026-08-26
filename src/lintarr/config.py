@@ -61,7 +61,42 @@ def _suffix(name: str) -> str:
     return "" if name == "main" else f"__{name.upper()}"
 
 
+def _credential_suffixes(env: Mapping[str, str], *credential_bases: str) -> set[str]:
+    """Every instance suffix (``''`` or ``'__NAME'``) any of *credential_bases* is set for."""
+    found: set[str] = set()
+    for key in env:
+        for base in credential_bases:
+            if key == base:
+                found.add("")
+            elif key.startswith(f"{base}__"):
+                found.add(key.removeprefix(base))
+    return found
+
+
+def _reject_orphaned_credentials(
+    env: Mapping[str, str], url_base: str, *credential_bases: str
+) -> None:
+    """Fail when credentials exist for an instance whose URL does not.
+
+    A single typo — ``QBIT_URLL`` — otherwise yields no instance *and* no
+    declared service, so the run exits clean having never looked at
+    qBittorrent at all. A silent green on an unchecked service is the worst
+    outcome this tool can produce, so orphaned credentials are an error.
+    """
+    for suffix in sorted(_credential_suffixes(env, *credential_bases)):
+        if f"{url_base}{suffix}" not in env:
+            present = sorted(f"{b}{suffix}" for b in credential_bases if f"{b}{suffix}" in env)
+            raise ValueError(
+                f"{', '.join(present)} set but {url_base}{suffix} missing — "
+                f"the service would be neither collected nor reported as absent"
+            )
+
+
 def load_config(env: Mapping[str, str]) -> LintarrConfig:
+    _reject_orphaned_credentials(env, "QBIT_URL", "QBIT_USER", "QBIT_PASS")
+    for _kind in ("SONARR", "RADARR"):
+        _reject_orphaned_credentials(env, f"{_kind}_URL", f"{_kind}_API_KEY")
+
     qbits = []
     for name, url in sorted(_instances(env, "QBIT").items()):
         s = _suffix(name)

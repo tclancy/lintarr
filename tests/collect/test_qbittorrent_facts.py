@@ -1,6 +1,7 @@
 import httpx
+import pytest
 
-from lintarr.collect.http import ReadOnlyClient
+from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.collect.qbittorrent import AUTH_PATH, collect_qbt
 from lintarr.config import QbtConfig
 from lintarr.facts import is_known
@@ -69,6 +70,27 @@ def test_absent_preference_becomes_unknown_field_absent():
     qbt, _ = _collect(prefs=prefs)
     assert not is_known(qbt.dont_count_slow_torrents)
     assert qbt.dont_count_slow_torrents.reason == "field-absent"
+
+
+@pytest.mark.parametrize("version", ["", "   "])
+def test_empty_version_is_bad_response(version):
+    """Matches the arr adapter: an unparseable version is ERROR, never a guess."""
+    with pytest.raises(ServiceError) as e:
+        _collect(version=version)
+    assert e.value.kind == "bad-response"
+
+
+@pytest.mark.parametrize("prefs", [["not", "a", "dict"], "a string"])
+def test_non_object_preferences_payload_is_bad_response(prefs):
+    with pytest.raises(ServiceError) as e:
+        _collect(prefs=prefs)
+    assert e.value.kind == "bad-response"
+
+
+def test_non_object_categories_payload_is_bad_response():
+    with pytest.raises(ServiceError) as e:
+        _collect(categories=["not", "a", "dict"])
+    assert e.value.kind == "bad-response"
 
 
 def test_only_get_after_the_single_auth_post():

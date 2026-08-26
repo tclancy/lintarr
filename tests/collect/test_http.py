@@ -76,6 +76,30 @@ def test_send_rejects_mutating_verbs():
             c._send(verb, "/api/v2/torrents/delete")
 
 
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v2/torrents/delete", "/api/v2/torrents/pause", "/api/v2/app/setPreferences"],
+)
+def test_send_rejects_post_to_a_non_auth_path(path):
+    """POST *is* qBittorrent's mutation verb — _send itself must refuse it."""
+    c = _client(lambda r: httpx.Response(200, json={}), auth_path="/api/v2/auth/login")
+    with pytest.raises(ReadOnlyViolation):
+        c._send("POST", path)
+    assert c.methods_used == ()
+
+
+def test_send_rejects_post_when_no_auth_path_is_configured():
+    c = _client(lambda r: httpx.Response(200, json={}))
+    with pytest.raises(ReadOnlyViolation):
+        c._send("POST", "/api/v2/auth/login")
+
+
+def test_send_permits_post_to_the_configured_auth_path():
+    c = _client(lambda r: httpx.Response(200, text="Ok."), auth_path="/api/v2/auth/login")
+    assert c._send("POST", "/api/v2/auth/login", data={"username": "u"}).text == "Ok."
+    assert c.methods_used == ("POST",)
+
+
 def test_underlying_httpx_client_is_not_casually_reachable():
     c = _client(lambda r: httpx.Response(200, json={}))
     assert not hasattr(c, "_client")

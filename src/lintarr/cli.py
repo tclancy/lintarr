@@ -20,6 +20,10 @@ def _fact_to_dict(f: Known[Any] | Unknown) -> dict[str, Any]:
             "value": f.value,
             "source": f.source,
             "read_at": f.read_at.isoformat(),
+            # The version of the service the fact was read from. Emitted
+            # because version-ranged axioms consume it downstream; a value
+            # carried but never surfaced cannot be checked end-to-end.
+            "service_version": f.service_version,
         }
     return {"known": False, "reason": f.reason, "detail": f.detail}
 

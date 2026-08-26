@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from lintarr.facts import Known, Unknown, is_known, read
 
@@ -23,6 +23,19 @@ def test_read_present_key_is_known():
     assert is_known(f)
     assert f.value == 1.5
     assert f.source == "GET /prefs"
+
+
+def test_read_stamps_the_service_version():
+    """The version is load-bearing for version-ranged axioms, so it must arrive."""
+    f = read({"max_ratio": 1.5}, "max_ratio", source="GET /prefs", version="v5.2.3")
+    assert f.service_version == "v5.2.3"
+
+
+def test_read_at_is_timezone_aware_utc():
+    """Project-wide rule: timestamps are UTC. A naive datetime.now() is a bug."""
+    f = read({"max_ratio": 1.5}, "max_ratio", source="GET /prefs", version="v5.2.3")
+    assert f.read_at.tzinfo is not None
+    assert f.read_at.utcoffset() == timedelta(0)
 
 
 def test_read_present_key_with_null_value_is_known_not_unknown():

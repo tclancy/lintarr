@@ -31,7 +31,11 @@ class QbtInstance:
 @dataclass(frozen=True, slots=True)
 class IndexerFacts:
     name: str
-    protocol: str
+    # A Fact, not a bare str: the flagship premise is "any enabled *torrent*
+    # indexer lacking seed criteria". An indexer whose protocol did not parse
+    # must not be silently classified as not-a-torrent and dropped from the
+    # predicate — that reports PASS on the very failure lintarr exists to find.
+    protocol: Fact[str]
     enable_rss: Fact[bool]
     enable_automatic_search: Fact[bool]
     enable_interactive_search: Fact[bool]

@@ -33,6 +33,19 @@ def test_forbidden_is_reported_as_banned():
     assert e.value.kind == "banned"
 
 
+def test_unauthorized_401_is_not_reported_as_banned():
+    """A 401 is characteristically a reverse proxy (Authelia forward-auth) in front.
+
+    Calling that a ban states a falsehood as fact and sends the user to wait
+    out an hour-long ban that does not exist.
+    """
+    c = _client(lambda r: httpx.Response(401, text="unauthorized"))
+    with pytest.raises(ServiceError) as e:
+        authenticate(c, CFG)
+    assert e.value.kind == "unauthorised"
+    assert "banned" not in str(e.value)
+
+
 def test_exactly_one_login_attempt_is_made_on_failure():
     """Retrying is what triggers qBittorrent's IP ban, so there must be no retry."""
     calls = []

@@ -26,7 +26,13 @@ def test_only_verb_other_than_get_is_the_qbittorrent_login():
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences" | "/api/v3/system/status":
                 return httpx.Response(200, json={"version": "4.0.0"})
-            case "/api/v2/torrents/categories" | "/api/v3/indexer":
+            # These two were once collapsed into one arm returning a list.
+            # qBittorrent's categories endpoint returns an *object*; only the
+            # arr indexer endpoint returns an array. Sharing an arm made the
+            # fixture disagree with both services at once.
+            case "/api/v2/torrents/categories":
+                return httpx.Response(200, json={})
+            case "/api/v3/indexer":
                 return httpx.Response(200, json=[])
         return httpx.Response(404)
 
