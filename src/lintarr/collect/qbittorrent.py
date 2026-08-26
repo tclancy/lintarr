@@ -15,24 +15,48 @@ AUTH_PATH = "/api/v2/auth/login"
 
 
 def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
-    """Log in once. Never retries — see module docstring."""
+    """Log in once. Never retries — see module docstring.
+
+    qBittorrent 5.2.3, measured live on 2026-08-26, does not follow its own
+    documented login protocol:
+
+        correct password:   HTTP 204, empty body
+        wrong password:     HTTP 401, body "Unauthorized"
+        unauthenticated GET: HTTP 403, body "Forbidden"
+
+    Older releases are documented (and believed, not yet independently
+    measured) to still return HTTP 200 with body "Ok." on success and
+    HTTP 200 with body "Fails." on bad credentials. Both generations are
+    handled below.
+
+    ``ReadOnlyClient._send`` raises ``ServiceError("unauthorised")`` for
+    both 401 and 403 before this function ever sees the response, so both
+    arrive here as that exception, not as an httpx.Response.
+
+    The real "you are banned" response shape has NOT been measured against
+    a live instance — see issue #7. Guessing one mapping already produced
+    the exact defect this fix corrects (401 misreported as a ban), so
+    nothing is mapped to "banned" here. A 403 is reported as
+    "unauthorised" with a note that its shape is unverified, rather than
+    labelled with a kind nobody has confirmed.
+    """
     try:
         response = client.post_auth(AUTH_PATH, {"username": cfg.username, "password": cfg.password})
     except ServiceError as exc:
-        # Only 403 means banned. A 401 on this path is characteristically a
-        # reverse proxy in front of qBittorrent (Authelia forward-auth is
-        # common in this exact stack) refusing the request before qBittorrent
-        # ever sees it. Reporting that as a ban states a falsehood as fact and
-        # sends the user to wait out an hour that would never expire.
         if exc.kind == "unauthorised" and "403" in exc.detail:
             raise ServiceError(
-                "banned",
-                "qBittorrent refused login with HTTP 403 — the IP is most likely "
-                "banned for repeated failures; it clears after WebUI\\BanDuration "
-                "(default 3600s)",
+                "unauthorised",
+                "qBittorrent refused login with HTTP 403 — this may mean an IP "
+                "ban is active, but the ban response shape has not been "
+                "measured against a live instance (see issue #7), so it is "
+                "reported as unauthorised rather than guessed at",
             ) from exc
         raise
-    if response.text.strip() != "Ok.":
+    # _send() already raises ServiceError for any status >= 400, so a
+    # response reaching here is always a 2xx — the modern 204 with an empty
+    # body, the legacy 200 with body "Ok.", or the legacy 200 with body
+    # "Fails.", which is qBittorrent's old-protocol way of saying no.
+    if response.status_code == 200 and response.text.strip() == "Fails.":
         raise ServiceError("unauthorised", "qBittorrent rejected the credentials")
 
 
