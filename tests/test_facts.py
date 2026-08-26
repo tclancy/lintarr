@@ -4,8 +4,12 @@ from lintarr.facts import Known, Unknown, is_known, read
 
 
 def test_known_carries_provenance():
-    f = Known(value=5, source="GET /api/v2/app/preferences",
-              read_at=datetime.now(UTC), service_version="v5.2.3")
+    f = Known(
+        value=5,
+        source="GET /api/v2/app/preferences",
+        read_at=datetime.now(UTC),
+        service_version="v5.2.3",
+    )
     assert is_known(f)
     assert f.value == 5
 

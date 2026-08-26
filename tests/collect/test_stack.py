@@ -4,9 +4,13 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "k",
-    "SONARR_URL__ANIME": "http://anime:8989", "SONARR_API_KEY__ANIME": "k2",
+    "QBIT_URL": "http://qbt:8080",
+    "QBIT_USER": "admin",
+    "QBIT_PASS": "pw",
+    "SONARR_URL": "http://sonarr:8989",
+    "SONARR_API_KEY": "k",
+    "SONARR_URL__ANIME": "http://anime:8989",
+    "SONARR_API_KEY__ANIME": "k2",
 }
 
 

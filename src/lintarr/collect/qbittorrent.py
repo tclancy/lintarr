@@ -17,9 +17,7 @@ AUTH_PATH = "/api/v2/auth/login"
 def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     """Log in once. Never retries — see module docstring."""
     try:
-        response = client.post_auth(
-            AUTH_PATH, {"username": cfg.username, "password": cfg.password}
-        )
+        response = client.post_auth(AUTH_PATH, {"username": cfg.username, "password": cfg.password})
     except ServiceError as exc:
         if exc.kind == "unauthorised":
             raise ServiceError(

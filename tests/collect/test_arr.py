@@ -15,8 +15,12 @@ def _indexer(name, *, enable=True, protocol="torrent", fields=None):
         {"name": "seedCriteria.seedTime", "value": None},
         {"name": "seedCriteria.seasonPackSeedTime", "value": None},
     ]
-    return {"name": name, "enable": enable, "protocol": protocol,
-            "fields": default if fields is None else fields}
+    return {
+        "name": name,
+        "enable": enable,
+        "protocol": protocol,
+        "fields": default if fields is None else fields,
+    }
 
 
 def _collect(indexers, version="4.0.15.2941"):
@@ -59,10 +63,12 @@ def test_missing_seed_field_entirely_is_unknown():
 
 
 def test_disabled_and_usenet_indexers_are_kept_with_their_flags():
-    arr, _ = _collect([
-        _indexer("Off", enable=False),
-        _indexer("News", protocol="usenet"),
-    ])
+    arr, _ = _collect(
+        [
+            _indexer("Off", enable=False),
+            _indexer("News", protocol="usenet"),
+        ]
+    )
     assert [(i.name, i.enabled, i.protocol) for i in arr.indexers] == [
         ("Off", False, "torrent"),
         ("News", True, "usenet"),

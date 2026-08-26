@@ -6,7 +6,9 @@ from click.testing import CliRunner
 from lintarr.cli import cli
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "hunter2",
+    "QBIT_URL": "http://qbt:8080",
+    "QBIT_USER": "admin",
+    "QBIT_PASS": "hunter2",
 }
 
 # Click's CliRunner env parameter ADDS to the ambient environment rather than
@@ -19,11 +21,20 @@ ENV = {
 _CLEARED = {
     k: None
     for k in (
-        "QBIT_URL", "QBIT_URL__MAIN",
-        "QBIT_USER", "QBIT_USER__MAIN",
-        "QBIT_PASS", "QBIT_PASS__MAIN",
-        "SONARR_URL", "SONARR_URL__MAIN", "SONARR_API_KEY", "SONARR_API_KEY__MAIN",
-        "RADARR_URL", "RADARR_URL__MAIN", "RADARR_API_KEY", "RADARR_API_KEY__MAIN",
+        "QBIT_URL",
+        "QBIT_URL__MAIN",
+        "QBIT_USER",
+        "QBIT_USER__MAIN",
+        "QBIT_PASS",
+        "QBIT_PASS__MAIN",
+        "SONARR_URL",
+        "SONARR_URL__MAIN",
+        "SONARR_API_KEY",
+        "SONARR_API_KEY__MAIN",
+        "RADARR_URL",
+        "RADARR_URL__MAIN",
+        "RADARR_API_KEY",
+        "RADARR_API_KEY__MAIN",
         "LINTARR_SERVICES",
     )
 }
@@ -37,8 +48,9 @@ def _transport():
             case "/api/v2/app/version":
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences":
-                return httpx.Response(200, json={"queueing_enabled": True,
-                                                 "max_active_torrents": 5})
+                return httpx.Response(
+                    200, json={"queueing_enabled": True, "max_active_torrents": 5}
+                )
             case "/api/v2/torrents/categories":
                 return httpx.Response(200, json={})
         return httpx.Response(404)

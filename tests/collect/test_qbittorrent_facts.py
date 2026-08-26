@@ -39,8 +39,9 @@ def _handler(prefs=PREFS, version="v5.2.3", categories=None):
 
 
 def _collect(**kw):
-    client = ReadOnlyClient("http://qbt", transport=httpx.MockTransport(_handler(**kw)),
-                            auth_path=AUTH_PATH)
+    client = ReadOnlyClient(
+        "http://qbt", transport=httpx.MockTransport(_handler(**kw)), auth_path=AUTH_PATH
+    )
     return collect_qbt(client, CFG), client
 
 

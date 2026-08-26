@@ -50,8 +50,9 @@ def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     for group in ("qbits", "arrs"):
         for instance in payload[group]:
-            lines.append(f"{instance.get('kind', 'qbittorrent')}[{instance['name']}] "
-                         f"v{instance['version']}")
+            lines.append(
+                f"{instance.get('kind', 'qbittorrent')}[{instance['name']}] v{instance['version']}"
+            )
             for key, value in sorted(instance.items()):
                 if not isinstance(value, dict) or "known" not in value:
                     continue
