@@ -1041,7 +1041,7 @@ def _not(fact: Fact[bool]) -> Fact[bool] | None:
     return not bool(fact.value)
 
 
-def _a_limit_binds(qbt: QbtInstance) -> bool | None:
+def _max_active_torrents_binds(qbt: QbtInstance) -> bool | None:
     """True when any of the three active limits is not the unlimited sentinel."""
     limits = (qbt.max_active_downloads, qbt.max_active_uploads, qbt.max_active_torrents)
     if any(not is_known(limit) for limit in limits):
@@ -1110,7 +1110,7 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download."""
     premises: tuple[Premise, ...] = (
         premise("qbt.queueing_enabled", qbt.queueing_enabled),
-        premise("qbt.max_active_torrents_binds", _a_limit_binds(qbt)),
+        premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
