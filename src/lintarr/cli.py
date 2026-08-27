@@ -11,6 +11,8 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.facts import Known, Unknown, is_known
 from lintarr.models import StackFacts
+from lintarr.outcomes import Outcome, exit_code
+from lintarr.run import run_checks, run_outcome
 
 
 def _fact_to_dict(f: Known[Any] | Unknown) -> dict[str, Any]:
@@ -108,3 +110,80 @@ def dump_facts(ctx: click.Context, as_json: bool) -> None:
     facts = collect_stack(load_config(os.environ), transport=ctx.obj.get("transport"))
     payload = _to_dict(facts)
     click.echo(jsonlib.dumps(payload, indent=2) if as_json else _render_human(payload))
+
+
+_THEREFORE = {
+    "queue-liveness": (
+        "completed torrents hold every active slot and no queued\n  download can start."
+    ),
+}
+
+
+def _finding_to_dict(finding) -> dict[str, Any]:
+    return {
+        "invariant": finding.invariant,
+        "instance": finding.instance,
+        "outcome": str(finding.outcome),
+        "detail": finding.detail,
+        "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
+    }
+
+
+def _render_findings(findings) -> str:
+    lines: list[str] = []
+    for f in findings:
+        lines.append(f"{f.outcome:<5} {f.invariant}  [{f.instance}]")
+        if f.premises:
+            header = (
+                "  Your settings — read from your stack, check these yourself:"
+                if f.outcome is Outcome.FAIL
+                else "  Could not read:"
+            )
+            lines.append("")
+            lines.append(header)
+            for p in f.premises:
+                state = "holds" if p.state else "unknown" if p.state is None else "does not hold"
+                lines.append(f"    {p.label:<36} {state}")
+        if f.detail:
+            lines.append(f"  {f.detail}")
+        therefore = _THEREFORE.get(f.invariant)
+        if therefore and f.outcome is Outcome.FAIL:
+            lines.append("")
+            lines.append(f"  Therefore: {therefore}")
+        lines.append("")
+    counts: dict[str, int] = {}
+    for f in findings:
+        counts[str(f.outcome)] = counts.get(str(f.outcome), 0) + 1
+    summary = ", ".join(f"{n} {name}" for name, n in sorted(counts.items()))
+    lines.append(f"{len(findings)} checked: {summary}" if findings else "nothing to check")
+    return "\n".join(lines)
+
+
+@cli.command("check")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@click.option(
+    "--no-strict",
+    "strict",
+    flag_value=False,
+    default=True,
+    help="Do not treat SKIP or N/A as a non-zero exit.",
+)
+@click.pass_context
+def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
+    """Check whether this stack's settings can coexist."""
+    facts = collect_stack(load_config(os.environ), transport=ctx.obj.get("transport"))
+    findings = run_checks(facts)
+    if as_json:
+        click.echo(
+            jsonlib.dumps(
+                {
+                    "schema": 1,
+                    "outcome": str(run_outcome(findings)),
+                    "findings": [_finding_to_dict(f) for f in findings],
+                },
+                indent=2,
+            )
+        )
+    else:
+        click.echo(_render_findings(findings))
+    ctx.exit(exit_code((f.outcome for f in findings), strict=strict))
