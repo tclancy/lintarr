@@ -18,6 +18,13 @@ def _fact(value):
     return Known(value=value, source="GET /x", read_at=datetime.now(UTC), service_version="v1")
 
 
+#: "this toggle was not overridden", which is a different thing from overriding
+#: it with ``None``. Using ``None`` for both made every ``rss=None`` in this
+#: file silently build ``Known(True)`` instead of the read-null it looked like,
+#: so a test could name a three-valued property and exercise none of it.
+_UNSET = object()
+
+
 def _indexer(
     *,
     seed_ratio,
@@ -25,9 +32,9 @@ def _indexer(
     season_pack_seed_time=None,
     protocol="torrent",
     enabled=True,
-    rss=None,
-    automatic=None,
-    interactive=None,
+    rss=_UNSET,
+    automatic=_UNSET,
+    interactive=_UNSET,
 ):
     """One indexer, every fact settable on its own.
 
@@ -38,7 +45,7 @@ def _indexer(
     """
 
     def toggle(override):
-        return _fact(enabled) if override is None else _wrap(override)
+        return _fact(enabled) if override is _UNSET else _wrap(override)
 
     return IndexerFacts(
         name="1337x",
@@ -72,6 +79,11 @@ WITH_GOALS = _arrs(_indexer(seed_ratio=_fact(2.0)))
 WITH_SEED_TIME_ONLY = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(2880)))
 USENET_NO_GOALS = _arrs(_indexer(seed_ratio=_NO_RATIO, protocol="usenet"))
 DISABLED_NO_GOALS = _arrs(_indexer(seed_ratio=_NO_RATIO, enabled=False))
+
+# An arr that answered, whose one goal-less indexer we cannot classify. The
+# only way to reach an arr-shaped SKIP with arr data present, which is what
+# tests/test_run.py needs to pin the "not configured" relabel against.
+UNCLASSIFIABLE_NO_GOALS = _arrs(_indexer(seed_ratio=_NO_RATIO, protocol=None))
 
 # The five values that drifted in homelab#393, as overrides. Kept here so a
 # test can vary one more setting on top of the wedge; wedged_qbt() itself is
@@ -323,8 +335,7 @@ def test_a_limit_read_as_something_other_than_a_number_skips():
 
 def test_a_null_protocol_skips_rather_than_passing():
     """``"protocol": null`` is not "not a torrent"."""
-    null_protocol = _arrs(_indexer(seed_ratio=_NO_RATIO, protocol=None))
-    f = check(wedged_qbt(), null_protocol)
+    f = check(wedged_qbt(), UNCLASSIFIABLE_NO_GOALS)
     assert f.outcome is Outcome.SKIP
     assert [p.label for p in f.premises] == ["arr.indexer_without_seed_criteria"]
 
@@ -346,8 +357,23 @@ def test_null_enable_toggles_skip_rather_than_passing():
 
 
 def test_one_toggle_that_is_on_settles_the_classification():
-    """Three-valued OR: an unreadable toggle cannot take back an enabled one."""
-    partly_null = _arrs(_indexer(seed_ratio=_NO_RATIO, rss=True, automatic=None, interactive=None))
+    """Three-valued OR: an unreadable toggle cannot take back an enabled one.
+
+    Both flavours of unreadable are present, because the predicate collapses
+    them and this is the only test that proves it does not wait on either: a
+    key read back as null, and a key never read at all. Ordering the unknown
+    check first — the obvious shape — turns this stack's FAIL into a SKIP, and
+    a checker reporting "could not look" at a wedge it could see is the failure
+    this file exists to prevent.
+    """
+    partly_null = _arrs(
+        _indexer(
+            seed_ratio=_NO_RATIO,
+            rss=True,
+            automatic=_fact(None),
+            interactive=Unknown("field-absent", "enable_interactive_search"),
+        )
+    )
     assert check(wedged_qbt(), partly_null).outcome is Outcome.FAIL
 
 
@@ -443,20 +469,52 @@ def test_an_arr_that_reported_no_indexers_is_a_read_we_performed():
     assert check(wedged_qbt(), empty).outcome is Outcome.PASS
 
 
+def test_a_pass_says_so_when_the_arr_answered_with_no_indexers():
+    """A bare PASS reads as "we examined the indexers"; here there were none.
+
+    The verdict is right, but an operator who expected indexers in their Sonarr
+    has a collection problem, and nothing else in the output would show it.
+    """
+    empty = (ArrInstance(name="main", kind="sonarr", version="4.0.19", indexers=()),)
+    f = check(wedged_qbt(), empty)
+    assert "sonarr[main]" in f.detail
+    assert "no indexers" in f.detail
+
+
+def test_a_pass_over_real_indexers_does_not_claim_the_arr_answered_with_none():
+    """The other direction: the note must not fire on an arr we did examine."""
+    assert "no indexers" not in check(wedged_qbt(), WITH_GOALS).detail
+
+
 # --- Category share limits ---------------------------------------------------
 
 
-def test_a_category_missing_a_share_limit_key_skips_rather_than_inheriting():
-    """An absent key is unknown, not "-2, inherit the global setting".
+def test_a_category_missing_a_share_limit_key_does_not_set_its_own_limit():
+    """An absent key is information: this client cannot express such a limit.
 
-    Both keys were measured present on 5.2.3, so a category without one is a
-    shape we have never seen. Defaulting it decides the premise from a value
-    the client never sent.
+    A category that never reports ``seeding_time_limit`` has no seeding-time
+    limit of its own to release its torrents' slots with, so the wedge stands.
+    Reading the absence as unknown instead made the flagship conflict
+    permanently undecidable on every stack whose client omits these keys.
     """
     q = qbt_with(**(WEDGE | {"categories": {"tv": {"ratio_limit": -2}}}))
-    f = check(q, NO_GOALS)
-    assert f.outcome is Outcome.SKIP
-    assert [p.label for p in f.premises] == ["qbt.no_category_limits"]
+    assert check(q, NO_GOALS).outcome is Outcome.FAIL
+
+
+def test_qbittorrents_default_arr_categories_do_not_hide_the_incident():
+    """#393's own shape: ``tv-sonarr`` and ``radarr`` carrying no share limits.
+
+    This is what ``GET /api/v2/torrents/categories`` returns on a client that
+    does not expose per-category share limits, and it is qBittorrent's default
+    arr integration — so a rule that made it undecidable would take the
+    motivating incident with it.
+    """
+    arr_categories = {
+        "tv-sonarr": {"name": "tv-sonarr", "savePath": "/data/torrents/tv"},
+        "radarr": {"name": "radarr", "savePath": "/data/torrents/movies"},
+    }
+    q = qbt_with(**(WEDGE | {"categories": arr_categories}))
+    assert check(q, NO_GOALS).outcome is Outcome.FAIL
 
 
 def test_a_category_that_is_not_an_object_skips_rather_than_being_ignored():

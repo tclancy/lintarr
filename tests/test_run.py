@@ -5,7 +5,7 @@ from lintarr.models import ArrInstance, StackFacts
 from lintarr.outcomes import Outcome
 from lintarr.run import run_checks, run_outcome
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
-from tests.invariants.test_queue_liveness import NO_GOALS
+from tests.invariants.test_queue_liveness import NO_GOALS, UNCLASSIFIABLE_NO_GOALS
 
 _QBT_ONLY = frozenset({"qbittorrent"})
 _QBT_AND_SONARR = frozenset({"qbittorrent", "sonarr"})
@@ -98,6 +98,25 @@ def test_an_undeclared_arr_makes_the_seeding_conflict_not_applicable():
     liveness = next(f for f in findings if f.invariant == "queue-liveness")
     assert liveness.outcome is Outcome.NOT_APPLICABLE
     assert "no sonarr or radarr" in liveness.detail
+
+
+def test_an_arr_that_was_collected_is_never_called_not_configured():
+    """The relabel states a cause, and a collected arr disproves it.
+
+    Sonarr is running, answered, and its indexers were read — one of them just
+    could not be classified. Consulting ``declared`` alone reported "no sonarr
+    or radarr is configured" over facts collected from Sonarr in the same run:
+    a conclusion its own premises deny, which is the defect the renderer's
+    "Therefore" line had, one layer up.
+    """
+    facts = StackFacts(qbits=(wedged_qbt(),), arrs=UNCLASSIFIABLE_NO_GOALS)
+    liveness = next(
+        f for f in run_checks(facts, declared=_QBT_ONLY) if f.invariant == "queue-liveness"
+    )
+    assert liveness.outcome is Outcome.SKIP
+    assert [p.label for p in liveness.premises] == ["arr.indexer_without_seed_criteria"]
+    assert "not configured" not in liveness.detail
+    assert "no sonarr or radarr" not in liveness.detail
 
 
 def test_the_three_ways_of_having_no_arr_are_distinguishable():

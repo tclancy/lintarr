@@ -61,7 +61,9 @@ def _absent_service_findings(facts: StackFacts, declared: frozenset[str]) -> lis
     ]
 
 
-def _resolve_missing_arrs(finding: Finding, declared: frozenset[str]) -> Finding:
+def _resolve_missing_arrs(
+    finding: Finding, facts: StackFacts, *, declared: frozenset[str]
+) -> Finding:
     """Say *why* an arr-shaped SKIP had no arr data, and when it is not a SKIP at all.
 
     Only a SKIP whose single unknown premise is the arr one is touched, so a
@@ -70,12 +72,19 @@ def _resolve_missing_arrs(finding: Finding, declared: frozenset[str]) -> Finding
     unreadable but inapplicable: there is no service that could ever answer it,
     and reporting "could not read" for a service the operator does not run
     tells them to go fix nothing.
+
+    ``facts.arrs`` is consulted alongside *declared* because the relabel states
+    a cause — "no sonarr or radarr is configured" — and a collected arr
+    disproves it outright. An arr that answered but whose indexers could not be
+    classified reaches this function as the same arr-shaped SKIP, and telling
+    the operator the service they are running is not configured is the same
+    defect as a "Therefore" line contradicting its own premises.
     """
     if finding.outcome is not Outcome.SKIP:
         return finding
     if {p.label for p in finding.premises} != {_ARR_PREMISE}:
         return finding
-    if declared & ARR_KINDS:
+    if declared & ARR_KINDS or facts.arrs:
         return finding
     return replace(
         finding,
@@ -93,7 +102,7 @@ def run_checks(facts: StackFacts, *, declared: frozenset[str]) -> tuple[Finding,
     vacuous PASS, so it has to say.
     """
     findings = [
-        _resolve_missing_arrs(queue_liveness.check(qbt, facts.arrs), declared)
+        _resolve_missing_arrs(queue_liveness.check(qbt, facts.arrs), facts, declared=declared)
         for qbt in facts.qbits
     ]
     findings += _absent_service_findings(facts, declared)

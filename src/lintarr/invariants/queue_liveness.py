@@ -49,6 +49,7 @@ against a live client:
 """
 
 from collections.abc import Iterable
+from dataclasses import replace
 from typing import Any
 
 from lintarr.facts import Fact, is_known
@@ -273,14 +274,25 @@ def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None
 def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
     """True when *key* is this category's own limit rather than an inherited one.
 
-    An absent key is unknown, not an inherited limit. Measured on 5.2.3 both
-    keys are always present, so a category missing one is a shape we have never
-    seen and cannot reason about; defaulting it to ``USE_GLOBAL`` would decide
-    the premise from a value the client never sent. A value that is not a
-    number — a string, a null, a bool — is unknown for the same reason.
+    An absent key is **information, not a missing value**, and decides this as
+    False. A qBittorrent that does not expose per-category share limits has no
+    category that *can* override the global setting, so the answer is knowable
+    and refusing to give it is wrong. Reading absence as unknown made the
+    seeding conflict permanently SKIP for any client whose categories lack
+    these keys — which includes homelab#393's own preferences, the incident
+    this project exists to detect, and every stack using qBittorrent's default
+    ``tv-sonarr``/``radarr`` categories. Do not "fix" this back to ``None``.
+
+    This is not the defaulting the project refuses. That rule guards against
+    inventing a value we might misread; here the key's absence positively tells
+    us the feature is unavailable on this client.
+
+    A value that is present but not a number — a string, a null, a bool — is a
+    different thing entirely: the key IS there and we cannot read what it says,
+    so that stays unknown.
     """
     if key not in category:
-        return None
+        return False
     value = category[key]
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -307,7 +319,9 @@ def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
     ``seeding_time_limit`` where ``-2`` means inherit the global setting, ``-1``
     means unlimited, and ``>= 0`` is the category's own limit. A category with
     its own limit releases its torrents' slots even when the global limits are
-    off, so it breaks the wedge for anything filed under it.
+    off, so it breaks the wedge for anything filed under it. A client that does
+    not report those keys at all cannot express a per-category limit, so none
+    of its categories override — see ``_own_share_limit``.
 
     Three-valued across categories, in that order: one category proving an
     override settles the premise as False however unreadable its neighbours
@@ -364,6 +378,27 @@ def _seeding_conflict(
     return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=SEEDING)
 
 
+def _note_arrs_that_reported_no_indexers(
+    finding: Finding, arrs: tuple[ArrInstance, ...]
+) -> Finding:
+    """Name any arr that answered with an empty indexer list.
+
+    A bare PASS reads as "we examined this stack's indexers and none of them
+    can wedge the queue". An arr that reported no indexers at all clears the
+    seeding conflict without a single indexer having been examined — a
+    legitimate read, but an operator who expected indexers there has a
+    collection problem the verdict alone will never show them.
+    """
+    empty = tuple(f"{arr.kind}[{arr.name}]" for arr in arrs if not arr.indexers)
+    if not empty:
+        return finding
+    return replace(
+        finding,
+        detail=f"{', '.join(empty)} answered with no indexers, so nothing there "
+        "could leave a torrent seeding",
+    )
+
+
 def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download.
 
@@ -383,4 +418,4 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
         for finding in (starved, seeding):
             if finding.outcome is outcome:
                 return finding
-    return starved
+    return _note_arrs_that_reported_no_indexers(starved, arrs)

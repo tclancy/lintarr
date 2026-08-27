@@ -165,6 +165,19 @@ def test_the_starvation_conflict_names_the_limits_and_not_the_share_settings():
     assert "completed torrents hold every active slot" not in output
 
 
+def test_the_starvation_cause_does_not_claim_minus_one_starves_the_queue():
+    """The prose has to match ``_blocks_a_first_start``, which excludes -1.
+
+    That predicate is ``_binds(value) and value <= 0``, and -1 does not bind,
+    so -1 never blocks a first start. "at or below zero" said it did, and an
+    operator reading ``max_active_downloads = -1`` next to that sentence goes
+    looking at the one limit the check has already cleared.
+    """
+    cause = _run(["check"], prefs=STARVED_PREFS).output.split("Therefore:")[1]
+    assert "at or below zero" not in cause
+    assert "-1" in cause
+
+
 def test_the_two_conflicts_do_not_explain_themselves_the_same_way():
     """Pins the discrimination itself, not just each string."""
     seeding = _run(["check"]).output

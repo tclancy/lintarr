@@ -124,11 +124,15 @@ _THEREFORE = {
         "  download can start. Nothing releases a seeder: both global share\n"
         "  limits are off and no category sets its own."
     ),
+    # "at or below zero" was wrong: the predicate is `_binds(v) and v <= 0`,
+    # and -1 does not bind, so -1 never starves the queue. An operator reading
+    # `max_active_downloads = -1` alongside that sentence goes looking at the
+    # one limit the check has already cleared.
     (queue_liveness.INVARIANT_ID, queue_liveness.STARVATION): (
         "this client cannot start a first download even while\n"
-        "  nothing is running: max_active_downloads or max_active_torrents is\n"
-        "  at or below zero. Share limits are not involved, so turning them on\n"
-        "  will not help."
+        "  nothing is running: max_active_downloads or max_active_torrents is zero,\n"
+        "  or negative but not -1 (the only value meaning unlimited). Share limits\n"
+        "  are not involved, so turning them on will not help."
     ),
 }
 
