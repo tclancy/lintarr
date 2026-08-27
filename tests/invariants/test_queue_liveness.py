@@ -18,17 +18,44 @@ def _fact(value):
     return Known(value=value, source="GET /x", read_at=datetime.now(UTC), service_version="v1")
 
 
-def _indexer(*, seed_ratio, seed_time=None, protocol="torrent", enabled=True):
+def _indexer(
+    *,
+    seed_ratio,
+    seed_time=None,
+    season_pack_seed_time=None,
+    protocol="torrent",
+    enabled=True,
+    rss=None,
+    automatic=None,
+    interactive=None,
+):
+    """One indexer, every fact settable on its own.
+
+    The three enable toggles are independently overridable because they are
+    independently load-bearing: a fixture that only ever flips all three at
+    once cannot tell whether the predicate reads one of them or all of them,
+    and three of the four mutants that survived here lived in that gap.
+    """
+
+    def toggle(override):
+        return _fact(enabled) if override is None else _wrap(override)
+
     return IndexerFacts(
         name="1337x",
-        protocol=_fact(protocol) if isinstance(protocol, str) else protocol,
-        enable_rss=_fact(enabled),
-        enable_automatic_search=_fact(enabled),
-        enable_interactive_search=_fact(enabled),
+        protocol=_wrap(protocol),
+        enable_rss=toggle(rss),
+        enable_automatic_search=toggle(automatic),
+        enable_interactive_search=toggle(interactive),
         seed_ratio=seed_ratio,
         seed_time=seed_time or Unknown("field-absent", "seed_time"),
-        season_pack_seed_time=Unknown("field-absent", "season_pack_seed_time"),
+        season_pack_seed_time=season_pack_seed_time
+        or Unknown("field-absent", "season_pack_seed_time"),
     )
+
+
+def _wrap(value):
+    """Pass an already-built Fact through; wrap anything else as Known."""
+    return value if isinstance(value, (Known, Unknown)) else _fact(value)
 
 
 def _arrs(*indexers):
@@ -283,3 +310,222 @@ def test_a_limit_read_as_something_other_than_a_number_skips():
     """A string where an int belongs is a fact we do not have, not a zero."""
     q = qbt_with(max_active_torrents=_fact("unlimited"))
     assert check(q, NO_GOALS).outcome is Outcome.SKIP
+
+
+# --- Known(None): a key we read that carried no value ------------------------
+#
+# facts.read() returns Known(None) when a key is present and null, and
+# combinator.premise() already treats a read null and an unread field the same
+# way: both mean "cannot decide". The predicate has to agree, or a null arrives
+# here as a confident False and the invariant reports PASS on a stack it never
+# managed to classify — the exact silent green this project exists to refuse.
+
+
+def test_a_null_protocol_skips_rather_than_passing():
+    """``"protocol": null`` is not "not a torrent"."""
+    null_protocol = _arrs(_indexer(seed_ratio=_NO_RATIO, protocol=None))
+    f = check(wedged_qbt(), null_protocol)
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["arr.indexer_without_seed_criteria"]
+
+
+def test_a_protocol_that_is_not_a_string_skips_rather_than_passing():
+    """A protocol read as a number is a fact we do not have, not a usenet indexer."""
+    weird = _arrs(_indexer(seed_ratio=_NO_RATIO, protocol=7))
+    assert check(wedged_qbt(), weird).outcome is Outcome.SKIP
+
+
+def test_null_enable_toggles_skip_rather_than_passing():
+    """All toggles null: we cannot say the indexer is off, so we cannot clear it."""
+    nulls = _arrs(
+        _indexer(seed_ratio=_NO_RATIO, rss=None, automatic=None, interactive=None, enabled=None)
+    )
+    f = check(wedged_qbt(), nulls)
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["arr.indexer_without_seed_criteria"]
+
+
+def test_one_toggle_that_is_on_settles_the_classification():
+    """Three-valued OR: an unreadable toggle cannot take back an enabled one."""
+    partly_null = _arrs(_indexer(seed_ratio=_NO_RATIO, rss=True, automatic=None, interactive=None))
+    assert check(wedged_qbt(), partly_null).outcome is Outcome.FAIL
+
+
+def test_a_null_share_limit_preference_skips_rather_than_conflicting():
+    """``"max_ratio_enabled": null`` must not read as "the limit is off".
+
+    Without this, ``not None`` is True and a null settles a premise as holding
+    — a FAIL asserted from a value the client never sent.
+    """
+    q = qbt_with(**(WEDGE | {"max_ratio_enabled": _fact(None)}))
+    f = check(q, NO_GOALS)
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["qbt.no_global_ratio"]
+
+
+# --- The enable toggles, one at a time ---------------------------------------
+
+
+def test_a_search_only_indexer_is_still_a_torrent_source():
+    """RSS off with automatic search on is an ordinary Sonarr configuration.
+
+    Nothing about it stops a grab, and every torrent it grabs seeds like any
+    other. Reading only ``enable_rss`` would classify it not-a-torrent-source
+    and drop it from the predicate.
+    """
+    search_only = _arrs(
+        _indexer(seed_ratio=_NO_RATIO, rss=False, automatic=True, interactive=False)
+    )
+    assert check(wedged_qbt(), search_only).outcome is Outcome.FAIL
+
+
+def test_an_rss_only_indexer_is_still_a_torrent_source():
+    rss_only = _arrs(_indexer(seed_ratio=_NO_RATIO, rss=True, automatic=False, interactive=False))
+    assert check(wedged_qbt(), rss_only).outcome is Outcome.FAIL
+
+
+def test_an_interactive_search_only_indexer_is_still_a_torrent_source():
+    """An operator can grab a release by hand, and it seeds like any other.
+
+    ``enable_interactive_search`` is collected and carried; leaving it out of
+    the toggle set means an indexer with the other two off is classified as no
+    torrent source at all, and the stack reports PASS.
+    """
+    hand_picked = _arrs(
+        _indexer(seed_ratio=_NO_RATIO, rss=False, automatic=False, interactive=True)
+    )
+    assert check(wedged_qbt(), hand_picked).outcome is Outcome.FAIL
+
+
+# --- Seed criteria -----------------------------------------------------------
+
+
+def test_a_null_seed_ratio_is_not_a_seed_goal():
+    """Sonarr reports a cleared criterion as ``value: null``.
+
+    Reading "present but null" as a goal would clear the indexer whose goals
+    the operator had explicitly removed — a PASS on a configuration that seeds
+    forever.
+    """
+    cleared = _arrs(_indexer(seed_ratio=_fact(None)))
+    assert check(wedged_qbt(), cleared).outcome is Outcome.FAIL
+
+
+def test_a_season_pack_seed_time_alone_is_not_a_seed_goal():
+    """It bounds season packs only; single-episode torrents still seed forever."""
+    packs_only = _arrs(_indexer(seed_ratio=_NO_RATIO, season_pack_seed_time=_fact(20160)))
+    assert check(wedged_qbt(), packs_only).outcome is Outcome.FAIL
+
+
+# --- No arr data at all ------------------------------------------------------
+
+
+def test_no_arr_instances_skips_rather_than_passing():
+    """homelab#393 with no arr configured. "We never looked" is not "we looked".
+
+    ``check(wedged_qbt(), ())`` returning PASS was the incident itself reported
+    green. Which *kind* of "no arr" this is gets decided in run.py; here it can
+    only be undecided.
+    """
+    f = check(wedged_qbt(), ())
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["arr.indexer_without_seed_criteria"]
+
+
+def test_no_arr_instances_does_not_hide_a_starved_client():
+    """A limit at zero is provable without any arr, so it must still FAIL."""
+    assert check(qbt_with(max_active_torrents=0), ()).outcome is Outcome.FAIL
+
+
+def test_an_arr_that_reported_no_indexers_is_a_read_we_performed():
+    """An arr with no indexers grabs nothing, so it cannot leave seeders behind."""
+    empty = (ArrInstance(name="main", kind="sonarr", version="4.0.19", indexers=()),)
+    assert check(wedged_qbt(), empty).outcome is Outcome.PASS
+
+
+# --- Category share limits ---------------------------------------------------
+
+
+def test_a_category_missing_a_share_limit_key_skips_rather_than_inheriting():
+    """An absent key is unknown, not "-2, inherit the global setting".
+
+    Both keys were measured present on 5.2.3, so a category without one is a
+    shape we have never seen. Defaulting it decides the premise from a value
+    the client never sent.
+    """
+    q = qbt_with(**(WEDGE | {"categories": {"tv": {"ratio_limit": -2}}}))
+    f = check(q, NO_GOALS)
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["qbt.no_category_limits"]
+
+
+def test_a_category_that_is_not_an_object_skips_rather_than_being_ignored():
+    """A category we cannot parse is not evidence that it inherits."""
+    q = qbt_with(**(WEDGE | {"categories": {"tv": "unparseable"}}))
+    assert check(q, NO_GOALS).outcome is Outcome.SKIP
+
+
+def test_a_string_share_limit_skips_rather_than_being_ignored():
+    q = qbt_with(
+        **(WEDGE | {"categories": {"tv": {"ratio_limit": "2.0", "seeding_time_limit": -2}}})
+    )
+    assert check(q, NO_GOALS).outcome is Outcome.SKIP
+
+
+def test_a_boolean_share_limit_skips_rather_than_counting_as_zero():
+    """``True`` is an int in Python and would read as a category limit of 1."""
+    booleans = {"tv": {"ratio_limit": False, "seeding_time_limit": -2}}
+    assert check(qbt_with(**(WEDGE | {"categories": booleans})), NO_GOALS).outcome is Outcome.SKIP
+
+
+def test_a_category_map_that_is_not_a_map_skips_however_empty_it_is():
+    """An empty list and a non-empty one must not give opposite answers."""
+    assert check(qbt_with(**(WEDGE | {"categories": []})), NO_GOALS).outcome is Outcome.SKIP
+    assert check(qbt_with(**(WEDGE | {"categories": ["tv"]})), NO_GOALS).outcome is Outcome.SKIP
+
+
+def test_one_readable_category_limit_settles_it_despite_an_unreadable_neighbour():
+    """A proved override releases slots however unparseable the next category is."""
+    mixed = {
+        "tv": {"ratio_limit": 2.0, "seeding_time_limit": -2},
+        "films": "unparseable",
+    }
+    assert check(qbt_with(**(WEDGE | {"categories": mixed})), NO_GOALS).outcome is Outcome.PASS
+
+
+# --- Limits ------------------------------------------------------------------
+
+
+def test_a_limit_read_as_a_boolean_skips_rather_than_counting_as_zero():
+    """``False`` is ``0`` to ``int``, and 0 is this check's most severe verdict.
+
+    A preference that came back as a bool is a fact we do not have; coercing it
+    would report a confident FAIL on a value qBittorrent never sent as a limit.
+    """
+    q = qbt_with(max_active_torrents=_fact(False))
+    f = check(q, NO_GOALS)
+    assert f.outcome is Outcome.SKIP
+    assert [p.label for p in f.premises] == ["qbt.no_slot_for_a_first_download"]
+
+
+def test_a_null_limit_skips_rather_than_counting_as_zero():
+    q = qbt_with(max_active_torrents=_fact(None))
+    assert check(q, NO_GOALS).outcome is Outcome.SKIP
+
+
+# --- Which conflict decided the finding --------------------------------------
+
+
+def test_each_conflict_is_named_on_the_finding_it_produced():
+    """Downstream explanation keys on this, so the two must never share a name."""
+    starved = check(qbt_with(max_active_torrents=0), NO_GOALS)
+    seeding = check(wedged_qbt(), NO_GOALS)
+    assert starved.outcome is seeding.outcome is Outcome.FAIL
+    assert starved.conflict == "no-slot-for-a-first-download"
+    assert seeding.conflict == "seeders-absorb-every-slot"
+
+
+def test_a_skip_names_the_conflict_it_could_not_decide():
+    f = check(wedged_qbt(), ())
+    assert f.outcome is Outcome.SKIP
+    assert f.conflict == "seeders-absorb-every-slot"

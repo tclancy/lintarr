@@ -32,8 +32,13 @@ def premise(label: str, value: Fact[bool] | bool | None) -> Premise:
             raise TypeError(f"premise {label!r} got an unsupported value: {type(value).__name__}")
 
 
-def conflict_if(invariant: str, instance: str, *premises: Premise) -> Finding:
-    """FAIL when every premise holds; SKIP when any input was unknown."""
+def conflict_if(invariant: str, instance: str, *premises: Premise, conflict: str = "") -> Finding:
+    """FAIL when every premise holds; SKIP when any input was unknown.
+
+    *conflict* names which of an invariant's conflicts this is, and rides on
+    every outcome rather than only on FAIL: a SKIP has to say which question it
+    could not answer just as much as a FAIL has to say which one it answered.
+    """
     labels = [p.label for p in premises]
     duplicates = {label for label in labels if labels.count(label) > 1}
     if duplicates:
@@ -47,9 +52,14 @@ def conflict_if(invariant: str, instance: str, *premises: Premise) -> Finding:
             outcome=Outcome.SKIP,
             premises=unknown,
             detail="required inputs could not be read",
+            conflict=conflict,
         )
     if premises and all(p.state for p in premises):
         return Finding(
-            invariant=invariant, instance=instance, outcome=Outcome.FAIL, premises=tuple(premises)
+            invariant=invariant,
+            instance=instance,
+            outcome=Outcome.FAIL,
+            premises=tuple(premises),
+            conflict=conflict,
         )
-    return Finding(invariant=invariant, instance=instance, outcome=Outcome.PASS)
+    return Finding(invariant=invariant, instance=instance, outcome=Outcome.PASS, conflict=conflict)

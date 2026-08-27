@@ -59,11 +59,12 @@ _WEDGE = {
 
 # Needs whose load-bearing pair cannot be expressed as a same-base diff against
 # _WEDGE, each covered by its own dedicated test instead of an entry in
-# _PAIRS: `qbt.max_active_downloads` only feeds the starvation short-circuit
-# that runs BEFORE the seeding conjunction and never appears inside it, so any
-# pair merged onto _WEDGE is already FAIL on both sides via the conjunction —
-# it needs a healthy base instead. `arr.indexer_seed_criteria` needs a second
-# arr fixture (WITH_GOALS), not a qbt override.
+# _PAIRS. `qbt.max_active_downloads` is read only by the starvation conflict
+# and never appears inside the seeding conjunction; the two are evaluated
+# independently and combined as a disjunction, so on the _WEDGE base the
+# seeding conflict already reaches FAIL and both halves of any pair merged onto
+# it come out FAIL whatever this fact says. It needs a healthy base instead.
+# The three `arr.*` needs vary an indexer fixture rather than a qbt preference.
 _TESTED_ELSEWHERE: frozenset[str] = frozenset(
     {
         "qbt.max_active_downloads",
@@ -96,10 +97,9 @@ def test_no_pair_names_a_fact_the_predicate_does_not_declare():
 @pytest.mark.parametrize("need", sorted(_PAIRS))
 def test_each_need_changes_the_verdict(need):
     failing, passing = _PAIRS[need]
+    assert failing != passing, f"{need}: the pair does not differ, so it proves nothing"
     a = check(qbt_with(**(_WEDGE | failing)), NO_GOALS).outcome
     b = check(qbt_with(**(_WEDGE | passing)), NO_GOALS).outcome
-    if failing == passing:
-        pytest.fail(f"{need}: the pair does not differ")
     assert a != b, f"{need} is declared in NEEDS but changes no verdict"
 
 

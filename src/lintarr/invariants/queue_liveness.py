@@ -49,6 +49,7 @@ against a live client:
 """
 
 from collections.abc import Iterable
+from typing import Any
 
 from lintarr.facts import Fact, is_known
 from lintarr.invariants.combinator import conflict_if, premise
@@ -104,11 +105,24 @@ def _any_of(states: Iterable[bool | None]) -> bool | None:
     return None if any(state is None for state in seen) else False
 
 
+def _truth(fact: Fact[bool]) -> bool | None:
+    """A boolean fact as a three-valued state, or ``None`` if it has no value.
+
+    ``Known(None)`` collapses to unknown alongside ``Unknown``. A key read back
+    as null is a value we cannot use, and ``combinator.premise`` already treats
+    the two the same way at the premise layer; letting ``None`` fall through to
+    ``bool()`` here would settle a premise from a setting nobody ever set —
+    exactly the defaulting this project refuses.
+    """
+    if not is_known(fact) or fact.value is None:
+        return None
+    return bool(fact.value)
+
+
 def _not(fact: Fact[bool]) -> bool | None:
     """Negate a boolean fact, preserving unknown-ness."""
-    if not is_known(fact):
-        return None
-    return not bool(fact.value)
+    state = _truth(fact)
+    return None if state is None else not state
 
 
 def _as_limit(fact: Fact[int]) -> int | None:
@@ -167,21 +181,38 @@ def _max_active_torrents_binds(qbt: QbtInstance) -> bool | None:
     return _binds(total)
 
 
+#: Every top-level toggle that can put a torrent from this indexer into the
+#: queue. All three count. Interactive search is not a lesser one: an operator
+#: can hand-pick a release from an indexer whose RSS and automatic search are
+#: both off, and that torrent then seeds exactly like any other. Reading only
+#: the first two classified such an indexer as not-a-torrent-source and dropped
+#: it from the predicate, which is a PASS on a stack that can wedge.
+TORRENT_TOGGLES: tuple[str, ...] = (
+    "enable_rss",
+    "enable_automatic_search",
+    "enable_interactive_search",
+)
+
+
 def _is_a_torrent_source(indexer: IndexerFacts) -> bool | None:
     """True when this indexer can put seeding torrents in the queue.
 
-    ``None`` when that could not be decided. Guessing "not a torrent" for an
-    indexer whose protocol did not parse would drop it from the predicate and
-    report PASS on the very failure this check exists to find.
+    ``None`` when that could not be decided, which covers every way the facts
+    can fail to answer: an ``Unknown`` protocol, a protocol read back as null
+    or as something that is not a string, and a toggle set where nothing is on
+    and something could not be read. Guessing "not a torrent" for any of them
+    drops the indexer from the predicate and reports PASS on the very failure
+    this check exists to find — see the contract comment on ``IndexerFacts``.
+
+    The toggles are a three-valued OR: one that is on settles the answer
+    however unreadable the rest are.
     """
-    if not is_known(indexer.protocol):
+    protocol = indexer.protocol
+    if not is_known(protocol) or not isinstance(protocol.value, str):
         return None
-    if indexer.protocol.value != "torrent":
+    if protocol.value != "torrent":
         return False
-    toggles = (indexer.enable_rss, indexer.enable_automatic_search)
-    if any(is_known(t) and bool(t.value) for t in toggles):
-        return True
-    return False if all(is_known(t) for t in toggles) else None
+    return _any_of(tuple(_truth(getattr(indexer, name)) for name in TORRENT_TOGGLES))
 
 
 def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
@@ -190,6 +221,15 @@ def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
     Deliberately total rather than three-valued: Sonarr reports "unset" by
     omitting the value, so an Unknown here is the ordinary case, not a gap. See
     the module docstring for what that costs and why the alternative costs more.
+
+    A criterion read back as ``null`` is not a goal either. Sonarr reports a
+    cleared criterion that way, and reading "present but null" as a goal would
+    clear the indexer whose goals an operator had explicitly removed.
+
+    ``season_pack_seed_time`` is collected but deliberately not consulted here.
+    It bounds season-pack grabs only, so an indexer that sets it and nothing
+    else still seeds every single-episode torrent forever — counting it as a
+    goal would excuse exactly the indexer that can still wedge the queue.
     """
     for fact in (indexer.seed_ratio, indexer.seed_time):
         if is_known(fact) and fact.value is not None:
@@ -206,7 +246,17 @@ def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None
     An indexer that could not be classified only makes the answer unknown when
     it also lacks goals — with goals set it could not have contributed either
     way, so it is not allowed to force a SKIP.
+
+    No arr instances at all is unknown, never False. "We looked at every arr
+    and found no goal-less torrent indexer" and "there was no arr to look at"
+    are different claims, and only the first of them can support a PASS. An arr
+    that answered with an empty indexer list *is* the first claim: that read
+    happened and it grabs nothing, so it stays False. Which of the ways there
+    can be no arr this is — none configured, one declared but never collected —
+    is decided in ``run.py``, which is the layer that knows what was declared.
     """
+    if not arrs:
+        return None
     undecidable = False
     for arr in arrs:
         for indexer in arr.indexers:
@@ -220,6 +270,36 @@ def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None
     return None if undecidable else False
 
 
+def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
+    """True when *key* is this category's own limit rather than an inherited one.
+
+    An absent key is unknown, not an inherited limit. Measured on 5.2.3 both
+    keys are always present, so a category missing one is a shape we have never
+    seen and cannot reason about; defaulting it to ``USE_GLOBAL`` would decide
+    the premise from a value the client never sent. A value that is not a
+    number — a string, a null, a bool — is unknown for the same reason.
+    """
+    if key not in category:
+        return None
+    value = category[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    # -2 inherits the global setting and -1 is unlimited; neither is a limit of
+    # the category's own, and anything from 0 up is.
+    if value in (USE_GLOBAL, UNLIMITED):
+        return False
+    return value >= 0
+
+
+def _category_sets_its_own_limit(category: Any) -> bool | None:
+    """True when this one category releases its torrents' slots by itself."""
+    if not isinstance(category, dict):
+        return None
+    return _any_of(
+        tuple(_own_share_limit(category, k) for k in ("ratio_limit", "seeding_time_limit"))
+    )
+
+
 def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
     """True when no category overrides the global share limits.
 
@@ -228,21 +308,33 @@ def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
     means unlimited, and ``>= 0`` is the category's own limit. A category with
     its own limit releases its torrents' slots even when the global limits are
     off, so it breaks the wedge for anything filed under it.
+
+    Three-valued across categories, in that order: one category proving an
+    override settles the premise as False however unreadable its neighbours
+    are, and only then does an unreadable category make the answer unknown.
+    An unreadable one is never silently skipped as "no override" — a category
+    we could not parse is not evidence that it inherits.
     """
     if not is_known(qbt.categories):
         return None
+    categories = qbt.categories.value
     # A null category map is a client with no categories, so none override.
-    categories = qbt.categories.value or {}
+    if categories is None:
+        return True
+    # An empty *list* is not an empty map: a shape this wrong means the read
+    # did not give us categories at all, whether or not it happens to be empty.
     if not isinstance(categories, dict):
         return None
-    for category in categories.values():
-        if not isinstance(category, dict):
-            continue
-        for key in ("ratio_limit", "seeding_time_limit"):
-            value = category.get(key, USE_GLOBAL)
-            if isinstance(value, (int, float)) and value >= 0:
-                return False
-    return True
+    overridden = _any_of(tuple(_category_sets_its_own_limit(c) for c in categories.values()))
+    return None if overridden is None else not overridden
+
+
+#: Which of this invariant's two conflicts a finding came from. They are
+#: structurally different failures with different remedies, so anything that
+#: explains a finding downstream — the CLI's "Therefore" line above all — must
+#: key on this and not on the invariant id alone.
+STARVATION = "no-slot-for-a-first-download"
+SEEDING = "seeders-absorb-every-slot"
 
 
 def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
@@ -252,6 +344,7 @@ def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
         f"qbittorrent[{qbt.name}]",
         queueing,
         premise("qbt.no_slot_for_a_first_download", _no_slot_for_a_first_download(qbt)),
+        conflict=STARVATION,
     )
 
 
@@ -268,7 +361,7 @@ def _seeding_conflict(
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise("arr.indexer_without_seed_criteria", _indexer_without_seed_criteria(arrs)),
     )
-    return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises)
+    return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=SEEDING)
 
 
 def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:

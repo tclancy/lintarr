@@ -43,6 +43,12 @@ class Finding:
     outcome: Outcome
     premises: tuple[Premise, ...] = field(default_factory=tuple)
     detail: str = ""
+    #: Which conflict inside the invariant decided this, when it has more than
+    #: one. An invariant answers an operator's question, and one question can
+    #: have structurally different answers with different remedies; anything
+    #: explaining a finding downstream must key on this too, or it will state a
+    #: cause that does not follow from the premises it just listed.
+    conflict: str = ""
 
 
 def worst(outcomes: Iterable[Outcome]) -> Outcome:

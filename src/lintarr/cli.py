@@ -10,6 +10,7 @@ import click
 from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.facts import Known, Unknown, is_known
+from lintarr.invariants import queue_liveness
 from lintarr.models import StackFacts
 from lintarr.outcomes import Outcome, exit_code
 from lintarr.run import run_checks, run_outcome
@@ -112,9 +113,22 @@ def dump_facts(ctx: click.Context, as_json: bool) -> None:
     click.echo(jsonlib.dumps(payload, indent=2) if as_json else _render_human(payload))
 
 
+# Keyed on (invariant, conflict), never on the invariant alone. One invariant
+# answers one operator question, but it can reach that answer through
+# structurally different conflicts with different remedies — and a "Therefore"
+# line that names the wrong one tells an operator to change a setting the code
+# itself has just established will not help.
 _THEREFORE = {
-    "queue-liveness": (
-        "completed torrents hold every active slot and no queued\n  download can start."
+    (queue_liveness.INVARIANT_ID, queue_liveness.SEEDING): (
+        "completed torrents hold every active slot and no queued\n"
+        "  download can start. Nothing releases a seeder: both global share\n"
+        "  limits are off and no category sets its own."
+    ),
+    (queue_liveness.INVARIANT_ID, queue_liveness.STARVATION): (
+        "this client cannot start a first download even while\n"
+        "  nothing is running: max_active_downloads or max_active_torrents is\n"
+        "  at or below zero. Share limits are not involved, so turning them on\n"
+        "  will not help."
     ),
 }
 
@@ -124,6 +138,11 @@ def _finding_to_dict(finding) -> dict[str, Any]:
         "invariant": finding.invariant,
         "instance": finding.instance,
         "outcome": str(finding.outcome),
+        # Which conflict inside the invariant decided this. A consumer that
+        # branches on the invariant id alone cannot tell the two apart, which
+        # is the machine-readable form of the same defect the "Therefore" line
+        # above had.
+        "conflict": finding.conflict,
         "detail": finding.detail,
         "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
     }
@@ -135,7 +154,7 @@ def _render_findings(findings) -> str:
         lines.append(f"{f.outcome:<5} {f.invariant}  [{f.instance}]")
         if f.premises:
             header = (
-                "  Your settings — read from your stack, check these yourself:"
+                "  What lintarr read from your stack — check these yourself:"
                 if f.outcome is Outcome.FAIL
                 else "  Could not read:"
             )
@@ -146,7 +165,7 @@ def _render_findings(findings) -> str:
                 lines.append(f"    {p.label:<36} {state}")
         if f.detail:
             lines.append(f"  {f.detail}")
-        therefore = _THEREFORE.get(f.invariant)
+        therefore = _THEREFORE.get((f.invariant, f.conflict))
         if therefore and f.outcome is Outcome.FAIL:
             lines.append("")
             lines.append(f"  Therefore: {therefore}")
@@ -170,15 +189,29 @@ def _render_findings(findings) -> str:
 )
 @click.pass_context
 def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
-    """Check whether this stack's settings can coexist."""
-    facts = collect_stack(load_config(os.environ), transport=ctx.obj.get("transport"))
-    findings = run_checks(facts)
+    """Check whether this stack's settings can coexist.
+
+    ``outcome`` and ``exit_code`` in the JSON payload rank findings on
+    different axes and can disagree. ``outcome`` is the worst outcome by
+    severity, where "could not look" outranks "looked and found a conflict" —
+    a run that read nothing has not established anything. ``exit_code`` is what
+    the process returns, and there a proved conflict (1) outranks a skip (3) so
+    CI fails on the thing an operator can act on. A run with one FAIL and one
+    SKIP therefore reports ``"outcome": "SKIP"`` alongside ``"exit_code": 1``.
+    Branch on ``exit_code``; read ``outcome`` for how much of the stack was
+    actually examined.
+    """
+    cfg = load_config(os.environ)
+    facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
+    findings = run_checks(facts, declared=cfg.declared)
+    code = exit_code((f.outcome for f in findings), strict=strict)
     if as_json:
         click.echo(
             jsonlib.dumps(
                 {
                     "schema": 1,
                     "outcome": str(run_outcome(findings)),
+                    "exit_code": code,
                     "findings": [_finding_to_dict(f) for f in findings],
                 },
                 indent=2,
@@ -186,4 +219,4 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
         )
     else:
         click.echo(_render_findings(findings))
-    ctx.exit(exit_code((f.outcome for f in findings), strict=strict))
+    ctx.exit(code)
