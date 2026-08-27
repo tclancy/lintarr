@@ -23,8 +23,32 @@ different shapes:
    #393, and it is a conjunction.
 
 They are reported as one invariant because they answer the same operator
-question, but a conjunction cannot express "or", so (1) is decided first.
+question. A conjunction cannot express "or", so each is decided separately and
+the two are combined as a three-valued disjunction: FAIL if either proves the
+wedge, SKIP only if neither proves it and something could not be read, PASS
+otherwise. Anything cruder loses verdicts it had already proved — a single
+unreadable preference must not silence a wedge established without it.
+
+Two things this file assumes and cannot yet prove, both P2 conformance work
+against a live client:
+
+- **The wedge axiom.** That seeders can absorb *every* ``max_active_torrents``
+  slot is taken from documentation plus one observed incident. It has never
+  been validated against a running qBittorrent, and ``max_active_uploads``
+  together with libtorrent's allocation order may bound how many slots seeders
+  actually reach. If it does, this check is too eager in a way no sweep here
+  can see, because the model shares the assumption.
+- **Absent seed criteria are read as unset.** Sonarr 4.0.19 lists
+  ``seedCriteria.seedRatio`` in an indexer's fields but omits the ``value`` key
+  entirely when no goal is set, so "operator left it unset" and "this build does
+  not expose it" arrive as the same thing: ``Unknown(field-absent)``. This file
+  reads that as "no goal", because on every real stack measured so far it is.
+  The cost of the alternative is total: treating it as undecidable would make
+  ``queue-liveness`` SKIP on essentially every stack, including the one that
+  motivated it.
 """
+
+from collections.abc import Iterable
 
 from lintarr.facts import Fact, is_known
 from lintarr.invariants.combinator import conflict_if, premise
@@ -41,6 +65,12 @@ NEEDS: tuple[str, ...] = (
     "qbt.max_ratio_enabled",
     "qbt.max_seeding_time_enabled",
     "qbt.categories",
+    # Three separate reads, not one. An indexer's protocol, its enable toggles
+    # and its seed criteria each independently flip the verdict, so declaring
+    # only the last would leave two facts undeclared and outside the
+    # load-bearing gate.
+    "arr.indexer_protocol",
+    "arr.indexer_enabled",
     "arr.indexer_seed_criteria",
 )
 
@@ -58,6 +88,20 @@ USE_GLOBAL = -2
 def _binds(limit: int) -> bool:
     """True when *limit* constrains anything at all."""
     return limit != UNLIMITED
+
+
+def _any_of(states: Iterable[bool | None]) -> bool | None:
+    """Three-valued OR: one True settles it however much else is unknown.
+
+    ``True or Unknown`` is True, not Unknown. Checking for unknowns first — the
+    obvious shape, and the one this file shipped with — throws away a verdict
+    already proved, which for a checker means reporting "could not look" at a
+    configuration it could see was broken.
+    """
+    seen = tuple(states)
+    if any(state is True for state in seen):
+        return True
+    return None if any(state is None for state in seen) else False
 
 
 def _not(fact: Fact[bool]) -> bool | None:
@@ -78,22 +122,37 @@ def _as_limit(fact: Fact[int]) -> int | None:
     return fact.value
 
 
+def _blocks_a_first_start(limit: Fact[int]) -> bool | None:
+    """True when this limit alone stops an idle client starting anything.
+
+    With zero torrents running, a limit blocks the first start when it binds and
+    sits at or below zero.
+    """
+    value = _as_limit(limit)
+    if value is None:
+        return None
+    return _binds(value) and value <= 0
+
+
 def _no_slot_for_a_first_download(qbt: QbtInstance) -> bool | None:
     """True when an *idle* client still cannot start anything.
 
-    With zero torrents running, a limit blocks the first start when it binds and
-    is at or below zero. ``max_active_uploads`` is not consulted: it gates
-    seeding slots, and a seeder that cannot get one does not hold a download
-    back.
+    Either limit is enough on its own, so an unreadable one cannot take back a
+    verdict the other already settled: ``max_active_torrents=0`` is conclusive
+    whether or not ``max_active_downloads`` could be read.
+
+    ``max_active_uploads`` is not consulted: it gates seeding slots, and a
+    seeder that cannot get one does not hold a download back.
     """
-    total = _as_limit(qbt.max_active_torrents)
-    downloads = _as_limit(qbt.max_active_downloads)
-    if total is None or downloads is None:
-        return None
-    return (_binds(total) and total <= 0) or (_binds(downloads) and downloads <= 0)
+    return _any_of(
+        (
+            _blocks_a_first_start(qbt.max_active_torrents),
+            _blocks_a_first_start(qbt.max_active_downloads),
+        )
+    )
 
 
-def _a_limit_binds(qbt: QbtInstance) -> bool | None:
+def _max_active_torrents_binds(qbt: QbtInstance) -> bool | None:
     """True when seeders can accumulate into a slot shortage.
 
     Only ``max_active_torrents`` can do that. Seeding torrents count against it
@@ -126,7 +185,12 @@ def _is_a_torrent_source(indexer: IndexerFacts) -> bool | None:
 
 
 def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
-    """No usable seed goal — either unreadable, or read and unset."""
+    """No usable seed goal — either unreadable, or read and unset.
+
+    Deliberately total rather than three-valued: Sonarr reports "unset" by
+    omitting the value, so an Unknown here is the ordinary case, not a gap. See
+    the module docstring for what that costs and why the alternative costs more.
+    """
     for fact in (indexer.seed_ratio, indexer.seed_time):
         if is_known(fact) and fact.value is not None:
             return False
@@ -181,29 +245,49 @@ def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
     return True
 
 
-def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
-    """FAIL when this configuration can reach a state with no startable download."""
-    instance = f"qbittorrent[{qbt.name}]"
-    queueing = premise("qbt.queueing_enabled", qbt.queueing_enabled)
-
-    starved = conflict_if(
+def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
+    """A client that cannot start even a first download, seeders or not."""
+    return conflict_if(
         INVARIANT_ID,
-        instance,
+        f"qbittorrent[{qbt.name}]",
         queueing,
         premise("qbt.no_slot_for_a_first_download", _no_slot_for_a_first_download(qbt)),
     )
-    if starved.outcome is not Outcome.PASS:
-        # FAIL: wedged with no seeder involved. SKIP: a limit we could not read
-        # may already be zero, and "unlimited elsewhere" is not evidence.
-        return starved
 
-    seeding: tuple[Premise, ...] = (
+
+def _seeding_conflict(
+    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
+) -> Finding:
+    """homelab#393: seeders absorb every slot and nothing ever releases one."""
+    premises: tuple[Premise, ...] = (
         queueing,
-        premise("qbt.a_limit_binds", _a_limit_binds(qbt)),
+        premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise("arr.indexer_without_seed_criteria", _indexer_without_seed_criteria(arrs)),
     )
-    return conflict_if(INVARIANT_ID, instance, *seeding)
+    return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises)
+
+
+def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
+    """FAIL when this configuration can reach a state with no startable download.
+
+    The two conflicts are combined as a three-valued disjunction. Both are
+    always evaluated: neither is a precondition of the other, and stopping at
+    the first non-PASS would let an unreadable preference in one hide a wedge
+    the other had already proved.
+    """
+    queueing = premise("qbt.queueing_enabled", qbt.queueing_enabled)
+    starved = _starvation_conflict(qbt, queueing)
+    seeding = _seeding_conflict(qbt, arrs, queueing)
+
+    # Starvation is reported ahead of seeding when both fire: a client that
+    # cannot start a first download is the more fundamental fact and the more
+    # actionable one, since turning the share limits back on would not help it.
+    for outcome in (Outcome.FAIL, Outcome.SKIP):
+        for finding in (starved, seeding):
+            if finding.outcome is outcome:
+                return finding
+    return starved

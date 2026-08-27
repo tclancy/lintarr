@@ -10,7 +10,12 @@ import pytest
 
 from lintarr.invariants.queue_liveness import NEEDS, check
 from tests.fixtures.homelab import qbt_with
-from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
+from tests.invariants.test_queue_liveness import (
+    DISABLED_NO_GOALS,
+    NO_GOALS,
+    USENET_NO_GOALS,
+    WITH_GOALS,
+)
 
 # fact -> (overrides that should FAIL, overrides that should PASS)
 #
@@ -60,7 +65,12 @@ _WEDGE = {
 # it needs a healthy base instead. `arr.indexer_seed_criteria` needs a second
 # arr fixture (WITH_GOALS), not a qbt override.
 _TESTED_ELSEWHERE: frozenset[str] = frozenset(
-    {"qbt.max_active_downloads", "arr.indexer_seed_criteria"}
+    {
+        "qbt.max_active_downloads",
+        "arr.indexer_protocol",
+        "arr.indexer_enabled",
+        "arr.indexer_seed_criteria",
+    }
 )
 
 
@@ -71,9 +81,16 @@ def test_every_declared_need_has_a_pair():
 
 
 def test_no_pair_names_a_fact_the_predicate_does_not_declare():
-    """The reverse direction: a stale pair hides that a need was dropped."""
-    stale = [n for n in _PAIRS if n not in NEEDS]
-    assert not stale, f"_PAIRS entries not in NEEDS: {stale}"
+    """The reverse direction: a stale pair hides that a need was dropped.
+
+    _TESTED_ELSEWHERE is checked alongside _PAIRS because it is the softer of
+    the two tables — an entry there is exempted from the pair requirement, so
+    without this a need could be quietly deleted from NEEDS while its exemption
+    stayed behind and nothing failed. A fact the predicate reads but no longer
+    declares is exactly the lie this file exists to catch.
+    """
+    stale = sorted(n for n in (*_PAIRS, *_TESTED_ELSEWHERE) if n not in NEEDS)
+    assert not stale, f"covered here but not in NEEDS: {stale}"
 
 
 @pytest.mark.parametrize("need", sorted(_PAIRS))
@@ -89,6 +106,26 @@ def test_each_need_changes_the_verdict(need):
 def test_the_arr_need_changes_the_verdict():
     wedged = qbt_with(**_WEDGE)
     assert check(wedged, NO_GOALS).outcome != check(wedged, WITH_GOALS).outcome
+
+
+def test_the_indexer_protocol_need_changes_the_verdict():
+    """Only a torrent indexer can leave seeders in the slots.
+
+    The arr pairs vary one indexer fact against NO_GOALS rather than one qbt
+    preference, so they get their own tests rather than an entry in _PAIRS.
+    """
+    wedged = qbt_with(**_WEDGE)
+    a = check(wedged, NO_GOALS).outcome
+    b = check(wedged, USENET_NO_GOALS).outcome
+    assert a != b, "arr.indexer_protocol is declared in NEEDS but changes no verdict"
+
+
+def test_the_indexer_enabled_need_changes_the_verdict():
+    """A disabled indexer grabs nothing, so it can seed nothing."""
+    wedged = qbt_with(**_WEDGE)
+    a = check(wedged, NO_GOALS).outcome
+    b = check(wedged, DISABLED_NO_GOALS).outcome
+    assert a != b, "arr.indexer_enabled is declared in NEEDS but changes no verdict"
 
 
 def test_max_active_downloads_changes_the_verdict():
