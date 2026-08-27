@@ -24,7 +24,14 @@ class QueueConfig:
 
 
 def _binds(limit: int) -> bool:
-    """A limit constrains the queue unless it is the unlimited sentinel."""
+    """A limit constrains the queue unless it is the unlimited sentinel.
+
+    `-1` is the ONLY unlimited sentinel recognized here — a value like `-2` is
+    still treated as binding (and, since a count can never be negative, binds
+    immediately). Task 5's predicate must copy this exact convention rather
+    than infer one (e.g. `limit < 0`), or the two will disagree on any
+    negative-but-not-`-1` value.
+    """
     return limit != UNLIMITED
 
 
