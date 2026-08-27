@@ -5,7 +5,7 @@ deterministic, and ordered as written. That is why this project needs no
 solver: an SMT unsat core would supply the same thing less reliably.
 """
 
-from lintarr.facts import Fact, Known, is_known
+from lintarr.facts import Fact, Known, Unknown
 from lintarr.outcomes import Finding, Outcome, Premise
 
 
@@ -14,14 +14,20 @@ class DuplicatePremiseLabel(ValueError):
 
 
 def premise(label: str, value: Fact[bool] | bool | None) -> Premise:
-    """Wrap *value* as a labelled premise. An Unknown fact becomes ``state=None``."""
+    """Wrap *value* as a labelled premise.
+
+    An Unknown fact becomes ``state=None``, and so does a Known fact whose
+    value is ``None``: a null we read and a field we never read both mean
+    "cannot decide" at this layer, even though ``facts.py`` keeps them apart
+    at the fact layer where that distinction carries meaning.
+    """
     match value:
         case Known():
-            return Premise(label=label, state=bool(value.value))
+            return Premise(label=label, state=None if value.value is None else bool(value.value))
+        case Unknown():
+            return Premise(label=label, state=None)
         case bool() | None:
             return Premise(label=label, state=value)
-        case _ if not is_known(value):
-            return Premise(label=label, state=None)
         case _:
             raise TypeError(f"premise {label!r} got an unsupported value: {type(value).__name__}")
 

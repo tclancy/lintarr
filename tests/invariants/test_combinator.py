@@ -56,3 +56,23 @@ def test_a_conflict_carries_every_premise_not_just_the_true_ones():
     """For a conjunction the whole set is the explanation; a partial set would mislead."""
     f = conflict_if("inv", "qbt[main]", premise("a", True), premise("b", True), premise("c", True))
     assert len(f.premises) == 3
+
+
+def test_a_known_null_is_not_a_known_false():
+    """facts.py exists to keep 'read a null' apart from 'never read'; bool(None) would erase it."""
+    p = premise(
+        "a", Known(value=None, source="GET /x", read_at=datetime.now(UTC), service_version="v1")
+    )
+    assert p.state is None
+
+
+def test_an_unsupported_value_raises_rather_than_becoming_unknown():
+    """Without this the only runtime guard against a caller bug is dead code."""
+    for bad in ("garbage", 42, [1, 2, 3]):
+        with pytest.raises(TypeError):
+            premise("a", bad)
+
+
+def test_no_premises_is_a_pass_not_a_conflict():
+    """all([]) is True -- the guard against it must stay."""
+    assert conflict_if("inv", "instance").outcome is Outcome.PASS
