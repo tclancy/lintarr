@@ -785,7 +785,7 @@ The premises, in report order:
 | Label | Holds when |
 |---|---|
 | `qbt.queueing_enabled` | queueing is on — with it off there is no queue to wedge |
-| `qbt.a_limit_binds` | any of the three active limits is not `-1` |
+| `qbt.max_active_torrents_binds` | any of the three active limits is not `-1` |
 | `qbt.slow_exempt_off` | `dont_count_slow_torrents` is false |
 | `qbt.no_global_ratio` | `max_ratio_enabled` is false |
 | `qbt.no_global_seed_time` | `max_seeding_time_enabled` is false |
@@ -846,7 +846,7 @@ def test_a_conflict_names_the_settings_responsible():
     labels = {p.label for p in check(wedged_qbt(), NO_GOALS).premises}
     assert "qbt.no_global_ratio" in labels
     assert "qbt.no_global_seed_time" in labels
-    assert "qbt.a_limit_binds" in labels
+    assert "qbt.max_active_torrents_binds" in labels
 
 
 def test_per_indexer_seed_goals_prevent_the_conflict():
@@ -1110,7 +1110,7 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download."""
     premises: tuple[Premise, ...] = (
         premise("qbt.queueing_enabled", qbt.queueing_enabled),
-        premise("qbt.a_limit_binds", _a_limit_binds(qbt)),
+        premise("qbt.max_active_torrents_binds", _a_limit_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
@@ -1261,7 +1261,7 @@ FAIL  queue-liveness  [qbittorrent[main]]
 
   Your settings — read from your stack, check these yourself:
     qbt.queueing_enabled                holds
-    qbt.a_limit_binds                   holds
+    qbt.max_active_torrents_binds                   holds
     qbt.slow_exempt_off                 holds
     qbt.no_global_ratio                 holds
     qbt.no_global_seed_time             holds
