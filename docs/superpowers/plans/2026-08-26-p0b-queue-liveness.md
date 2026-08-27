@@ -1491,11 +1491,19 @@ from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
 
 # fact -> (overrides that should FAIL, overrides that should PASS)
+#
+# Each pair must differ in EXACTLY the named fact and produce different
+# verdicts. Two traps to avoid, both of which the first draft of this table fell
+# into: an override that merely restates what _WEDGE already sets is a no-op, so
+# the two halves are identical and the pair proves nothing; and a need that the
+# shipped predicate does not actually read cannot have a load-bearing pair at
+# all — remove it from NEEDS instead of inventing one.
 _PAIRS: dict[str, tuple[dict, dict]] = {
     "qbt.queueing_enabled": ({"queueing_enabled": True}, {"queueing_enabled": False}),
-    "qbt.max_active_downloads": ({"max_active_downloads": 3}, {}),
-    "qbt.max_active_uploads": ({"max_active_uploads": 3}, {}),
-    "qbt.max_active_torrents": ({"max_active_torrents": 5}, {}),
+    # 0 starves the queue outright; 6 leaves room for a first download.
+    "qbt.max_active_downloads": ({"max_active_downloads": 0}, {"max_active_downloads": 6}),
+    # 5 binds so seeders can fill it; -1 is unlimited so they never can.
+    "qbt.max_active_torrents": ({"max_active_torrents": 5}, {"max_active_torrents": -1}),
     "qbt.dont_count_slow_torrents": (
         {"dont_count_slow_torrents": False},
         {"dont_count_slow_torrents": True},
@@ -1507,8 +1515,11 @@ _PAIRS: dict[str, tuple[dict, dict]] = {
     ),
 }
 
+# The seeding-conjunction wedge: limits bind, nothing releases a seeder.
+# max_active_downloads stays at its healthy 6 here, because the shipped
+# predicate deliberately excludes it from the seeding path — a finished torrent
+# is not downloading, so download slots keep rotating regardless of seeders.
 _WEDGE = {
-    "max_active_downloads": 3,
     "max_active_torrents": 5,
     "dont_count_slow_torrents": False,
     "max_ratio_enabled": False,
@@ -1517,8 +1528,15 @@ _WEDGE = {
 
 
 def test_every_declared_need_has_a_pair():
+    """A NEEDS entry with no pair is either untested or a lie. Both matter."""
     missing = [n for n in NEEDS if n not in _PAIRS and n != "arr.indexer_seed_criteria"]
     assert not missing, f"NEEDS entries with no load-bearing pair: {missing}"
+
+
+def test_no_pair_names_a_fact_the_predicate_does_not_declare():
+    """The reverse direction: a stale pair hides that a need was dropped."""
+    stale = [n for n in _PAIRS if n not in NEEDS]
+    assert not stale, f"_PAIRS entries not in NEEDS: {stale}"
 
 
 @pytest.mark.parametrize("need", sorted(_PAIRS))
