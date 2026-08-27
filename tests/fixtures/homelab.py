@@ -36,6 +36,7 @@ _REPAIRED: dict[str, Any] = {
     "max_ratio_act": 3,
     "max_seeding_time_enabled": True,
     "max_seeding_time": 20160,
+    "categories": {},
 }
 
 # The five drifted values. Everything else matched.
@@ -66,7 +67,6 @@ def _build(values: dict[str, Any], name: str) -> QbtInstance:
     return QbtInstance(
         name=name,
         version=_VERSION,
-        categories=_known({}),
         **{key: _wrap(value) for key, value in values.items()},
     )
 
