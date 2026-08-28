@@ -28,7 +28,11 @@
 Recorded here because they are the axioms the whole check rests on, and because P0a shipped a bug from an assumed-but-unchecked API shape.
 
 - Three independent active limits exist: `max_active_downloads`, `max_active_uploads`, `max_active_torrents`. A queue can wedge on any one of them.
-- A limit value of `-1` means unlimited. `0` and any positive integer **bind**. `0` is legal and immediately catastrophic.
+- A limit value of `-1` means unlimited — and **only** exactly `-1`. `0` and any
+  positive integer bind, and so does any other negative value. Do not write
+  `limit < 0` for "unlimited": the model treats only `-1` that way, and the two
+  would disagree on every negative-but-not-`-1` value. `0` is legal and
+  immediately catastrophic.
 - Seeding torrents count toward `max_active_torrents`.
 - With no share limit enabled, a completed torrent seeds indefinitely and never releases its slot.
 - `dont_count_slow_torrents` exempts torrents by transfer rate, not by state, so it can prevent the wedge.
@@ -781,7 +785,7 @@ The premises, in report order:
 | Label | Holds when |
 |---|---|
 | `qbt.queueing_enabled` | queueing is on — with it off there is no queue to wedge |
-| `qbt.a_limit_binds` | any of the three active limits is not `-1` |
+| `qbt.max_active_torrents_binds` | any of the three active limits is not `-1` |
 | `qbt.slow_exempt_off` | `dont_count_slow_torrents` is false |
 | `qbt.no_global_ratio` | `max_ratio_enabled` is false |
 | `qbt.no_global_seed_time` | `max_seeding_time_enabled` is false |
@@ -842,7 +846,7 @@ def test_a_conflict_names_the_settings_responsible():
     labels = {p.label for p in check(wedged_qbt(), NO_GOALS).premises}
     assert "qbt.no_global_ratio" in labels
     assert "qbt.no_global_seed_time" in labels
-    assert "qbt.a_limit_binds" in labels
+    assert "qbt.max_active_torrents_binds" in labels
 
 
 def test_per_indexer_seed_goals_prevent_the_conflict():
@@ -911,7 +915,17 @@ from tests.invariants.test_queue_liveness import NO_GOALS
 from tests.model.queue import QueueConfig, simulate
 
 LIMITS = (-1, 0, 1, 2, 3, 4, 5, 6)
-TORRENTS = tuple(range(1, 11))
+
+# The model answers "does this wedge with N torrents"; the predicate answers
+# "can this configuration wedge at all". They are comparable only at an N large
+# enough to exceed every limit in LIMITS — below that the model correctly says
+# "not wedged" for a config that certainly can wedge, and the sweep would report
+# a wall of spurious disagreements that someone would then "fix" by breaking the
+# model. Wedging is monotone in N, so one sufficiently large N suffices.
+SWEEP_TORRENTS = 100
+assert SWEEP_TORRENTS > max(LIMITS), (
+    "N must exceed every limit for this comparison to mean anything"
+)
 
 
 def _model(dl: int, ul: int, tot: int, slow: bool, share: bool) -> QueueConfig:
@@ -943,9 +957,7 @@ def test_closed_form_matches_the_model_exhaustively():
         LIMITS, LIMITS, LIMITS, (False, True), (False, True)
     ):
         predicted = _predicate(dl, ul, tot, slow, share)
-        # The predicate is torrent-count independent; the model is not, so the
-        # model wedges iff it wedges for a queue large enough to exceed the limits.
-        observed = simulate(_model(dl, ul, tot, slow, share), n_torrents=max(TORRENTS))
+        observed = simulate(_model(dl, ul, tot, slow, share), n_torrents=SWEEP_TORRENTS)
         if predicted != observed:
             mismatches.append((dl, ul, tot, slow, share, predicted, observed))
     assert not mismatches, f"{len(mismatches)} disagreements, first: {mismatches[0]}"
@@ -957,17 +969,24 @@ def test_closed_form_matches_the_model_exhaustively():
     tot=st.sampled_from(LIMITS),
     slow=st.booleans(),
     share=st.booleans(),
-    n=st.integers(min_value=1, max_value=200),
+    n=st.integers(min_value=max(LIMITS) + 1, max_value=500),
 )
 @settings(max_examples=300, deadline=None)
 def test_closed_form_matches_the_model_on_random_queues(dl, ul, tot, slow, share, n):
-    if (
-        n <= max(x for x in (dl, ul, tot) if x >= 0)
-        if any(x >= 0 for x in (dl, ul, tot))
-        else False
-    ):
-        return  # too few torrents to exceed any limit; not a wedge scenario
+    """The sweep's comparison over random large N.
+
+    N starts above max(LIMITS) for the reason recorded at SWEEP_TORRENTS: below
+    that the two are answering different questions, not disagreeing.
+    """
     assert _predicate(dl, ul, tot, slow, share) == simulate(_model(dl, ul, tot, slow, share), n)
+
+
+def test_the_model_is_n_dependent_and_the_predicate_is_not():
+    """Documents WHY the sweep pins N, so nobody later simplifies it away."""
+    wedging = _model(3, 3, 5, slow=False, share=False)
+    assert simulate(wedging, n_torrents=5) is False
+    assert simulate(wedging, n_torrents=6) is True
+    assert _predicate(3, 3, 5, False, False) is True
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1022,7 +1041,7 @@ def _not(fact: Fact[bool]) -> Fact[bool] | None:
     return not bool(fact.value)
 
 
-def _a_limit_binds(qbt: QbtInstance) -> bool | None:
+def _max_active_torrents_binds(qbt: QbtInstance) -> bool | None:
     """True when any of the three active limits is not the unlimited sentinel."""
     limits = (qbt.max_active_downloads, qbt.max_active_uploads, qbt.max_active_torrents)
     if any(not is_known(limit) for limit in limits):
@@ -1091,7 +1110,7 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download."""
     premises: tuple[Premise, ...] = (
         premise("qbt.queueing_enabled", qbt.queueing_enabled),
-        premise("qbt.a_limit_binds", _a_limit_binds(qbt)),
+        premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
@@ -1242,7 +1261,7 @@ FAIL  queue-liveness  [qbittorrent[main]]
 
   Your settings — read from your stack, check these yourself:
     qbt.queueing_enabled                holds
-    qbt.a_limit_binds                   holds
+    qbt.max_active_torrents_binds                   holds
     qbt.slow_exempt_off                 holds
     qbt.no_global_ratio                 holds
     qbt.no_global_seed_time             holds
@@ -1472,11 +1491,19 @@ from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
 
 # fact -> (overrides that should FAIL, overrides that should PASS)
+#
+# Each pair must differ in EXACTLY the named fact and produce different
+# verdicts. Two traps to avoid, both of which the first draft of this table fell
+# into: an override that merely restates what _WEDGE already sets is a no-op, so
+# the two halves are identical and the pair proves nothing; and a need that the
+# shipped predicate does not actually read cannot have a load-bearing pair at
+# all — remove it from NEEDS instead of inventing one.
 _PAIRS: dict[str, tuple[dict, dict]] = {
     "qbt.queueing_enabled": ({"queueing_enabled": True}, {"queueing_enabled": False}),
-    "qbt.max_active_downloads": ({"max_active_downloads": 3}, {}),
-    "qbt.max_active_uploads": ({"max_active_uploads": 3}, {}),
-    "qbt.max_active_torrents": ({"max_active_torrents": 5}, {}),
+    # 0 starves the queue outright; 6 leaves room for a first download.
+    "qbt.max_active_downloads": ({"max_active_downloads": 0}, {"max_active_downloads": 6}),
+    # 5 binds so seeders can fill it; -1 is unlimited so they never can.
+    "qbt.max_active_torrents": ({"max_active_torrents": 5}, {"max_active_torrents": -1}),
     "qbt.dont_count_slow_torrents": (
         {"dont_count_slow_torrents": False},
         {"dont_count_slow_torrents": True},
@@ -1488,8 +1515,11 @@ _PAIRS: dict[str, tuple[dict, dict]] = {
     ),
 }
 
+# The seeding-conjunction wedge: limits bind, nothing releases a seeder.
+# max_active_downloads stays at its healthy 6 here, because the shipped
+# predicate deliberately excludes it from the seeding path — a finished torrent
+# is not downloading, so download slots keep rotating regardless of seeders.
 _WEDGE = {
-    "max_active_downloads": 3,
     "max_active_torrents": 5,
     "dont_count_slow_torrents": False,
     "max_ratio_enabled": False,
@@ -1498,8 +1528,15 @@ _WEDGE = {
 
 
 def test_every_declared_need_has_a_pair():
+    """A NEEDS entry with no pair is either untested or a lie. Both matter."""
     missing = [n for n in NEEDS if n not in _PAIRS and n != "arr.indexer_seed_criteria"]
     assert not missing, f"NEEDS entries with no load-bearing pair: {missing}"
+
+
+def test_no_pair_names_a_fact_the_predicate_does_not_declare():
+    """The reverse direction: a stale pair hides that a need was dropped."""
+    stale = [n for n in _PAIRS if n not in NEEDS]
+    assert not stale, f"_PAIRS entries not in NEEDS: {stale}"
 
 
 @pytest.mark.parametrize("need", sorted(_PAIRS))
