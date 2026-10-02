@@ -7,6 +7,8 @@ configuration can be undecidable rather than healthy.
 
 from datetime import UTC, datetime
 
+import pytest
+
 from lintarr.facts import Known, Unknown
 from lintarr.invariants.queue_liveness import check
 from lintarr.models import ArrInstance, IndexerFacts
@@ -441,6 +443,84 @@ def test_a_season_pack_seed_time_alone_is_not_a_seed_goal():
     """It bounds season packs only; single-episode torrents still seed forever."""
     packs_only = _arrs(_indexer(seed_ratio=_NO_RATIO, season_pack_seed_time=_fact(20160)))
     assert check(wedged_qbt(), packs_only).outcome is Outcome.FAIL
+
+
+#: Every shape a seed criterion can arrive in that is not a number. No arr emits
+#: any of them, which is exactly why nothing validated them: a reverse proxy
+#: answering 200 with its own body, a plugin, or a future API revision can.
+#:
+#: ``"2.0"`` is in here deliberately. A numeric *string* is the tempting one to
+#: coerce, and coercing it would invent a goal the arr never reported — the same
+#: refusal ``_as_limit`` already makes on qBittorrent's side of this question.
+#:
+#: ``False`` and ``True`` are in here because ``isinstance(True, int)`` is True
+#: in Python, so a guard written as ``isinstance(value, (int, float))`` admits
+#: them unless it excludes ``bool`` first.
+_UNUSABLE_SEED_VALUES = ("not-a-number", "2.0", {"a": 1}, [], (), False, True)
+
+
+@pytest.mark.parametrize("value", _UNUSABLE_SEED_VALUES, ids=repr)
+def test_an_unusable_seed_ratio_is_not_a_seed_goal(value):
+    """A value nobody can read is not a configured goal.
+
+    Before this guard every value here produced a **PASS on the homelab#393
+    wedge** — byte-identical to a real ratio of 2.0 — so the flagship check was
+    disarmed by a payload the tool could not interpret. That is a false PASS,
+    which this project ranks above a crash.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize("value", _UNUSABLE_SEED_VALUES, ids=repr)
+def test_an_unusable_seed_time_is_not_a_seed_goal(value):
+    """Both criteria go through the same loop, so both need the same guard.
+
+    Separate from the ratio case on purpose: a guard applied to one field only
+    would leave the other disarming the check, and a test that varies just
+    ``seed_ratio`` cannot see that.
+    """
+    junk = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
+    assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize("value", [2.0, 2])
+def test_a_numeric_seed_goal_still_clears_the_indexer(value):
+    """The control for the two tests above.
+
+    Without it they pass on any change that arms the check unconditionally,
+    which would make every healthy stack FAIL. ``int`` is listed beside
+    ``float`` because an operator who typed ``2`` into Sonarr has set a goal.
+    """
+    assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(value)))).outcome is Outcome.PASS
+
+
+def test_a_finding_names_the_indexer_whose_seed_criterion_could_not_be_read():
+    """Arming the check is not enough — the remedy has to be the right one.
+
+    "This indexer sets no seed goal" is a true sentence about an absent value
+    and a false one about an unreadable value: an operator who can see a ratio
+    in Sonarr's UI would read the finding as lintarr being wrong, and go and
+    re-set a goal that is already set. The premise cannot carry that
+    distinction (it is a bool), so the detail does.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(wedged_qbt(), junk)
+    assert f.outcome is Outcome.FAIL
+    assert "sonarr[main]/1337x" in f.detail
+    assert "not a number" in f.detail
+    # Control: a stack whose criteria were all readable carries no such note, so
+    # the assertions above are evidence rather than boilerplate.
+    assert check(wedged_qbt(), NO_GOALS).detail == ""
+
+
+def test_the_note_does_not_displace_the_detail_a_skip_already_had():
+    """A SKIP's own detail explains the verdict; the note only adds to it."""
+    junk = _arrs(_indexer(seed_ratio=_fact({"a": 1}), protocol=None))
+    f = check(wedged_qbt(), junk)
+    assert f.outcome is Outcome.SKIP
+    assert "required inputs could not be read" in f.detail
+    assert "sonarr[main]/1337x" in f.detail
 
 
 # --- No arr data at all ------------------------------------------------------

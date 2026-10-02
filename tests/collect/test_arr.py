@@ -120,6 +120,27 @@ def test_field_entry_with_an_explicit_null_value_is_known_none():
     assert ratio.value is None
 
 
+@pytest.mark.parametrize("value", ["2.0", "not-a-number", {"a": 1}, [], False], ids=repr)
+def test_a_seed_criterion_is_read_verbatim_however_unusable_its_value(value):
+    """Collection does not coerce, drop or judge a value — the predicate does.
+
+    This is what makes #10 reachable rather than theoretical. Any JSON value can
+    land in this slot — a plugin, a future API revision, a reverse proxy
+    answering 200 with its own body — and it arrives at the invariant as a
+    ``Known`` whose type is the only thing distinguishing it from a real ratio.
+    So the guard belongs at the point of use, beside ``_as_limit``, and this
+    test pins that collection deliberately hands the value over untouched
+    rather than silently cleaning it up here.
+    """
+    arr, _ = _collect([_indexer("Junk", fields=[_field("seedCriteria.seedRatio", value)])])
+    ratio = arr.indexers[0].seed_ratio
+    assert is_known(ratio)
+    assert ratio.value == value
+    # ``False == 0`` and ``0`` would be a legitimate goal, so the type is part
+    # of the claim, not decoration.
+    assert type(ratio.value) is type(value)
+
+
 def test_usenet_indexer_is_kept_with_its_protocol():
     arr, _ = _collect([_indexer("News", protocol="usenet")])
     idx = arr.indexers[0]
