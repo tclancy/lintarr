@@ -208,9 +208,19 @@ def test_issues_only_get_requests():
 def test_fields_entry_without_a_usable_name_is_bad_response(name):
     """A nameless ``fields`` entry is a malformed payload, not an unnamed field.
 
-    Unguarded this raised a bare ``KeyError`` out of the adapter, past
-    ``collect_stack``'s per-instance ``except ServiceError``, killing every
-    other service's facts and printing a traceback.
+    The three parametrisations were unguarded in *different* ways, measured
+    against the pre-fix code rather than assumed:
+
+    - a **missing** ``name`` key raised a bare ``KeyError`` out of the adapter,
+      past ``collect_stack``'s per-instance ``except ServiceError``, killing
+      every other service's facts and printing a traceback;
+    - ``""`` and ``"   "`` raised **nothing at all**. The mapping was keyed on
+      the empty or blank string, no real field name resolved, and the seed
+      criteria came back ``Unknown("field-absent")`` — the instance reported
+      as healthy on a payload whose field names were unreadable.
+
+    The silent pair is the more dangerous one, and it is the reason this guard
+    rejects a blank name rather than only a missing key.
     """
     entry = _field("seedCriteria.seedRatio", 1.0)
     if name is None:
@@ -269,3 +279,32 @@ def test_non_list_of_objects_fields_payload_is_bad_response(fields):
     with pytest.raises(ServiceError) as e:
         _collect([raw])
     assert e.value.kind == "bad-response"
+
+
+def test_padded_field_name_still_resolves_its_value():
+    """The name is a lookup key, so the guard must return it stripped.
+
+    Validating with ``.strip()`` and returning the padded original would key
+    the mapping on ``"  seedCriteria.seedRatio  "``, and a ratio the operator
+    really had configured would come back ``Unknown("field-absent")`` — the
+    guard re-introducing the exact lie it exists to refuse.
+    """
+    arr, _ = _collect([_indexer("Padded", fields=[_field("  seedCriteria.seedRatio  ", 2.0)])])
+    ratio = arr.indexers[0].seed_ratio
+    assert is_known(ratio)
+    assert ratio.value == 2.0
+
+
+def test_absent_fields_key_is_field_absent_not_bad_response():
+    """The companion to the explicit-null case: a *missing* ``fields`` key is not malformed.
+
+    Absence matches how the three top-level ``enable*`` keys behave on an
+    older arr, so it falls through to ``read()``'s absent branch rather than
+    erroring the whole instance.
+    """
+    raw = _indexer("NoFields")
+    del raw["fields"]
+    arr, _ = _collect([raw])
+    ratio = arr.indexers[0].seed_ratio
+    assert not is_known(ratio)
+    assert ratio.reason == "field-absent"

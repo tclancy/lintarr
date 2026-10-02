@@ -96,4 +96,5 @@ def test_non_object_fields_payload_is_recorded_not_raised():
     malformed = [{"name": "nzb", "fields": ["seedCriteria.seedRatio"]}]
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
     assert facts.errors == (("sonarr[anime]", "bad-response"),)
