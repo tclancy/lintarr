@@ -243,7 +243,8 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
       the arr never reported, which is this project's cardinal sin wearing a
       plausible face.
     - A ``bool``. ``isinstance(True, int)`` is True in Python, so ``bool`` has
-      to be excluded before the ``int`` test rather than after it.
+      to be excluded explicitly rather than left to fall out of the ``int``
+      test, which admits it. (Either order works; omitting it does not.)
 
     What this does *not* decide is range. ``0`` and negative numbers still read
     as goals, exactly as they did before, because that is a separate question
@@ -447,13 +448,32 @@ def _note_arrs_that_reported_no_indexers(
     )
 
 
+def _fed_the_premise_an_unreadable_criterion(indexer: IndexerFacts) -> bool:
+    """True when this indexer's unreadable criterion is what the premise read.
+
+    Two filters beyond "a criterion is not a number", because each of them was a
+    misleading sentence on a real verdict before it existed:
+
+    - ``_lacks_seed_criteria`` — an indexer whose *other* criterion is a real
+      goal never reached the premise, so a junk ``seedRatio`` sitting beside a
+      ``seedTime`` of 2880 is not something any verdict rests on.
+    - ``_is_a_torrent_source(...) is not False`` — a usenet indexer, or one with
+      every toggle off, is excluded from the predicate by design. ``None`` stays
+      in deliberately: an indexer nobody could classify is exactly the one that
+      forces the SKIP this note has to explain.
+    """
+    if not any(_is_an_unusable_seed_criterion(fact) for fact in _seed_criteria(indexer)):
+        return False
+    return _lacks_seed_criteria(indexer) and _is_a_torrent_source(indexer) is not False
+
+
 def _indexers_with_unreadable_seed_criteria(arrs: tuple[ArrInstance, ...]) -> tuple[str, ...]:
-    """Every indexer that reported a seed criterion which is not a number."""
+    """Name every indexer whose unreadable criterion fed the seeding premise."""
     return tuple(
         f"{arr.kind}[{arr.name}]/{indexer.name}"
         for arr in arrs
         for indexer in arr.indexers
-        if any(_is_an_unusable_seed_criterion(fact) for fact in _seed_criteria(indexer))
+        if _fed_the_premise_an_unreadable_criterion(indexer)
     )
 
 
@@ -469,7 +489,17 @@ def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ..
     Appended rather than assigned: a SKIP arrives already explaining which
     inputs it could not read, and that sentence is about the verdict while this
     one is about a value the verdict did not use.
+
+    Only on the seeding finding, and that guard is load-bearing. The starvation
+    conflict does not consult a seed criterion at all, and its "Therefore" line
+    ends "Share limits are not involved, so turning them on will not help" — a
+    sentence about seed criteria printed directly above that is the exact
+    coupling defect ``Finding.conflict`` and the ``_THEREFORE`` keying in
+    ``cli.py`` were written to prevent. A PASS reaches an operator through
+    ``_worst_of``'s starvation fall-through, so this excludes the clean runs too.
     """
+    if finding.conflict != SEEDING:
+        return finding
     unreadable = _indexers_with_unreadable_seed_criteria(arrs)
     if not unreadable:
         return finding
@@ -481,11 +511,15 @@ def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ..
 
 
 def _worst_of(starved: Finding, seeding: Finding, arrs: tuple[ArrInstance, ...]) -> Finding:
-    """Whichever of the two conflicts decides the invariant.
+    """Whichever of the two conflicts decides the invariant, annotated.
 
     Starvation is reported ahead of seeding when both fire: a client that cannot
     start a first download is the more fundamental fact and the more actionable
     one, since turning the share limits back on would not help it.
+
+    When neither fires the result is a PASS, which is the one outcome that needs
+    to say whether there was anything to examine — hence the
+    ``_note_arrs_that_reported_no_indexers`` call on that branch alone.
     """
     for outcome in (Outcome.FAIL, Outcome.SKIP):
         for finding in (starved, seeding):

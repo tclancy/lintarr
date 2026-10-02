@@ -445,9 +445,11 @@ def test_a_season_pack_seed_time_alone_is_not_a_seed_goal():
     assert check(wedged_qbt(), packs_only).outcome is Outcome.FAIL
 
 
-#: Every shape a seed criterion can arrive in that is not a number. No arr emits
-#: any of them, which is exactly why nothing validated them: a reverse proxy
-#: answering 200 with its own body, a plugin, or a future API revision can.
+#: Shapes a seed criterion can arrive in that are not numbers, plus ``()`` as a
+#: non-JSON control. No arr emits any of them, which is exactly why nothing
+#: validated them; a plugin or a future API revision can. (Not a reverse proxy
+#: answering with its own body — ``_indexer_payloads`` rejects that whole
+#: response before any field is read.)
 #:
 #: ``"2.0"`` is in here deliberately. A numeric *string* is the tempting one to
 #: coerce, and coercing it would invent a goal the arr never reported — the same
@@ -482,22 +484,25 @@ def test_an_unusable_seed_time_is_not_a_seed_goal(value):
     """
     junk = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
     assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
-    # The control belongs in this test, not elsewhere. With ``seed_ratio``
-    # absent the check is armed whatever ``seed_time`` says, so the assertion
-    # above passes just as happily against an implementation that ignores
-    # ``seed_time`` altogether — a mutant dropping it from ``_seed_criteria``
-    # SURVIVED until this line existed. A real seed time has to clear the same
-    # indexer for the pair to mean anything.
+    # Co-located restatement of ``test_a_seed_time_goal_alone_prevents_the_conflict``
+    # above, which is what actually kills a mutant dropping ``seed_time`` from
+    # ``_seed_criteria`` (measured). It is repeated here because with
+    # ``seed_ratio`` absent the check is armed whatever ``seed_time`` says, so
+    # the assertion above also passes against an implementation that ignores
+    # ``seed_time`` altogether — and a reader of this test cannot see that from
+    # here. Do not delete the original in favour of this one.
     assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
 
 
 @pytest.mark.parametrize("value", [2.0, 2])
 def test_a_numeric_seed_goal_still_clears_the_indexer(value):
-    """The control for the two tests above.
+    """The control for the two tests above, co-located with them.
 
-    Without it they pass on any change that arms the check unconditionally,
-    which would make every healthy stack FAIL. ``int`` is listed beside
-    ``float`` because an operator who typed ``2`` into Sonarr has set a goal.
+    Without a control of some kind they pass on any change that arms the check
+    unconditionally, which would make every healthy stack FAIL;
+    ``test_per_indexer_seed_goals_prevent_the_conflict`` covers the ``2.0`` half
+    elsewhere. ``int`` is listed beside ``float`` because an operator who typed
+    ``2`` into Sonarr has set a goal, and nothing else in the suite says so.
     """
     assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(value)))).outcome is Outcome.PASS
 
@@ -531,6 +536,63 @@ def test_the_note_does_not_displace_the_detail_a_skip_already_had():
     assert f.outcome is Outcome.SKIP
     assert "required inputs could not be read" in f.detail
     assert "sonarr[main]/1337x" in f.detail
+
+
+def test_the_note_stays_off_a_verdict_that_never_read_a_seed_criterion():
+    """A starvation finding must not carry a sentence about seed criteria.
+
+    Its "Therefore" line ends "Share limits are not involved, so turning them on
+    will not help", and the premises it lists are the two active-limit ones. A
+    seed-criteria sentence between those two is the coupling defect
+    ``Finding.conflict`` exists to prevent — see the comment above ``_THEREFORE``
+    in ``cli.py``.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(qbt_with(max_active_torrents=0), junk)
+    assert f.outcome is Outcome.FAIL
+    assert f.conflict == "no-slot-for-a-first-download"
+    assert f.detail == ""
+    # Control: the same junk value on the seeding conflict does carry the note,
+    # so the assertion above is about the conflict and not about the guard being
+    # switched off altogether.
+    assert "sonarr[main]/1337x" in check(wedged_qbt(), junk).detail
+
+
+def test_the_note_stays_off_an_indexer_that_could_not_have_wedged_anything():
+    """An unreadable criterion is only worth reporting where it was read.
+
+    Three indexers that carry one and contributed nothing: a disabled one and a
+    usenet one are outside the predicate by design, and one whose *other*
+    criterion is a real goal never reached the premise at all. A note on any of
+    them tells an operator to go and look at an indexer this verdict cleared.
+    """
+    disabled = _arrs(_indexer(seed_ratio=_fact("not-a-number"), enabled=False))
+    usenet = _arrs(_indexer(seed_ratio=_fact("not-a-number"), protocol="usenet"))
+    has_a_goal = _arrs(_indexer(seed_ratio=_fact("not-a-number"), seed_time=_fact(2880)))
+    for arrs in (disabled, usenet, has_a_goal):
+        f = check(wedged_qbt(), arrs)
+        assert f.outcome is Outcome.PASS
+        assert f.detail == ""
+
+
+def test_an_unclassifiable_indexer_keeps_its_note():
+    """The companion to the test above: ``None`` is not ``False``.
+
+    An indexer nobody could classify is the one that forces the SKIP, so it is
+    exactly where the explanation is needed. A filter written as
+    ``_is_a_torrent_source(indexer)`` rather than ``is not False`` would drop it.
+    """
+    f = check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact("not-a-number"), protocol=None)))
+    assert f.outcome is Outcome.SKIP
+    assert "sonarr[main]/1337x" in f.detail
+
+
+def test_a_clean_run_carries_no_note_however_unreadable_a_criterion_was():
+    """A stack that cannot wedge is a PASS, and a PASS has nothing to explain."""
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(repaired_qbt(), junk)
+    assert f.outcome is Outcome.PASS
+    assert f.detail == ""
 
 
 # --- No arr data at all ------------------------------------------------------

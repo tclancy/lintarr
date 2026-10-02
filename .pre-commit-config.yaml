@@ -1,6 +1,8 @@
-# lintarr has no CI workflows, so this is the only gate on the way in. The ruff
-# rev is pinned to the same version the dev group resolves, so the hook and
-# `uv run ruff` cannot disagree about what passes.
+# lintarr ships no CI workflows, so this is the only gate on the way in — hence
+# the pytest hook: a linter cannot see a broken invariant, which is all this
+# project is. The ruff rev and the dev group's ruff are two copies of one
+# version number, and `ruff>=0.6` is a floor, so tests/test_gates.py asserts
+# they still agree rather than trusting a comment to keep them aligned.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -15,3 +17,11 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        types: [python]
+        pass_filenames: false
