@@ -25,6 +25,30 @@ class ServiceError(RuntimeError):
         self.detail = detail
 
 
+def decode_text(response: httpx.Response, path: str) -> str:
+    """Decode a response body to text, or raise ``ServiceError``.
+
+    Lifted out of ``get_text`` because the qBittorrent auth path reads
+    ``.text`` off a ``post_auth`` response directly, and the width of this
+    guard belongs in one place rather than retyped at each call site.
+
+    ``.text`` decodes with ``errors="replace"``, so an *undeclared* bad
+    encoding comes back as replacement characters rather than raising. What
+    does raise is a **declared** multibyte charset whose BOM is missing:
+    ``content-type: text/plain; charset=utf-16`` over the plain ASCII bytes
+    ``b"v5.2.3"`` raises ``UnicodeDecodeError`` before any adapter sees it.
+    That is a `ValueError`, and uncaught it aborts the whole run — worse than
+    the ``get_json`` case it mirrors, because the qBittorrent version read is
+    the *first* instance ``collect_stack`` visits.
+    """
+    try:
+        return response.text
+    except ValueError as exc:
+        raise ServiceError(
+            "bad-response", f"{path}: body is not decodable text ({type(exc).__name__})"
+        ) from exc
+
+
 class ReadOnlyClient:
     def __init__(
         self,
@@ -78,26 +102,29 @@ class ReadOnlyClient:
         return response
 
     def get_text(self, path: str) -> str:
-        return self._send("GET", path).text
+        return decode_text(self._send("GET", path), path)
 
     def get_json(self, path: str) -> Any:
         """Parse a response body as JSON, or raise ``ServiceError``.
 
-        ``ValueError`` is the deliberate width here, not a careless one. A body
-        that is not JSON fails in two distinct ways and both must land as
-        ``bad-response``: ``json.JSONDecodeError`` when the bytes decode to text
-        that is not JSON, and ``UnicodeDecodeError`` when they do not decode to
-        text at all — a 200 carrying a gzip or binary body under a JSON
-        content-type, which is what a reverse proxy or captive portal in front
-        of an arr answers with. Both are ``ValueError`` subclasses; catching
-        only the first let the second escape past ``collect_stack``'s
-        ``except ServiceError`` and abort every *healthy* instance's collection
-        too.
+        ``ValueError`` is a deliberate width, not a careless one: a body that
+        is not JSON fails in two ways and both are ``bad-response``.
+        ``json.JSONDecodeError`` when the bytes decode to text that is not
+        JSON, and ``UnicodeDecodeError`` when they do not decode to text at
+        all — a 200 carrying binary under a JSON content-type, which is what a
+        reverse proxy or captive portal in front of an arr answers with.
+        ``RecursionError`` is named separately because it is *not* a
+        ``ValueError``: ``json.loads`` raises it on a deeply nested body, and
+        it reaches ``collect_stack`` by the same route.
+
+        Anything uncaught here escapes ``collect_stack``'s ``except
+        ServiceError`` and aborts every *healthy* instance's collection too,
+        which is the one thing that module promises will not happen.
         """
         response = self._send("GET", path)
         try:
             return response.json()
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             raise ServiceError(
                 "bad-response", f"{path}: body is not JSON ({type(exc).__name__})"
             ) from exc

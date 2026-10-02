@@ -14,7 +14,9 @@ ENV = {
 }
 
 
-def _transport(sonarr_down=False, anime_indexers=None, anime_status_body=None):
+def _transport(
+    sonarr_down=False, anime_indexers=None, anime_status_body=None, qbt_version_response=None
+):
     def handle(request: httpx.Request) -> httpx.Response:
         host, path = request.url.host, request.url.path
         if host == "qbt":
@@ -22,6 +24,8 @@ def _transport(sonarr_down=False, anime_indexers=None, anime_status_body=None):
                 case "/api/v2/auth/login":
                     return httpx.Response(200, text="Ok.")
                 case "/api/v2/app/version":
+                    if qbt_version_response is not None:
+                        return qbt_version_response()
                     return httpx.Response(200, text="v5.2.3")
                 case "/api/v2/app/preferences":
                     return httpx.Response(200, json={"queueing_enabled": True})
@@ -84,3 +88,23 @@ def test_undecodable_body_is_recorded_not_raised():
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
     assert facts.errors == (("sonarr[anime]", "bad-response"),)
+
+
+def test_undecodable_version_text_is_recorded_not_raised():
+    """The ``get_text`` half of the same promise, and it fails *earlier*.
+
+    qBittorrent is the first instance collect_stack visits, so an unguarded
+    decode failure here destroys both healthy sonarr instances as well as its
+    own. Plain ASCII bytes under a declared ``charset=utf-16`` are enough.
+    """
+    transport = _transport(
+        qbt_version_response=lambda: httpx.Response(
+            200, content=b"v5.2.3", headers={"content-type": "text/plain; charset=utf-16"}
+        )
+    )
+    facts = collect_stack(load_config(ENV), transport=transport)
+    assert facts.qbits == ()
+    assert sorted(a.name for a in facts.arrs) == ["anime", "main"], (
+        "both healthy sonarr instances must still report"
+    )
+    assert facts.errors == (("qbittorrent[main]", "bad-response"),)
