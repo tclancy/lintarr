@@ -8,12 +8,36 @@ from typing import Any
 import click
 
 from lintarr.collect.stack import collect_stack
-from lintarr.config import load_config
+from lintarr.config import LintarrConfig, load_config
 from lintarr.facts import Known, Unknown, is_known
 from lintarr.invariants import queue_liveness
 from lintarr.models import StackFacts
 from lintarr.outcomes import Outcome, exit_code
 from lintarr.run import run_checks, run_outcome
+
+
+def _config_from_env() -> LintarrConfig:
+    """Load configuration, or fail as a usage error rather than a traceback.
+
+    ``load_config`` rejects an environment it cannot act on — credentials for
+    an instance whose URL is missing, a URL with no credentials — and both are
+    input mistakes, so they belong in click's usage-error channel: one line
+    naming the variable, and exit 2. Handing ``os.environ`` straight to
+    ``load_config`` let the ``ValueError`` reach the interpreter, so a single
+    typo (``QBIT_URLL``) printed a traceback.
+
+    Exit 2 is the same code ``outcomes.exit_code`` gives ``Outcome.ERROR``, and
+    that collision is intentional: both mean *lintarr could not look*, which is
+    the distinction CI actually branches on. Splitting them would need a change
+    in ``outcomes`` too, not a different exception here.
+
+    Lifted to one place because two commands load config, and a guard that
+    exists at one call site is a guard the next command added will not have.
+    """
+    try:
+        return load_config(os.environ)
+    except ValueError as exc:
+        raise click.UsageError(str(exc)) from exc
 
 
 def _fact_to_dict(f: Known[Any] | Unknown) -> dict[str, Any]:
@@ -108,7 +132,7 @@ def cli(ctx: click.Context) -> None:
 @click.pass_context
 def dump_facts(ctx: click.Context, as_json: bool) -> None:
     """Print a source-annotated snapshot of everything lintarr can read."""
-    facts = collect_stack(load_config(os.environ), transport=ctx.obj.get("transport"))
+    facts = collect_stack(_config_from_env(), transport=ctx.obj.get("transport"))
     payload = _to_dict(facts)
     click.echo(jsonlib.dumps(payload, indent=2) if as_json else _render_human(payload))
 
@@ -205,7 +229,7 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     Branch on ``exit_code``; read ``outcome`` for how much of the stack was
     actually examined.
     """
-    cfg = load_config(os.environ)
+    cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
     findings = run_checks(facts, declared=cfg.declared)
     code = exit_code((f.outcome for f in findings), strict=strict)
