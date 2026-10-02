@@ -1,0 +1,17 @@
+# lintarr has no CI workflows, so this is the only gate on the way in. The ruff
+# rev is pinned to the same version the dev group resolves, so the hook and
+# `uv run ruff` cannot disagree about what passes.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-merge-conflict
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
