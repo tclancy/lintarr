@@ -37,6 +37,7 @@ def _indexer(
     rss=_UNSET,
     automatic=_UNSET,
     interactive=_UNSET,
+    name="1337x",
 ):
     """One indexer, every fact settable on its own.
 
@@ -50,7 +51,7 @@ def _indexer(
         return _fact(enabled) if override is _UNSET else _wrap(override)
 
     return IndexerFacts(
-        name="1337x",
+        name=name,
         protocol=_wrap(protocol),
         enable_rss=toggle(rss),
         enable_automatic_search=toggle(automatic),
@@ -558,13 +559,12 @@ def test_the_note_stays_off_a_verdict_that_never_read_a_seed_criterion():
     assert "sonarr[main]/1337x" in check(wedged_qbt(), junk).detail
 
 
-def test_the_note_stays_off_an_indexer_that_could_not_have_wedged_anything():
-    """An unreadable criterion is only worth reporting where it was read.
+def test_an_unreadable_criterion_on_an_excluded_indexer_wedges_nothing():
+    """Three shapes that carry one and still leave the stack PASSing.
 
-    Three indexers that carry one and contributed nothing: a disabled one and a
-    usenet one are outside the predicate by design, and one whose *other*
-    criterion is a real goal never reached the premise at all. A note on any of
-    them tells an operator to go and look at an indexer this verdict cleared.
+    A disabled indexer and a usenet one are outside the predicate by design, and
+    one whose *other* criterion is a real goal cleared itself. Each is the sole
+    indexer here, so the stack passes — and a PASS has nothing to explain.
     """
     disabled = _arrs(_indexer(seed_ratio=_fact("not-a-number"), enabled=False))
     usenet = _arrs(_indexer(seed_ratio=_fact("not-a-number"), protocol="usenet"))
@@ -573,6 +573,32 @@ def test_the_note_stays_off_an_indexer_that_could_not_have_wedged_anything():
         f = check(wedged_qbt(), arrs)
         assert f.outcome is Outcome.PASS
         assert f.detail == ""
+
+
+def test_the_note_names_only_the_indexers_the_premise_actually_read():
+    """The mixed stack, which is the only shape that tests the filter.
+
+    The three excluded shapes above cannot reach it on their own: alone, each
+    leaves the stack PASSing, so the conflict gate suppresses the note before the
+    filter is consulted and a mutant dropping the filter SURVIVED. It takes a
+    *fourth* indexer that genuinely wedges the stack to produce a seeding FAIL
+    with excluded indexers still in the list — and then naming them sends an
+    operator to go and look at three indexers this verdict cleared.
+    """
+    f = check(
+        wedged_qbt(),
+        _arrs(
+            _indexer(name="1337x", seed_ratio=_fact("not-a-number")),
+            _indexer(name="NZBgeek", seed_ratio=_fact({"a": 1}), protocol="usenet"),
+            _indexer(name="Nyaa", seed_ratio=_fact([]), enabled=False),
+            _indexer(name="EZTV", seed_ratio=_fact("2.0"), seed_time=_fact(2880)),
+        ),
+    )
+    assert f.outcome is Outcome.FAIL
+    assert f.conflict == "seeders-absorb-every-slot"
+    assert "sonarr[main]/1337x" in f.detail
+    for cleared in ("NZBgeek", "Nyaa", "EZTV"):
+        assert cleared not in f.detail
 
 
 def test_an_unclassifiable_indexer_keeps_its_note():
