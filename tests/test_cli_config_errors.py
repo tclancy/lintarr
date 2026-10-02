@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 
+import pytest
 from click.testing import CliRunner
 
 from lintarr.cli import cli
@@ -52,9 +53,32 @@ def test_a_url_without_credentials_is_also_a_usage_error():
 
 
 def test_the_usage_error_does_not_echo_the_credential_value():
-    """It names the variables, so it must not print what is in them."""
+    """It names the variables, so it must not print what is in them.
+
+    The first two assertions are the reachability control, not padding. Without
+    them this test passes on wholly unguarded code: the ``ValueError`` escapes,
+    ``result.output`` is ``""``, and an absence assertion over an empty string
+    is vacuously true. It was the one survivor of the mutant that deletes the
+    guard outright — and the survivor was the security-relevant case.
+    """
     result = _run(["dump-facts"], ORPHANED)
+    assert result.exit_code == 2, result.output
+    assert "QBIT_PASS" in result.output, result.output
     assert "hunter2" not in result.output
+
+
+@pytest.mark.parametrize("name", sorted(cli.commands))
+def test_every_registered_command_refuses_the_environment_cleanly(name):
+    """Derived from ``cli.commands`` rather than from a hand-written list.
+
+    The named cases above enumerate today'"'"'s two commands, so a third command
+    written by copying the pre-fix shape of ``dump_facts`` would reintroduce
+    this bug with the suite fully green. This one fails the moment such a
+    command is registered. A future command that legitimately does not read
+    configuration will fail it and need an explicit exemption here, which is
+    the intended "come and look at this".
+    """
+    _assert_clean_usage_error(_run([name], ORPHANED), "QBIT_URL")
 
 
 def test_a_real_process_prints_no_traceback():

@@ -227,7 +227,11 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     CI fails on the thing an operator can act on. A run with one FAIL and one
     SKIP therefore reports ``"outcome": "SKIP"`` alongside ``"exit_code": 1``.
     Branch on ``exit_code``; read ``outcome`` for how much of the stack was
-    actually examined.
+    actually examined. Exit 2 has one meaning beyond ERROR: an environment this
+    tool refuses outright — credentials for a service whose URL is missing, say
+    — exits 2 having printed a usage error and no payload at all. Both mean
+    "lintarr could not look", which is why they share a code; a run that
+    emitted no JSON is the one that never got as far as checking.
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
