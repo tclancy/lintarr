@@ -5,7 +5,6 @@ mutate it. This client exposes GET only, plus one allow-listed auth POST for
 qBittorrent's login, which is a POST by protocol.
 """
 
-import json
 from typing import Any, Literal
 
 import httpx
@@ -82,11 +81,26 @@ class ReadOnlyClient:
         return self._send("GET", path).text
 
     def get_json(self, path: str) -> Any:
+        """Parse a response body as JSON, or raise ``ServiceError``.
+
+        ``ValueError`` is the deliberate width here, not a careless one. A body
+        that is not JSON fails in two distinct ways and both must land as
+        ``bad-response``: ``json.JSONDecodeError`` when the bytes decode to text
+        that is not JSON, and ``UnicodeDecodeError`` when they do not decode to
+        text at all — a 200 carrying a gzip or binary body under a JSON
+        content-type, which is what a reverse proxy or captive portal in front
+        of an arr answers with. Both are ``ValueError`` subclasses; catching
+        only the first let the second escape past ``collect_stack``'s
+        ``except ServiceError`` and abort every *healthy* instance's collection
+        too.
+        """
         response = self._send("GET", path)
         try:
             return response.json()
-        except json.JSONDecodeError as exc:
-            raise ServiceError("bad-response", f"{path}: body is not JSON") from exc
+        except ValueError as exc:
+            raise ServiceError(
+                "bad-response", f"{path}: body is not JSON ({type(exc).__name__})"
+            ) from exc
 
     def post_auth(self, path: str, data: dict[str, str]) -> httpx.Response:
         """The single permitted mutating verb: qBittorrent's login.

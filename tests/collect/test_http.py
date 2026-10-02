@@ -110,3 +110,21 @@ def test_rejected_mutating_verb_is_not_recorded_in_methods_used():
     with pytest.raises(ReadOnlyViolation):
         c._send("DELETE", "/api/v2/torrents/delete")
     assert c.methods_used == ()
+
+
+def test_undecodable_body_is_bad_response():
+    """A 200 whose bytes are not decodable text is a bad response, not a crash.
+
+    ``response.json()`` raises ``UnicodeDecodeError`` rather than
+    ``JSONDecodeError`` when the body cannot be turned into text at all, and
+    only the latter used to be caught — so this escaped as an unhandled
+    exception past ``collect_stack``'s ``except ServiceError``.
+    """
+    body = b'\xff\xfe{"version":"4.0.0"}'
+
+    def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    with pytest.raises(ServiceError) as e:
+        _client(handler).get_json("/x")
+    assert e.value.kind == "bad-response"

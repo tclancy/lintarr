@@ -14,7 +14,7 @@ ENV = {
 }
 
 
-def _transport(sonarr_down=False, anime_indexers=None):
+def _transport(sonarr_down=False, anime_indexers=None, anime_status_body=None):
     def handle(request: httpx.Request) -> httpx.Response:
         host, path = request.url.host, request.url.path
         if host == "qbt":
@@ -29,6 +29,10 @@ def _transport(sonarr_down=False, anime_indexers=None):
                     return httpx.Response(200, json={})
         if host == "anime" and sonarr_down:
             raise httpx.ConnectError("refused", request=request)
+        if host == "anime" and anime_status_body is not None and path == "/api/v3/system/status":
+            return httpx.Response(
+                200, content=anime_status_body, headers={"content-type": "application/json"}
+            )
         if host == "anime" and anime_indexers is not None and path == "/api/v3/indexer":
             return httpx.Response(200, json=anime_indexers)
         match path:
@@ -62,6 +66,20 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     facts and printing a traceback.
     """
     transport = _transport(anime_indexers={"message": "Unauthorized"})
+    facts = collect_stack(load_config(ENV), transport=transport)
+    assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.errors == (("sonarr[anime]", "bad-response"),)
+
+
+def test_undecodable_body_is_recorded_not_raised():
+    """A 200 whose bytes are not decodable text must not abort the whole run.
+
+    ``get_json`` caught only ``JSONDecodeError``, so an undecodable body raised
+    ``UnicodeDecodeError`` past collect_stack's ``except ServiceError`` and took
+    every healthy instance's facts down with it.
+    """
+    transport = _transport(anime_status_body=b'\xff\xfe{"version":"4.0.0"}')
     facts = collect_stack(load_config(ENV), transport=transport)
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
