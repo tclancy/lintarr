@@ -482,6 +482,13 @@ def test_an_unusable_seed_time_is_not_a_seed_goal(value):
     """
     junk = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
     assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
+    # The control belongs in this test, not elsewhere. With ``seed_ratio``
+    # absent the check is armed whatever ``seed_time`` says, so the assertion
+    # above passes just as happily against an implementation that ignores
+    # ``seed_time`` altogether — a mutant dropping it from ``_seed_criteria``
+    # SURVIVED until this line existed. A real seed time has to clear the same
+    # indexer for the pair to mean anything.
+    assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
 
 
 @pytest.mark.parametrize("value", [2.0, 2])
