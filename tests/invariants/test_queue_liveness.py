@@ -509,9 +509,12 @@ def test_a_finding_names_the_indexer_whose_seed_criterion_could_not_be_read():
     assert f.outcome is Outcome.FAIL
     assert "sonarr[main]/1337x" in f.detail
     assert "not a number" in f.detail
-    # Control: a stack whose criteria were all readable carries no such note, so
-    # the assertions above are evidence rather than boilerplate.
+    # Two controls, because "unreadable" has to stay narrower than "no goal".
+    # An absent criterion and a null one are both *unset* — the ordinary case on
+    # every stack measured — and neither is a payload anyone failed to read, so
+    # neither may collect this note.
     assert check(wedged_qbt(), NO_GOALS).detail == ""
+    assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(None)))).detail == ""
 
 
 def test_the_note_does_not_displace_the_detail_a_skip_already_had():
