@@ -57,13 +57,19 @@ def _is_ban_refusal(exc: ServiceError) -> bool:
 # difference is in ``GET /api/v2/log/main``, which needs a session lintarr does
 # not have yet, so naming both is the whole of what is available.
 #
-# One line, not a wrapped literal: ``run.py`` folds the detail into a one-line
-# ``Finding.detail`` that ``check --json`` also emits, so an embedded newline
-# renders unindented in one surface and leaks into the other.
+# One line, not a wrapped literal — for the surface this is *going* to reach.
+# Today ``collect_stack`` records ``(label, kind)`` and drops the detail, so this
+# sentence reaches a debugger and nothing else; carrying it through to the
+# operator is issue #18 (PR #21, open and not a code dependency of this change).
+# Once that lands, ``run.py`` folds the detail into a one-line ``Finding.detail``
+# that ``check --json`` also emits, and ``_render_findings`` indents it with a
+# bare two spaces, so an embedded newline would render unindented in one surface
+# and leak into the other.
 _LOGIN_401_DETAIL = (
     "qBittorrent refused the login with HTTP 401, and that refusal has two "
     "causes it does not distinguish: either the username or password is wrong, "
-    "or the port in QBIT_URL is not the port the WebUI listens on "
+    "or the port in QBIT_URL (QBIT_URL__<NAME> for a second instance) is not "
+    "the port the WebUI listens on "
     "(WebUI\\Port) — a reverse proxy in front of it, or a container published "
     "as -p 18080:8080 — which fails qBittorrent's host-header validation and is "
     "refused 401 even when the credentials are correct. Rule the port out before "
@@ -149,13 +155,14 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     # body, the legacy 200 with body "Ok.", or the legacy 200 with body
     # "Fails.", which is qBittorrent's old-protocol way of saying no.
     #
-    # This message keeps its flat claim, deliberately. #17's confound was
-    # measured on the *modern* generation, where the refusal is a 401; whether
-    # an older release answers a ``Host``-header mismatch with 200 "Fails." or
-    # with a 401 has never been measured, and lintarr has no instance of one to
-    # measure. Widening the sentence here would be asserting a confound exists
-    # on a response nobody has seen — the same unmeasured-claim sin #17 is a
-    # complaint about, pointed the other way. Left narrow and recorded as a gap.
+    # This message keeps its flat claim, and the evidence is better than "we did
+    # not look". Under a remapped publish, *every* request comes back 401 —
+    # "login or not", per the measurement doc — so host-header validation fires
+    # ahead of any login handling, and a 200 "Fails." body cannot be the
+    # host-header shape on any build that shares that path. What is unmeasured is
+    # whether a release old enough to still speak 200 "Fails." shares it, and
+    # lintarr has no such instance to point at. So: narrow here, not widened on a
+    # guess about a response nobody has seen.
     if response.status_code == 200 and decode_text(response, AUTH_PATH).strip() == "Fails.":
         raise ServiceError("unauthorised", "qBittorrent rejected the credentials")
 

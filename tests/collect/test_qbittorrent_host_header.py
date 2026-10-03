@@ -61,6 +61,13 @@ def test_the_fixture_is_the_response_that_was_measured():
     state — the whole defect is that the body is *identical* between a wrong
     password and a correct one behind a port mismatch, and a fixture with no
     body cannot represent that. 12 bytes is the measured length of both rows.
+
+    This is a self-check on a literal in this file, and that is its whole scope:
+    it catches an edit to ``UNAUTHORIZED``, not upstream rewording a release
+    note away from it. ``BAN_BODY`` is imported rather than retyped because the
+    ban suite owns a named constant for it; the 401 row has no such owner — the
+    other two suites spell it inline — so promoting it means editing PR #19's
+    files, which this branch is stacked on and should not reshape.
     """
     body, status = UNAUTHORIZED
     assert status == 401
@@ -71,9 +78,13 @@ def test_the_fixture_is_the_response_that_was_measured():
 def test_the_401_still_reports_the_unauthorised_kind():
     """The kind is the half every other layer matches on, so it must not move.
 
-    ``run.py``'s ``_attempted`` and the ``check --json`` consumers compare the
-    kind for equality. Issue #17 is a *detail* defect; widening it into a kind
-    change would be a silent break in surfaces this ticket never looked at.
+    The kind is surfaced verbatim in two places — ``run.py``'s
+    ``f"could not read this service: {kind}"`` and ``cli.py``'s ``_to_dict``,
+    which publishes it under its own ``"kind"`` JSON key — and the ban suite
+    matches on it for equality. Issue #17 is a *detail* defect; widening it into
+    a kind change would be a silent break in surfaces this ticket never looked
+    at. (``run.py``'s ``_attempted`` splits the *label*, not the kind; an
+    earlier draft of this docstring cited it, wrongly.)
     """
     assert _refuse_401().kind == "unauthorised"
 
@@ -107,44 +118,88 @@ def test_the_401_does_not_claim_the_two_causes_are_distinguishable():
     assert "two causes" in detail
     assert "does not distinguish" in detail
 
+    # Presence assertions alone are satisfied by a detail that leads with the
+    # flat wrong answer and concedes the ambiguity in a trailing footnote —
+    # measured, and it passed every other assertion in this file. So: ban the
+    # flat claim outright, and pin the disclaimer ahead of the cause it governs.
+    assert "rejected the credentials" not in detail
+    assert detail.index("two causes") < detail.index("username or password")
+
+
+#: URLs that must all produce the same sentence. The **URL** set is the
+#: load-bearing half of the identity test below, not the credentials: the
+#: credentials are the one input the production code provably never reads, while
+#: the configured port is the input issue #17's own option 2 invites a
+#: maintainer to branch on ("lintarr knows the port in QBIT_URL"). A guesser
+#: keyed on the port passes a credentials-only identity test — measured: it left
+#: the suite fully green, which is how this list came to exist.
+EQUIVALENT_URLS = (
+    "http://qbt:8081",  # an explicit non-default port
+    "http://nas:8080",  # qBittorrent's own default, i.e. "looks fine"
+    "http://qbt",  # no port at all
+    "https://qbt.example.com",  # the reverse-proxy case, implicit 443
+)
+
 
 def test_identical_responses_produce_identical_details():
     """The guard against a future change that guesses.
 
     Rows A4 and A6 are the same bytes. lintarr sees a response, not a cause, so
-    the two must produce the same sentence — whatever the credentials actually
-    were. A change that inspected the configured port, or the password's shape,
-    or anything else at hand and then picked one cause would still satisfy every
-    other test in this file; it fails here.
+    every one of them must produce the same sentence — whatever the credentials
+    were, and *whatever the configured URL looks like*. The URL cases are the
+    ones that bite: ``https://qbt.example.com`` is the reverse proxy the detail
+    itself names as a cause, and a branch that only mentioned the port when the
+    port looked unusual would answer "rejected the credentials" there, which is
+    #17 verbatim.
     """
     body, status = UNAUTHORIZED
 
     def refuse(cfg: QbtConfig) -> str:
-        c = _client(lambda r: httpx.Response(status, text=body))
+        c = ReadOnlyClient(
+            cfg.url,
+            transport=httpx.MockTransport(lambda r: httpx.Response(status, text=body)),
+            auth_path=AUTH_PATH,
+        )
         with pytest.raises(ServiceError) as excinfo:
             authenticate(c, cfg)
         return excinfo.value.detail
 
-    as_configured = refuse(CFG)
+    details = {
+        url: refuse(QbtConfig(name="main", url=url, username="admin", password="hunter2"))
+        for url in EQUIVALENT_URLS
+    }
+    # Asserted against the first URL rather than via set(...) == 1: a set
+    # comparison names no URL when it fails, and the whole point is which one
+    # diverged. The loop is over a non-empty literal tuple, so there is no
+    # vacuous-pass shape here.
+    assert len(details) == len(EQUIVALENT_URLS)
+    for url, detail in details.items():
+        assert detail == details[EQUIVALENT_URLS[0]], f"{url} produced a different sentence"
+
+    # And the credentials half, which is cheap to keep.
     other_credentials = refuse(
         QbtConfig(
             name="main",
-            url="http://qbt:8081",
+            url=EQUIVALENT_URLS[0],
             username="operator",
             password="theRealOneAndItIsLonger",
         )
     )
-    assert as_configured == other_credentials
+    assert other_credentials == details[EQUIVALENT_URLS[0]]
 
 
 def test_the_401_detail_carries_no_newline():
-    """``run.py`` joins the detail into a one-line ``Finding.detail``.
+    """Pinned for the surface this detail is *going* to reach, not one it reaches today.
 
-    That string is emitted into ``check --json`` and indented by
-    ``_render_findings`` with a bare two spaces, so an embedded newline renders
-    unindented in one surface and leaks a raw newline into the other. The
-    sentence is long enough — it is the longest detail in the codebase — that a
-    later reflow into a multi-line literal is a live risk.
+    On this branch ``collect_stack`` records ``(label, kind)`` and drops the
+    detail, so the sentence currently reaches a debugger and nothing else;
+    carrying it through is issue #18 (PR #21, open). Once that lands, the detail
+    is folded into a one-line ``Finding.detail`` which ``check --json`` also
+    emits, and ``cli.py``'s ``_render_findings`` indents with a bare two spaces —
+    so an embedded newline would render unindented in one surface and leak a raw
+    newline into the other. Pinned now because the sentence is the longest detail
+    in the codebase and a later reflow into a multi-line literal is the likely
+    edit.
     """
     assert "\n" not in _refuse_401().detail
 
