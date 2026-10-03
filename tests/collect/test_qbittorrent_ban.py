@@ -24,11 +24,12 @@ indistinguishable rather than pretending otherwise — see
 import httpx
 import pytest
 
-from lintarr.collect.http import ReadOnlyClient, ServiceError
+from lintarr.collect.http import _ERROR_BODY_PEEK, ReadOnlyClient, ServiceError
 from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
 from lintarr.config import QbtConfig
 
-CFG = QbtConfig(name="main", url="http://qbt", username="admin", password="pw")
+SENTINEL_PASSWORD = "s3ntinel-appears-in-no-prose"
+CFG = QbtConfig(name="main", url="http://qbt", username="admin", password=SENTINEL_PASSWORD)
 
 BAN_BODY = "Your IP address has been banned after too many failed authentication attempts."
 
@@ -49,6 +50,28 @@ def test_measured_ban_response_is_reported_as_banned():
     assert exc.kind == "banned"
 
 
+def test_the_ban_error_carries_the_evidence_it_was_classified_on():
+    """Re-raising must not drop the status and body that justified the verdict.
+
+    A mutation round zeroed both on the re-raise and the whole suite stayed
+    green: forwarding them was the right instinct and entirely unverified code.
+    """
+    exc = _authenticate_against(httpx.Response(403, text=BAN_BODY))
+    assert (exc.status, exc.body) == (403, BAN_BODY)
+
+
+def test_the_peek_bound_cannot_truncate_the_ban_marker():
+    """The diagnostic bound must never be able to cost a classification.
+
+    Every other test here computes its fixture *from* ``_ERROR_BODY_PEEK``, so
+    they prove truncation happens at the constant and never that the constant
+    is big enough. Measured: the suite survives ``_ERROR_BODY_PEEK = 31``,
+    which is exactly ``len(_BAN_BODY_MARKER)`` — on the cliff with no margin.
+    This is the only assertion that ties the bound to the body it must admit.
+    """
+    assert _ERROR_BODY_PEEK >= len(BAN_BODY.encode())
+
+
 def test_ban_is_reported_even_though_the_password_may_have_been_correct():
     """Measured: the ban refusal is byte-identical for a right and a wrong password.
 
@@ -61,8 +84,15 @@ def test_ban_is_reported_even_though_the_password_may_have_been_correct():
     assert "credentials are not the fix" in exc.detail
 
 
-def test_ban_detail_names_a_recovery_the_operator_can_perform():
-    """A ban clears on time or on restart — both measured, both actionable."""
+def test_ban_detail_names_a_recovery_for_whoever_reads_the_detail():
+    """A ban clears on time or on restart — both measured, both actionable.
+
+    Note what this does not claim: ``collect_stack`` records ``(label, kind)``
+    and drops ``detail``, so today this text reaches a traceback and a debugger
+    and not the CLI's ``ERROR qbittorrent[main]: banned`` line. The *kind* is
+    the part that reaches the operator, and that is the part that matters. See
+    issue #18 for carrying the detail through.
+    """
     exc = _authenticate_against(httpx.Response(403, text=BAN_BODY))
     assert "BanDuration" in exc.detail
     assert "restart" in exc.detail
@@ -96,10 +126,14 @@ def test_the_ban_body_under_another_error_status_is_not_a_ban(status, kind):
     reach the state it names. These statuses do raise, so they are the inputs
     that actually distinguish the two predicates.
 
-    Something in front of qBittorrent — a reverse proxy, a captive portal —
-    quoting that sentence in its own error page must not manufacture a
-    ``banned`` verdict and send the operator to wait out an hour nobody
-    imposed.
+    What this does *not* buy: a fronting proxy quoting that sentence would most
+    likely answer **403** too, so the predicate cannot screen out the realistic
+    shape of that confound — only one that picks a different status. Nothing in
+    the measurement offers a further signal to narrow on (no
+    ``WWW-Authenticate``, no ``Retry-After``, ``text/plain`` throughout), and a
+    403 carrying that clause does mean *some* IP ban is in force, so ``banned``
+    is still the more useful kind to land on. The detail hedges accordingly
+    rather than promising the ban is qBittorrent's own.
     """
     assert _authenticate_against(httpx.Response(status, text=BAN_BODY)).kind == kind
 

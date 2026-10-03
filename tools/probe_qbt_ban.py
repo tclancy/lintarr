@@ -16,10 +16,16 @@ Bring up a throwaway instance, then run the probe::
     uv run python tools/probe_qbt_ban.py "$PW"
     docker rm -f lintarr-qbt-probe
 
-**Publish on the port qBittorrent listens on.** ``-p 18080:8080`` does not
-work and fails in a way that looks exactly like a wrong password: host-header
-validation rejects the mismatched port with the same 401 "Unauthorized". That
-confound is row A6, and it is issue #17.
+**Publish on the port qBittorrent listens on** — ``-p 8080:8080``, not
+``-p 18080:8080``. A remapped publish makes the ``Host`` header disagree with
+``WebUI\\Port``, and qBittorrent then answers *every* request 401
+"Unauthorized", indistinguishable from a wrong password. That confound is row
+A6 and it is issue #17.
+
+``docker port`` resolves the target so the probe cannot be aimed at a bystander,
+and the pre-flight ``assert_same_instance`` then refuses a remapped publish
+instead of measuring the confound — measured, not assumed. It fixes where the
+probe points, not the port mismatch itself.
 
 Two things make the measurement possible at all:
 
@@ -33,6 +39,7 @@ Two things make the measurement possible at all:
 """
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -40,8 +47,7 @@ import time
 import httpx
 
 CONTAINER = "lintarr-qbt-probe"
-PORT = 8080
-BASE = f"http://127.0.0.1:{PORT}"
+PORT = 8080  # the port qBittorrent listens on *inside* the container
 USER = "admin"
 WRONG = "definitely-not-the-password"
 LOG_PATH = "/api/v2/log/main?normal=true&info=true&warning=true&critical=true"
@@ -49,10 +55,36 @@ LOG_PATH = "/api/v2/log/main?normal=true&info=true&warning=true&critical=true"
 ROWS: list[dict] = []
 
 
+def _host(args: list[str]) -> str:
+    return subprocess.run(args, capture_output=True, text=True, check=True).stdout
+
+
 def _exec(args: list[str]) -> str:
-    return subprocess.run(
-        ["docker", "exec", CONTAINER, *args], capture_output=True, text=True, check=True
-    ).stdout
+    return _host(["docker", "exec", CONTAINER, *args])
+
+
+def published_base() -> str:
+    """The address *CONTAINER* actually publishes — never a hardcoded guess.
+
+    Every destructive request goes to this address and every confirmation comes
+    from ``docker exec CONTAINER``. If those are two different instances the
+    probe bans a bystander and then reads a clean log from the container,
+    concluding nothing happened. Asking docker where the container is published
+    is what makes them the same box by construction.
+
+    This does *not* make a remapped publish work: the Host header carries the
+    *published* port and qBittorrent validates it against its own
+    ``WebUI\\Port``, so ``-p 18080:8080`` still fails every request. What it
+    does is hand that case to ``assert_same_instance``, which refuses rather
+    than measuring it.
+    """
+    mapping = _host(["docker", "port", CONTAINER, f"{PORT}/tcp"]).strip().splitlines()
+    if not mapping:
+        raise SystemExit(f"{CONTAINER} does not publish {PORT}/tcp — nothing to probe")
+    return f"http://127.0.0.1:{mapping[0].rsplit(':', 1)[1]}"
+
+
+BASE = ""  # set by main() from published_base()
 
 
 def inside_login(password: str) -> str:
@@ -137,6 +169,49 @@ def fresh(**kw) -> httpx.Client:
     return httpx.Client(base_url=BASE, timeout=10, **kw)
 
 
+def assert_same_instance(password: str, sid: str) -> None:
+    """Prove the published address and the exec'd container are one instance.
+
+    ``docker port`` already makes that true unless something is sitting in
+    front of the published port — a tunnel, a proxy, a stale forward. So: stamp
+    an inert free-text preference from inside and read it back from outside.
+    ``dyndns_domain`` is unused while dynamic DNS is disabled, which it is by
+    default.
+
+    This runs before anything destructive, and it uses the *correct* password,
+    which a successful login resets the failure counter with rather than
+    spending it. If the address is a bystander the login fails and the probe
+    exits one failure in, instead of six.
+    """
+    token = f"probe-{os.getpid()}-{int(time.time())}.invalid"
+    _exec(
+        [
+            "curl",
+            "-s",
+            "-X",
+            "POST",
+            "-H",
+            f"Cookie: {sid}",
+            "--data-urlencode",
+            f'json={{"dyndns_domain": "{token}"}}',
+            f"http://127.0.0.1:{PORT}/api/v2/app/setPreferences",
+        ]
+    )
+    with fresh() as c:
+        if login(c, password).status_code not in (200, 204):
+            raise SystemExit(
+                f"{BASE} refused the container's own password — it is not {CONTAINER}. "
+                "Refusing to aim failed logins at it."
+            )
+        seen = c.get("/api/v2/app/preferences").json().get("dyndns_domain")
+    if seen != token:
+        raise SystemExit(
+            f"{BASE} is not {CONTAINER}: stamped {token!r} inside, read {seen!r} outside. "
+            "Refusing to aim failed logins at a bystander."
+        )
+    print(f"  target confirmed: {BASE} is {CONTAINER} (marker {token})")
+
+
 def same(a: dict, b: dict) -> bool:
     """Equivalence over everything a caller could branch on."""
     keys = ("status", "reason", "body", "content_type", "retry_after", "www_authenticate")
@@ -144,8 +219,11 @@ def same(a: dict, b: dict) -> bool:
 
 
 def main() -> int:
+    global BASE
+    BASE = published_base()
     password = sys.argv[1] if len(sys.argv) > 1 else temp_password()
     sid = inside_login(password)
+    assert_same_instance(password, sid)
 
     app_version = inside_get("/api/v2/app/version", sid).strip()
     api_version = inside_get("/api/v2/app/webapiVersion", sid).strip()

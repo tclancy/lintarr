@@ -117,21 +117,55 @@ inside channel is a different *IP*, not an auth bypass.
 - `authenticate` classified 403 by testing `"403" in exc.detail` — a substring of
   a prose message, which a path like `/api/403/thing` also satisfies. It now
   branches on `exc.status`.
-- The ban body is read with a bounded `errors="replace"` decode, never `.text`.
-  On the error path the status is the fact; a declared-but-absent multibyte
-  charset makes `.text` raise, which would convert a 403 into a `bad-response`
-  and lose it. The bound and the lenient decode are **coupled, not two
+- The ban body is read with a bounded `errors="replace"` decode, never `.text`
+  and never PR #15's `decode_text` (which *raises* on an undecodable body —
+  correct for the success path, wrong here). On the error path the status is the
+  fact. A declared-but-absent multibyte charset makes `.text` raise
+  `UnicodeDecodeError`, which is not an `httpx.HTTPError`, so it would not be
+  caught and re-kinded at all: it escapes `_send` **and** `collect_stack`'s
+  `except ServiceError`, aborting every healthy service's collection over one
+  unreadable error page. The bound and the lenient decode are **coupled, not two
   independent choices**: cutting at a byte offset can halve a multi-byte
   character and manufacture invalid UTF-8 out of a body that was valid on the
   wire, so truncating is what makes `errors="replace"` mandatory.
 - `_BAN_BODY_MARKER` matches the leading clause case-insensitively rather than
   all 78 bytes. Pinning the tail would turn a cosmetic upstream reword into a
-  silent loss of the `banned` kind — a failure in the misleading direction.
+  silent loss of the `banned` kind — a failure in the misleading direction. The
+  prefix narrows that risk and cannot remove it, which is the one failure mode
+  only a live run against a new release can catch.
+- **The predicate cannot screen out the realistic fronting-proxy confound.** A
+  WAF or proxy quoting that sentence would most likely answer 403 as well, and
+  the measurement offers no further signal to narrow on — no `WWW-Authenticate`,
+  no `Retry-After`, `text/plain` throughout. A 403 carrying that clause does
+  mean *some* IP ban is in force, so `banned` is still the right kind to land
+  on; the `detail` names qBittorrent as the likely rather than the certain
+  source, because "restart qBittorrent" does nothing for a ban imposed upstream.
+- `ServiceError.body` is **not** interpolated into the exception message —
+  `__init__` formats only `kind` and `detail` — so the 512-byte bound caps what
+  a held exception retains rather than what gets printed.
+- `collect_stack` records `(label, kind)` and drops `detail`, so the recovery
+  advice above currently reaches a debugger and not the CLI. The `kind` is what
+  the operator sees, and the `banned`/`unauthorised` split is the deliverable.
+  Carrying `detail` through is [#18](https://github.com/tclancy/lintarr/issues/18).
 
 ## Re-measuring
 
-See the module docstring of `tools/probe_qbt_ban.py`. One trap worth repeating:
-**publish on the port qBittorrent listens on.** `-p 18080:8080` fails host-header
-validation and every single request, login or not, comes back 401 `Unauthorized`
-— indistinguishable from a bad password, which is how this confound was found in
-the first place.
+See the module docstring of `tools/probe_qbt_ban.py`. Two traps worth repeating.
+
+**Publish on the port qBittorrent listens on.** `-p 18080:8080` fails
+host-header validation and every single request, login or not, comes back 401
+`Unauthorized` — indistinguishable from a bad password, which is how that
+confound was found in the first place. The probe now resolves its target with
+`docker port` and refuses a remapped publish in its pre-flight check instead of
+measuring it; verified by running it against a `-p 18080:8080` container, where
+it exits 1 with `refused the container's own password`.
+
+**The probe must prove it is aimed where it thinks.** Every destructive request
+goes to a published address and every confirmation comes from `docker exec`, so
+if those are two different instances the probe bans a bystander and then reads a
+clean log from the container, concluding nothing happened. `assert_same_instance`
+stamps an inert `dyndns_domain` marker from inside and reads it back from
+outside before anything destructive runs. The happy path exercises the
+comparison (it prints the marker it confirmed); the mismatch *branch* is
+unexercised, because manufacturing a bystander that accepts the container's own
+temporary password is harder than the risk warrants.

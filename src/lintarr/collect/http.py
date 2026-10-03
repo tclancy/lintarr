@@ -44,17 +44,24 @@ _ERROR_BODY_PEEK = 512
 def peek_error_body(response: httpx.Response) -> str:
     """A bounded, never-raising look at an error response body.
 
-    Deliberately *not* ``.text``: this runs on the error path, where the body
-    is a diagnostic and the status is the fact we came for. ``.text`` raises on
-    a declared-but-absent multibyte charset, which would turn a 403 into a
-    ``bad-response`` and lose the status entirely. So: raw bytes, truncated,
-    decoded with ``errors="replace"``.
+    Deliberately *not* ``.text``, and *not* ``decode_text``: this runs on the
+    error path, where the body is a diagnostic and the status is the fact we
+    came for. ``.text`` raises ``UnicodeDecodeError`` on a declared-but-absent
+    multibyte charset, and that is not an ``httpx.HTTPError``, so it would not
+    be caught and re-kinded here — it escapes ``_send`` *and*
+    ``collect_stack``'s ``except ServiceError``, aborting every healthy
+    service's collection over one unreadable error page. So: raw bytes,
+    truncated, decoded with ``errors="replace"``, which cannot raise.
 
     Truncated because the body on this path is attacker- and
     misconfiguration-shaped — a reverse proxy's HTML error page, a captive
-    portal — and it ends up inside an exception message. qBittorrent's longest
-    measured refusal body is 78 bytes; 512 leaves room for a wordier release
-    without carrying a page.
+    portal — and it is retained for as long as anything holds the exception.
+    It is *not* interpolated into the exception message: ``__init__`` formats
+    only ``kind`` and ``detail``, so the bound caps what is held, not what is
+    printed. qBittorrent's longest measured refusal body is 78 bytes; 512
+    leaves room for a wordier release without carrying a page, and
+    ``test_the_peek_bound_cannot_truncate_the_ban_marker`` is what keeps it
+    above the one body a caller classifies on.
     """
     return response.content[:_ERROR_BODY_PEEK].decode("utf-8", errors="replace")
 

@@ -11,8 +11,10 @@ Measured defaults, qBittorrent 5.2.4 (see
 ``MaxAuthenticationFailCount`` is **5**, not 3, and ``BanDuration`` is 3600s.
 The ban engages on the *next* attempt after the fifth failure — the fifth is
 still answered as an ordinary refusal. A successful login resets the counter,
-and restarting qBittorrent clears an active ban, so the budget is five
-consecutive failures per run rather than five for all time.
+and restarting qBittorrent clears an active ban. Since this adapter attempts
+login exactly once, the budget is five consecutive *runs* that fail to
+authenticate, not five attempts inside one run — and one success anywhere in
+that sequence spends none of it.
 """
 
 from lintarr.collect.http import ReadOnlyClient, ServiceError
@@ -87,10 +89,12 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
         if _is_ban_refusal(exc):
             raise ServiceError(
                 "banned",
-                "qBittorrent has banned this IP after too many consecutive "
-                "failed logins. The credentials are not the fix: wait out "
-                "WebUI\\BanDuration (default 3600s) or restart qBittorrent, "
-                "which clears the ban immediately",
+                "this IP has been banned after too many consecutive failed "
+                "logins — qBittorrent's own measured refusal, unless something "
+                "in front of it is answering 403 with the same wording. The "
+                "credentials are not the fix: wait out WebUI\\BanDuration "
+                "(default 3600s) or restart qBittorrent, which clears a "
+                "qBittorrent-side ban immediately",
                 status=exc.status,
                 body=exc.body,
             ) from exc
