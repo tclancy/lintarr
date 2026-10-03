@@ -6,9 +6,12 @@ after invariants exist is expensive.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lintarr.facts import Fact
+
+if TYPE_CHECKING:
+    from lintarr.collect.http import ErrorKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,14 +66,20 @@ class ErrorRow:
     active and how to clear it. Forty words of that were being written for a
     traceback nobody sees.
 
-    ``kind`` is annotated ``str`` rather than ``ErrorKind`` because that alias
-    lives in ``collect.http``, which imports *this* module. Narrowing it here
-    would invert the layering; the test suite asserts membership against the
-    alias instead, which also catches prose being concatenated into it.
+    ``ErrorKind`` is imported under ``TYPE_CHECKING`` only. There is no import
+    cycle to dodge — ``collect.http`` imports nothing from this package — but
+    this module is the inner layer and a runtime edge from it out to an HTTP
+    adapter is a direction of dependency worth not creating for an annotation.
+    An earlier draft of this docstring claimed a cycle; there isn't one.
+
+    The repo declares no type checker, so the narrow annotation is documentation
+    today rather than a gate. ``tests/test_error_detail_route.py`` asserts
+    membership against the alias at runtime instead, which is also what catches
+    prose being concatenated into the kind.
     """
 
     label: str
-    kind: str
+    kind: "ErrorKind"
     detail: str
 
 

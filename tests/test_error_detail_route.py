@@ -26,7 +26,7 @@ import pytest
 from click.testing import CliRunner
 
 from lintarr.cli import cli
-from lintarr.collect.http import ErrorKind, ServiceError
+from lintarr.collect.http import ErrorKind, ReadOnlyClient, ServiceError
 from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.models import ErrorRow, StackFacts
@@ -121,25 +121,62 @@ def test_collect_stack_keeps_the_detail_on_both_arms(down, label, kind):
     assert row.detail, "the detail is the whole point of the row — it must not be empty"
 
 
-def test_the_qbittorrent_403_recovery_note_survives_collection():
+def test_the_qbittorrent_403_explanation_survives_collection():
     """The specific prose #18 was filed over.
 
-    ``authenticate`` writes a forty-word explanation for a 403 naming the
-    candidate cause and the ticket to read. Matched on a short substring the
-    sentence cannot lose without changing meaning, not on the whole sentence.
+    ``authenticate`` replaces the bare ``"/api/v2/auth/login: HTTP 403"`` that
+    ``_send`` raises with a sentence explaining what a 403 might mean. The
+    assertion is that the *replacement* arrived — a detail long enough to be
+    that sentence, still naming the status code — rather than any of its words.
+
+    Matched this way on purpose: open PR #19 rewrites this sentence (it drops
+    the "see issue #7" hedge for a measured ban-body check), and a test that
+    pinned a phrase from the current wording would turn red on a branch that
+    improves the thing it is guarding.
     """
     row = _only_row(_collect(qbt_down=True))
-    assert "issue #7" in row.detail
+    bare = "/api/v2/auth/login: HTTP 403"
+    assert "403" in row.detail
+    assert row.detail != bare, "the adapter's explanation replaced the raw status line"
+    assert len(row.detail) > len(bare), "an explanation is longer than the status line"
 
 
 def test_the_row_carries_the_detail_the_exception_carried():
-    """No paraphrase in between.
+    """No paraphrase in between — and neither side is a literal.
 
-    Asserted against ``ServiceError`` itself rather than a literal, so the
-    collect layer is free to reword and this test still means something.
+    An earlier draft built the expectation as
+    ``ServiceError("unreachable", "/api/v3/system/status: ConnectError").detail``,
+    which looks derived and is not: ``ServiceError`` stores its argument
+    verbatim, so that is a hand-written string wearing a constructor. Rewording
+    the message in ``http.py`` turned it red — exactly the failure mode #18's
+    fourth success criterion exists to prevent, reimported into the test that
+    was supposed to be immune.
+
+    Both sides now come from production: the expectation is read off the
+    exception the client actually raises for this transport.
     """
-    expected = ServiceError("unreachable", "/api/v3/system/status: ConnectError").detail
-    assert _only_row(_collect(sonarr_down=True)).detail == expected
+    with pytest.raises(ServiceError) as raised:
+        with ReadOnlyClient("http://sonarr:8989", transport=_transport(sonarr_down=True)) as client:
+            client.get_json("/api/v3/system/status")
+    assert _only_row(_collect(sonarr_down=True)).detail == raised.value.detail
+
+
+def test_service_error_stores_the_detail_it_was_given():
+    """The assumption the test above rests on, asserted on its own.
+
+    Deriving both sides from production makes that test immune to a reworded
+    message and blind to a paraphrase in the one place both sides come from: a
+    mutant setting ``self.detail = "an error occurred"`` in ``ServiceError``
+    satisfies it, and my own mutation round reported exactly that SURVIVED. A
+    check whose input comes from the subsystem it is checking goes blind
+    precisely when that subsystem breaks, so the shared assumption gets its own
+    assertion.
+
+    The sentinel is nobody's real message, so this pins no prose anyone will
+    ever want to reword.
+    """
+    sentinel = "lintarr-test-sentinel-detail"
+    assert ServiceError("unreachable", sentinel).detail == sentinel
 
 
 # ------------------------------------------------------------------- CLI output
@@ -175,11 +212,18 @@ def test_every_kind_the_json_emits_is_a_bare_error_kind_value(down):
         assert row["kind"] in KINDS, f"{row['kind']!r} is not one of {sorted(KINDS)}"
 
 
-def test_human_dump_facts_prints_the_detail():
+def test_human_dump_facts_prints_the_detail_on_an_aligned_continuation_line():
+    """The indent is part of the design, so it gets asserted.
+
+    ``_render_error_row`` indents the detail to the width of ``"ERROR  "`` so
+    the service names still line up down the left edge. Dropping the indent
+    left all 248 tests green, which made the docstring the only thing holding
+    it — and with no CI in this repo, a docstring holds nothing.
+    """
     facts = _collect(qbt_down=True)
     output = _run(["dump-facts"], qbt_down=True).output
     assert "ERROR  qbittorrent[main]: unauthorised" in output
-    assert _only_row(facts).detail in output
+    assert f"       {_only_row(facts).detail}" in output
 
 
 def test_check_names_the_detail_in_its_error_finding():

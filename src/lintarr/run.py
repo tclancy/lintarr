@@ -34,9 +34,17 @@ def _error_detail(row: ErrorRow) -> str:
     The kind leads because it is the stable, matchable half. The detail is
     appended only when there is one: ``ServiceError`` does not forbid an empty
     detail, and an unconditional separator renders as truncated output.
+
+    Joined with a full stop rather than a dash. The details are not all terse
+    locators — qBittorrent's 403 note is a sentence containing its own em dash —
+    and ``kind — detail — clause`` leaves a reader guessing which dash was the
+    join. It stays one line because ``Finding.detail`` is also emitted into
+    ``check --json``, and ``_render_findings`` indents it with a bare two
+    spaces, so an embedded newline would render unindented in one surface and
+    leak a newline into the other.
     """
     head = f"could not read this service: {row.kind}"
-    return f"{head} — {row.detail}" if row.detail else head
+    return f"{head}. {row.detail}" if row.detail else head
 
 
 def _collected(facts: StackFacts) -> frozenset[str]:
