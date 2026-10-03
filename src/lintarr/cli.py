@@ -74,7 +74,10 @@ def _to_dict(facts: StackFacts) -> dict[str, Any]:
     return {
         "qbits": [_instance_to_dict(q) for q in facts.qbits],
         "arrs": [_instance_to_dict(a) for a in facts.arrs],
-        "errors": [{"instance": i, "kind": k} for i, k in facts.errors],
+        # ``detail`` is its own key, never folded into ``kind``: every
+        # consumer compares the kind for equality, so prose inside it is a
+        # silent break. ``instance`` keeps its published name.
+        "errors": [{"instance": e.label, "kind": e.kind, "detail": e.detail} for e in facts.errors],
     }
 
 
@@ -134,6 +137,21 @@ def _render_nested_list(key: str, items: list[dict[str, Any]], *, indent: str) -
     return lines
 
 
+def _render_error_row(err: dict[str, Any]) -> list[str]:
+    """One failed service, with its explanation on a continuation line.
+
+    The detail gets its own line rather than a suffix because the longest of
+    them is a full sentence — qBittorrent's 403 note runs to forty words — and
+    appending that to the label makes the one line an operator scans for the
+    service name unreadable. Indented to the width of ``ERROR  `` so the
+    service names still align down the left.
+    """
+    lines = [f"ERROR  {err['instance']}: {err['kind']}"]
+    if err["detail"]:
+        lines.append(f"       {err['detail']}")
+    return lines
+
+
 def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     for group in ("qbits", "arrs"):
@@ -147,7 +165,7 @@ def _render_human(payload: dict[str, Any]) -> str:
                     lines.extend(_render_nested_list(key, value, indent="    "))
             lines.append("")
     for err in payload["errors"]:
-        lines.append(f"ERROR  {err['instance']}: {err['kind']}")
+        lines.extend(_render_error_row(err))
     return "\n".join(lines)
 
 

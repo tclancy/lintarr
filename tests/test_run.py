@@ -1,7 +1,7 @@
 import pytest
 
 from lintarr.facts import Unknown
-from lintarr.models import ArrInstance, StackFacts
+from lintarr.models import ArrInstance, ErrorRow, StackFacts
 from lintarr.outcomes import Outcome
 from lintarr.run import run_checks, run_outcome
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
@@ -9,6 +9,17 @@ from tests.invariants.test_queue_liveness import NO_GOALS, UNCLASSIFIABLE_NO_GOA
 
 _QBT_ONLY = frozenset({"qbittorrent"})
 _QBT_AND_SONARR = frozenset({"qbittorrent", "sonarr"})
+
+
+#: A banned qBittorrent, with the detail a real one would carry. Named rather
+#: than inlined because three tests need the same row, and because a row with
+#: an empty detail is a different case with its own test — see
+#: ``tests/test_error_detail_route.py``.
+_BANNED = ErrorRow(
+    "qbittorrent[main]",
+    "banned",
+    "/api/v2/auth/login: HTTP 403 — wait out WebUI\\BanDuration or restart qBittorrent",
+)
 
 
 def test_one_finding_per_qbittorrent_instance():
@@ -20,7 +31,7 @@ def test_one_finding_per_qbittorrent_instance():
 
 
 def test_collect_errors_become_error_findings():
-    facts = StackFacts(qbits=(), arrs=(), errors=(("qbittorrent[main]", "banned"),))
+    facts = StackFacts(qbits=(), arrs=(), errors=(_BANNED,))
     findings = run_checks(facts, declared=_QBT_ONLY)
     assert [f.outcome for f in findings] == [Outcome.ERROR]
     assert "banned" in findings[0].detail
@@ -33,14 +44,16 @@ def test_a_service_that_errored_is_not_also_reported_as_never_collected():
     service that answered and failed already has an ERROR. Reporting both would
     make an operator chase two entries for one outage.
     """
-    facts = StackFacts(qbits=(), arrs=(), errors=(("qbittorrent[main]", "banned"),))
+    facts = StackFacts(qbits=(), arrs=(), errors=(_BANNED,))
     findings = run_checks(facts, declared=_QBT_ONLY)
     assert [(f.outcome, f.instance) for f in findings] == [(Outcome.ERROR, "qbittorrent[main]")]
 
 
 def test_an_unreachable_service_does_not_let_the_run_look_clean():
     facts = StackFacts(
-        qbits=(repaired_qbt(),), arrs=NO_GOALS, errors=(("sonarr[main]", "unreachable"),)
+        qbits=(repaired_qbt(),),
+        arrs=NO_GOALS,
+        errors=(ErrorRow("sonarr[main]", "unreachable", "/api/v3/system/status: ConnectError"),),
     )
     assert run_outcome(run_checks(facts, declared=_QBT_AND_SONARR)) is Outcome.ERROR
 

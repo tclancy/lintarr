@@ -53,7 +53,29 @@ class ArrInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class ErrorRow:
+    """One service that could not be read, and why.
+
+    This was a bare ``(label, kind)`` tuple until #18. The kind is what every
+    other layer matches on and the only half that reached the operator; the
+    detail is where the collect layer says which path failed, which httpx
+    exception was raised, or — on qBittorrent's 403 — that an IP ban may be
+    active and how to clear it. Forty words of that were being written for a
+    traceback nobody sees.
+
+    ``kind`` is annotated ``str`` rather than ``ErrorKind`` because that alias
+    lives in ``collect.http``, which imports *this* module. Narrowing it here
+    would invert the layering; the test suite asserts membership against the
+    alias instead, which also catches prose being concatenated into it.
+    """
+
+    label: str
+    kind: str
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class StackFacts:
     qbits: tuple[QbtInstance, ...]
     arrs: tuple[ArrInstance, ...]
-    errors: tuple[tuple[str, str], ...] = ()
+    errors: tuple[ErrorRow, ...] = ()

@@ -16,7 +16,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from lintarr.invariants import queue_liveness
-from lintarr.models import StackFacts
+from lintarr.models import ErrorRow, StackFacts
 from lintarr.outcomes import Finding, Outcome, worst
 
 #: The services an ``arr.*`` premise can be read from.
@@ -26,6 +26,17 @@ ARR_KINDS = frozenset({"sonarr", "radarr"})
 #: substitution below fires only on a SKIP that is actually about missing arrs,
 #: and never relabels a SKIP caused by an unreadable qBittorrent preference.
 _ARR_PREMISE = "arr.indexer_without_seed_criteria"
+
+
+def _error_detail(row: ErrorRow) -> str:
+    """The operator-facing sentence for a service that could not be read.
+
+    The kind leads because it is the stable, matchable half. The detail is
+    appended only when there is one: ``ServiceError`` does not forbid an empty
+    detail, and an unconditional separator renders as truncated output.
+    """
+    head = f"could not read this service: {row.kind}"
+    return f"{head} — {row.detail}" if row.detail else head
 
 
 def _collected(facts: StackFacts) -> frozenset[str]:
@@ -39,7 +50,7 @@ def _attempted(facts: StackFacts) -> frozenset[str]:
 
     Error labels are ``kind[name]``; the kind is what a declaration names.
     """
-    return frozenset(label.split("[")[0] for label, _ in facts.errors)
+    return frozenset(row.label.split("[")[0] for row in facts.errors)
 
 
 def _absent_service_findings(facts: StackFacts, declared: frozenset[str]) -> list[Finding]:
@@ -109,11 +120,11 @@ def run_checks(facts: StackFacts, *, declared: frozenset[str]) -> tuple[Finding,
     findings += [
         Finding(
             invariant="collect",
-            instance=instance,
+            instance=row.label,
             outcome=Outcome.ERROR,
-            detail=f"could not read this service: {kind}",
+            detail=_error_detail(row),
         )
-        for instance, kind in facts.errors
+        for row in facts.errors
     ]
     return tuple(findings)
 
