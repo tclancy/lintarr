@@ -1,8 +1,12 @@
-# Measured against a live qBittorrent 5.2.3 instance on 2026-08-26:
+# Measured against a live qBittorrent 5.2.3 instance on 2026-08-26, and
+# re-measured against a disposable 5.2.4 on 2026-10-02 with every row agreeing:
 #
 #   correct password:    HTTP 204, empty body
 #   wrong password:      HTTP 401, body "Unauthorized"
 #   unauthenticated GET: HTTP 403, body "Forbidden"
+#
+# The ban response is now measured too, and lives with the rest of that axiom
+# in test_qbittorrent_ban.py — see issue #8.
 #
 # These fixtures encode that observation, not the documented protocol
 # (HTTP 200 "Ok."/"Fails.") the implementation originally assumed — see
@@ -54,12 +58,14 @@ def test_fails_body_is_unauthorised_not_banned():
 
 
 def test_forbidden_is_unauthorised_not_a_guessed_ban():
-    """403 is reported as unauthorised, not banned.
+    """403 *without the measured ban body* is unauthorised, not banned.
 
-    The real ban response shape has never been measured against a live
-    instance (issue #7) — guessing one mapping already produced the exact
-    defect this fixes (a wrong password reported as an hour-long ban that
-    did not exist). The message must not claim a ban is in effect.
+    Guessing that any 403 meant a ban produced the exact defect this fixes: a
+    wrong password reported as an hour-long ban that did not exist. The ban
+    response has since been measured (issue #8) and a 403 carrying its body
+    *is* now reported as ``banned`` — see test_qbittorrent_ban.py. This row is
+    the other side of that boundary: a bare "Forbidden" is how an
+    unauthenticated request is refused, and must not claim a ban is in effect.
     """
     c = _client(lambda r: httpx.Response(403, text="Forbidden"))
     with pytest.raises(ServiceError) as e:
