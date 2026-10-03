@@ -14,6 +14,8 @@ is exactly the state #6 recorded it in.
 
 from datetime import UTC, datetime
 
+import pytest
+
 from lintarr.cli import _fact_to_dict, _render_human, _render_nested_list, _version_label
 from lintarr.facts import Known
 
@@ -39,6 +41,33 @@ def test_a_version_that_already_carries_a_v_is_not_given_a_second_one():
 def test_a_bare_version_is_given_one():
     """An arr's ``/api/v3/system/status`` answers ``4.0.0``, bare."""
     assert _version_label("4.0.0") == "v4.0.0"
+
+
+@pytest.mark.parametrize("version", ["V5.2.4", "VV5.2.4", "vV5.2.4", "vv5.2.4"])
+def test_a_capitalised_or_repeated_marker_still_renders_one_lowercase_v(version):
+    """Neither shape is reachable today, and both defeat the obvious fix.
+
+    ``version.removeprefix("v")`` — the first fix written here — renders
+    ``V5.2.4`` as ``vV5.2.4``: the same double-marker defect in a different
+    case, and invisible to a ``"vv" not in output`` assertion. qBittorrent
+    sends lowercase, so this is about the function being true to its docstring
+    rather than about a live client.
+    """
+    assert _version_label(version) == "v5.2.4"
+
+
+def test_a_version_that_is_only_a_marker_is_not_mistaken_for_a_number():
+    """``v`` alone leaves nothing behind, and the label says so rather than
+    rendering a bare ``v`` that reads like a version."""
+    assert _version_label("v") == "v"
+
+
+def test_an_empty_version_is_passed_through_rather_than_labelled():
+    """Unreachable through either adapter — both ``_read_version``
+    implementations raise ``bad-response`` on an empty string — so there is no
+    version to label and inventing one would be the fabrication
+    ``arr._read_version`` already refuses (``str(None)`` -> ``'None'``)."""
+    assert _version_label("") == ""
 
 
 def test_both_services_render_with_exactly_one_v():

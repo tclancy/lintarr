@@ -3,6 +3,7 @@
 import dataclasses
 import json as jsonlib
 import os
+import re
 from typing import Any
 
 import click
@@ -53,6 +54,10 @@ def _to_dict(facts: StackFacts) -> dict[str, Any]:
     }
 
 
+#: One or more leading version markers, in either case.
+_LEADING_V = re.compile(r"^[vV]+")
+
+
 def _version_label(version: str) -> str:
     """A version string with exactly one leading ``v``, whatever the service sent.
 
@@ -61,13 +66,23 @@ def _version_label(version: str) -> str:
     already on it, while an arr's ``GET /api/v3/system/status`` answers a bare
     ``4.0.0``. Prepending unconditionally rendered ``qbittorrent[main] vv5.2.4``.
 
-    Normalising here rather than in the adapters is deliberate. ``Known.service_version``
-    carries the verbatim string and version-ranged axioms are written against
-    what the service actually said, so trimming it at the fact layer would make
-    an axiom's range disagree with the value it is matched on. This is a display
-    convention and it lives at the one place that displays.
+    Normalising here rather than in the adapters is deliberate.
+    ``Known.service_version`` carries the verbatim string and version-ranged
+    axioms are written against what the service actually said, so trimming it at
+    the fact layer would make an axiom's range disagree with the value it is
+    matched on. This is a display convention and it lives at the one place that
+    displays.
+
+    Case-insensitive and empty-safe even though neither shape is reachable
+    today: ``removeprefix("v")`` alone renders ``V5.2.4`` as ``vV5.2.4``, which
+    is the same defect spelt differently and which a ``"vv" not in output``
+    assertion cannot see. An empty version is passed through rather than
+    rendered as a bare ``v`` — both adapters raise ``bad-response`` on one, so
+    there is nothing to label.
     """
-    return f"v{version.removeprefix('v')}"
+    if not version:
+        return version
+    return f"v{_LEADING_V.sub('', version)}"
 
 
 def _render_fact_lines(key: str, value: dict[str, Any], *, indent: str) -> list[str]:

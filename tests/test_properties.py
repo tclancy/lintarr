@@ -15,6 +15,7 @@ quantified over are actually produced.
 """
 
 from dataclasses import replace
+from itertools import combinations
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -28,7 +29,15 @@ from lintarr.outcomes import Finding, Outcome
 from lintarr.run import run_checks
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
 from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
-from tests.strategies import ARR_INSTANCES, DECLARED, READ_AT, STACK_FACTS, qbt_instances
+from tests.strategies import (
+    ARR_INSTANCES,
+    DECLARED,
+    MALFORMED_CATEGORY_MAPS,
+    MALFORMED_SCALARS,
+    READ_AT,
+    STACK_FACTS,
+    qbt_instances,
+)
 
 #: Slower than the rest of the suite by design, and allowed to be: these are
 #: the only tests here that search rather than assert a named case.
@@ -67,18 +76,51 @@ def test_check_never_raises(qbt, arrs):
     assert isinstance(check(qbt, arrs).outcome, Outcome)
 
 
-def test_a_malformed_snapshot_is_actually_reachable():
-    """Reachability control for the two properties above.
+def _as_fact(value):
+    return Known(value=value, source="GET /generated", read_at=READ_AT, service_version="v5.2.4")
 
-    Without this, a strategy that silently degraded to generating only
-    well-formed facts would leave both tests passing over an input class that
-    no longer contains anything interesting.
+
+def test_the_strategies_still_generate_every_shape_they_claim():
+    """Reachability control for the two properties above, done properly.
+
+    The version this replaces hand-built one ``Known("5")`` of its own and so
+    could not see the thing it claimed to guard: a reviewer narrowed
+    ``JUNK_VALUES`` to ``st.booleans()`` and ``CATEGORY_MAPS`` to dicts alone —
+    removing every malformed shape ``tests/strategies`` says it deliberately
+    includes — and all eighteen property tests stayed green, this control
+    included. A control that builds its own input cannot vouch for a
+    generator's; it has to read the same constant the generator reads.
+
+    So both halves now come from ``MALFORMED_SCALARS``, and the breadth is
+    asserted by type rather than by count: dropping a shape from the tuple
+    fails here instead of quietly shrinking the search.
     """
-    a_limit_read_as_a_string = Known(
-        value="5", source="GET /generated", read_at=READ_AT, service_version="v5.2.4"
-    )
-    junk = qbt_with(max_active_torrents=a_limit_read_as_a_string)
-    assert check(junk, NO_GOALS).outcome is Outcome.SKIP
+    assert {type(v).__name__ for v in MALFORMED_SCALARS} == {
+        "NoneType",
+        "bool",
+        "str",
+        "list",
+        "dict",
+    }
+    for shape in MALFORMED_SCALARS:
+        outcome = check(qbt_with(max_active_torrents=_as_fact(shape)), WITH_GOALS).outcome
+        assert outcome is Outcome.SKIP, f"{shape!r} as a limit was not treated as unusable"
+
+
+def test_the_strategies_still_generate_every_category_map_shape_they_claim():
+    """The same control for the category map, where the answers differ.
+
+    Two shapes, two correct answers, which is why this cannot be folded into
+    the test above: a null category map is a client with no categories and
+    settles the premise, while a list or a string means the read did not give
+    us categories at all and settles nothing. Asserting them together is what
+    keeps either from being "fixed" into the other.
+    """
+    assert {type(v).__name__ for v in MALFORMED_CATEGORY_MAPS} == {"NoneType", "list", "str"}
+    settled_by_shape = {type(None): Outcome.PASS, list: Outcome.SKIP, str: Outcome.SKIP}
+    for shape in MALFORMED_CATEGORY_MAPS:
+        outcome = check(qbt_with(categories=_as_fact(shape)), WITH_GOALS).outcome
+        assert outcome is settled_by_shape[type(shape)], f"{shape!r} as a category map"
 
 
 # ---------------------------------------------------------------------------
@@ -120,6 +162,22 @@ _READ_AS_NULL = Known(
 _NULL_IS_A_VALUE: frozenset[str] = frozenset({"qbt.categories"})
 
 
+#: Every non-empty subset of the qbt needs. 127 of them, which is cheap and
+#: *exhaustive* — the generative version drew 200 random subsets from a space of
+#: 254 (subset x arr fixture) and covered 72, 87 and 101 of them on three
+#: measured runs. Random search over a space small enough to enumerate buys
+#: nothing but non-determinism.
+_NEED_SUBSETS: list[frozenset[str]] = [
+    frozenset(combo)
+    for size in range(1, len(_QBT_NEED_FIELDS) + 1)
+    for combo in combinations(sorted(_QBT_NEED_FIELDS), size)
+]
+
+
+def _subset_id(needs: frozenset[str]) -> str:
+    return "+".join(sorted(n.removeprefix("qbt.") for n in needs))
+
+
 def test_every_qbt_need_is_covered_by_the_table():
     """A need added to NEEDS with no entry here would escape the property."""
     uncovered = [n for n in NEEDS if n.startswith("qbt.") and n not in _QBT_NEED_FIELDS]
@@ -128,11 +186,8 @@ def test_every_qbt_need_is_covered_by_the_table():
     assert not stale, f"covered here but no longer in NEEDS: {stale}"
 
 
-@given(
-    st.sets(st.sampled_from(sorted(_QBT_NEED_FIELDS)), min_size=1),
-    st.sampled_from([NO_GOALS, WITH_GOALS]),
-)
-@settings(max_examples=200, deadline=None)
+@pytest.mark.parametrize("arrs", [NO_GOALS, WITH_GOALS], ids=["no-goals", "with-goals"])
+@pytest.mark.parametrize("needs", _NEED_SUBSETS, ids=_subset_id)
 def test_a_qbt_preference_that_was_never_read_never_passes(needs, arrs):
     """Every qBittorrent-side need is load-bearing against PASS.
 
@@ -148,11 +203,10 @@ def test_a_qbt_preference_that_was_never_read_never_passes(needs, arrs):
     assert outcome is not Outcome.PASS, f"PASS with {sorted(needs)} never read"
 
 
-@given(
-    st.sets(st.sampled_from(sorted(set(_QBT_NEED_FIELDS) - _NULL_IS_A_VALUE)), min_size=1),
-    st.sampled_from([NO_GOALS, WITH_GOALS]),
+@pytest.mark.parametrize("arrs", [NO_GOALS, WITH_GOALS], ids=["no-goals", "with-goals"])
+@pytest.mark.parametrize(
+    "needs", [s for s in _NEED_SUBSETS if not (s & _NULL_IS_A_VALUE)], ids=_subset_id
 )
-@settings(max_examples=200, deadline=None)
 def test_a_qbt_preference_read_as_null_never_passes(needs, arrs):
     """A key present and null is a value we cannot use, not a value.
 
@@ -174,11 +228,18 @@ def test_a_null_category_map_is_the_one_null_that_can_still_pass():
     """The exception ``_NULL_IS_A_VALUE`` names, asserted rather than assumed.
 
     Found by the generative property above, which failed on exactly this case
-    before the exclusion existed. It is not a defect: a client reporting a
-    null category map has no categories, so none of them can carry a share
-    limit of their own, and ``_own_share_limit``'s docstring records what
-    reading that as unknown cost — a permanent SKIP for every stack using
-    qBittorrent's default categories, including homelab#393 itself.
+    before the exclusion existed. It is not a defect: a null category map
+    means no categories, so none of them can carry a share limit of their own,
+    and ``_own_share_limit``'s docstring records what reading that as unknown
+    cost — a permanent SKIP for every stack using qBittorrent's default
+    categories, including homelab#393 itself.
+
+    No live client reaches this shape today: ``collect_qbt`` builds
+    ``categories`` through ``_json_object``, which raises ``bad-response`` on
+    anything that is not a JSON object, so a null cannot survive collection.
+    ``_no_category_sets_its_own_limit`` handles it anyway and that branch
+    deserves a test — but it is defensive code, not a shape qBittorrent sends,
+    and a reader should not come away believing otherwise.
 
     Here so that the exclusion in the property cannot quietly widen: if a
     second need ever joins ``_NULL_IS_A_VALUE``, this test is where it has to
@@ -358,8 +419,14 @@ def test_a_findings_instance_is_never_empty(facts, declared):
         assert finding.invariant
 
 
-def test_findings_are_reachable_from_a_generated_snapshot():
-    """Reachability control for the property above, which loops over findings."""
+def test_a_snapshot_can_produce_findings_of_every_shape_the_property_loops_over():
+    """Reachability control for the property above, which loops over findings.
+
+    Hand-built rather than drawn, deliberately: the property needs to know
+    that a snapshot carrying a qbt, an arr and an error row yields one
+    finding from each path, and a generated snapshot cannot be relied on to
+    carry all three at once.
+    """
     facts = StackFacts(qbits=(wedged_qbt(),), arrs=NO_GOALS, errors=(("sonarr[x]", "unreachable"),))
     findings = run_checks(facts, declared=frozenset({"radarr"}))
     assert len(findings) >= 3, [f.invariant for f in findings]

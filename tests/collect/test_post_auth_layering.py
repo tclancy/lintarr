@@ -103,12 +103,19 @@ def test_a_client_with_no_auth_path_permits_no_post_at_all(recorded_send):
     assert calls == []
 
 
-def test_the_inner_layer_also_refuses_on_its_own(recorded_send):
+def test_the_inner_layer_also_refuses_on_its_own():
     """The other half of the depth claim, from the other side.
 
     ``post_auth`` is bypassed entirely here — ``_send`` is called directly, as
     an adapter holding the client could. Together with the tests above this is
     what establishes that there are two live layers rather than one.
+
+    Takes no ``recorded_send``, and that is the point: stubbing ``_send`` is
+    exactly what this test must not do. ``test_http.py`` asserts the same
+    refusal; the duplication is deliberate, because the claim here is
+    *relative* — layer two is live **while** layer one is neutralised in the
+    tests above — and a reader checking that claim should not have to go to
+    another file to find the other half of it.
     """
     client = _client()
     with pytest.raises(ReadOnlyViolation):

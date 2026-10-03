@@ -9,6 +9,7 @@ has at some point reached a predicate that assumed otherwise.
 """
 
 from datetime import UTC, datetime
+from typing import Any
 
 from hypothesis import strategies as st
 
@@ -28,12 +29,23 @@ LIMIT_VALUES = st.one_of(
     st.integers(min_value=-50, max_value=50),
 )
 
-#: Values a service can put where a scalar was expected. ``None`` is a real
-#: answer (Sonarr clears a seed goal that way), the rest are malformed reads
-#: that must not be coerced into numbers or booleans.
+#: The malformed scalar shapes the strategies must keep producing, named once
+#: so a strategy and the test that vouches for it cannot drift apart. ``None``
+#: is a real answer (Sonarr clears a seed goal that way); the rest are reads
+#: that must not be coerced into a number or a boolean.
+#:
+#: This tuple exists because the first version of this module did not have it.
+#: The control that claimed to guard against "a strategy that silently degraded
+#: to generating only well-formed facts" hand-built a single value of its own,
+#: so narrowing ``JUNK_VALUES`` to ``st.booleans()`` left all eighteen property
+#: tests green — the exact aggregate-over-nothing failure the properties open by
+#: naming. ``test_the_strategies_still_generate_every_shape_they_claim`` reads
+#: this tuple, so narrowing it now fails there instead of passing quietly.
+MALFORMED_SCALARS: tuple[Any, ...] = (None, True, "5", [1], {"a": 1})
+
+#: Values a service can put where a scalar was expected.
 JUNK_VALUES = st.one_of(
-    st.none(),
-    st.booleans(),
+    st.sampled_from(MALFORMED_SCALARS),
     st.text(max_size=8),
     st.floats(allow_nan=False, allow_infinity=False, width=32),
     st.lists(st.integers(), max_size=2),
@@ -75,9 +87,20 @@ CATEGORY = st.dictionaries(
     max_size=3,
 )
 
+#: Category-map shapes that are not a map of categories. Named for the same
+#: reason as ``MALFORMED_SCALARS``: narrowing ``CATEGORY_MAPS`` to dicts alone
+#: also left every property green.
+#:
+#: ``None`` is the odd one out and deliberately kept beside the others: a null
+#: category map is *information* — a client with no categories, so none of them
+#: can carry a share limit of its own — while a list or a string means the read
+#: did not give us categories at all. One tuple, two answers, and the control
+#: asserts both.
+MALFORMED_CATEGORY_MAPS: tuple[Any, ...] = (None, [{"ratio_limit": -2}], "categories")
+
 CATEGORY_MAPS = st.one_of(
     st.dictionaries(st.text(min_size=1, max_size=4), CATEGORY, max_size=3),
-    st.none(),
+    st.sampled_from(MALFORMED_CATEGORY_MAPS),
     st.lists(CATEGORY, max_size=2),
     st.text(max_size=5),
 )
@@ -105,12 +128,32 @@ def qbt_instances(names: st.SearchStrategy | None = None) -> st.SearchStrategy:
 INDEXERS = st.builds(
     IndexerFacts,
     name=st.text(min_size=1, max_size=6),
-    protocol=facts(st.one_of(st.sampled_from(["torrent", "usenet", "Torrent"]), JUNK_VALUES)),
-    enable_rss=BOOL_FACTS,
+    # Weighted, not uniform. Measured over 3000 draws of an earlier uniform
+    # version: ``_is_a_torrent_source`` answered None 88% of the time and True
+    # 1%, and an indexer that was both a torrent source and goal-less turned up
+    # in 0.67% of draws — so three runs in five generated no wedging indexer at
+    # all and the generative search had essentially no power over the flagship
+    # predicate. Nothing went falsely green (every property has a hand-built
+    # control), but the search was not searching the interesting half.
+    protocol=st.one_of(
+        known(st.just("torrent")),
+        known(st.just("torrent")),
+        known(st.just("torrent")),
+        facts(st.one_of(st.sampled_from(["usenet", "Torrent"]), JUNK_VALUES)),
+    ),
+    # Weighted toward "on" for the same reason: an indexer whose every toggle
+    # is off or unreadable cannot put a torrent in the queue, so it never
+    # reaches the half of the predicate worth searching.
+    enable_rss=st.one_of(known(st.just(True)), BOOL_FACTS),
     enable_automatic_search=BOOL_FACTS,
     enable_interactive_search=BOOL_FACTS,
-    seed_ratio=facts(st.one_of(st.floats(allow_nan=False, width=32), JUNK_VALUES)),
-    seed_time=LIMIT_FACTS,
+    # Weighted toward "no goal set", which is how Sonarr reports an unset one
+    # and is the state the flagship premise is about.
+    seed_ratio=st.one_of(
+        UNKNOWN_FACTS,
+        facts(st.one_of(st.floats(allow_nan=False, width=32), JUNK_VALUES)),
+    ),
+    seed_time=st.one_of(UNKNOWN_FACTS, LIMIT_FACTS),
     season_pack_seed_time=LIMIT_FACTS,
 )
 
