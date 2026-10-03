@@ -120,7 +120,10 @@ inside channel is a different *IP*, not an auth bypass.
 - The ban body is read with a bounded `errors="replace"` decode, never `.text`.
   On the error path the status is the fact; a declared-but-absent multibyte
   charset makes `.text` raise, which would convert a 403 into a `bad-response`
-  and lose it.
+  and lose it. The bound and the lenient decode are **coupled, not two
+  independent choices**: cutting at a byte offset can halve a multi-byte
+  character and manufacture invalid UTF-8 out of a body that was valid on the
+  wire, so truncating is what makes `errors="replace"` mandatory.
 - `_BAN_BODY_MARKER` matches the leading clause case-insensitively rather than
   all 78 bytes. Pinning the tail would turn a cosmetic upstream reword into a
   silent loss of the `banned` kind — a failure in the misleading direction.

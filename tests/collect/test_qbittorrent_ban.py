@@ -86,13 +86,29 @@ def test_401_unauthorized_is_not_reported_as_a_ban():
     assert exc.kind == "unauthorised"
 
 
-def test_ban_body_without_the_ban_status_is_not_a_ban():
+@pytest.mark.parametrize("status,kind", [(401, "unauthorised"), (502, "bad-response")])
+def test_the_ban_body_under_another_error_status_is_not_a_ban(status, kind):
     """The status half of the predicate is load-bearing, not decoration.
 
-    A 200 carrying that sentence is something in front of qBittorrent talking
-    — a proxy, a captive portal — not qBittorrent refusing a login. Matching
-    on the body alone would let such a page manufacture a ``banned`` verdict
-    and send the operator to wait out an hour that was never imposed.
+    A mutation round proved the earlier version of this test could not say so:
+    it used a **200**, which never raises, so the predicate was never reached
+    and dropping the status check left it green. An absence assertion has to
+    reach the state it names. These statuses do raise, so they are the inputs
+    that actually distinguish the two predicates.
+
+    Something in front of qBittorrent — a reverse proxy, a captive portal —
+    quoting that sentence in its own error page must not manufacture a
+    ``banned`` verdict and send the operator to wait out an hour nobody
+    imposed.
+    """
+    assert _authenticate_against(httpx.Response(status, text=BAN_BODY)).kind == kind
+
+
+def test_a_2xx_carrying_the_ban_body_still_authenticates():
+    """And a *successful* response is not reinterpreted by the ban check either.
+
+    Kept separate from the parametrized rows above because it asserts something
+    different: not "a different kind", but that ``authenticate`` returns at all.
     """
     authenticate(_client(lambda r: httpx.Response(200, text=BAN_BODY)), CFG)
 
@@ -136,7 +152,7 @@ def test_exactly_one_login_attempt_is_made_against_a_ban():
     assert len(calls) == 1
 
 
-def test_an_undecodable_ban_body_still_classifies():
+def test_a_ban_body_declaring_a_multibyte_charset_still_classifies():
     """The body is read off the error path, so it must not be able to raise.
 
     A declared-but-absent multibyte charset raises ``UnicodeDecodeError`` out
@@ -150,6 +166,18 @@ def test_an_undecodable_ban_body_still_classifies():
             headers={"content-type": "text/plain; charset=utf-16"},
         )
     )
+    assert exc.kind == "banned"
+
+
+def test_a_ban_body_with_undecodable_bytes_appended_still_classifies():
+    """The row above is valid UTF-8, so it proves less than it looks like.
+
+    qBittorrent would not send this, but the peek's own truncation can split a
+    character and produce it, and a proxy can append anything. The marker is
+    ASCII and sits at the front, so replacement characters further along must
+    not cost the classification.
+    """
+    exc = _authenticate_against(httpx.Response(403, content=BAN_BODY.encode() + b"\xff\xfe"))
     assert exc.kind == "banned"
 
 
