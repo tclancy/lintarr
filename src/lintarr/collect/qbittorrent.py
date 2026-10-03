@@ -14,7 +14,10 @@ still answered as an ordinary refusal. A successful login resets the counter,
 and restarting qBittorrent clears an active ban. Since this adapter attempts
 login exactly once, the budget is five consecutive *runs* that fail to
 authenticate, not five attempts inside one run — and one success anywhere in
-that sequence spends none of it.
+that sequence spends none of it. Nor does every failed login spend it: a
+``Host``-header port mismatch is refused 401 without incrementing the counter
+at all (issue #17), so the one misconfiguration most likely to fail every run
+forever is also the one that cannot ban anybody.
 """
 
 from lintarr.collect.http import ReadOnlyClient, ServiceError, decode_text
@@ -43,6 +46,31 @@ def _is_ban_refusal(exc: ServiceError) -> bool:
     qBittorrent refusing a login.
     """
     return exc.status == 403 and _BAN_BODY_MARKER in exc.body.lower()
+
+
+# Both causes of a login 401, in one sentence, because the response cannot
+# separate them (issue #17). Measured on 5.2.4: a request whose ``Host`` header
+# port differs from ``WebUI\\Port`` is refused 401 ``Unauthorized`` with
+# *correct* credentials, identical to a wrong password on status, reason phrase,
+# body, content-type and the absence of ``WWW-Authenticate`` — rows A4 and A6 of
+# ``docs/measurements/2026-10-02-qbittorrent-5.2.4-webui-ban.md``. The only
+# difference is in ``GET /api/v2/log/main``, which needs a session lintarr does
+# not have yet, so naming both is the whole of what is available.
+#
+# One line, not a wrapped literal: ``run.py`` folds the detail into a one-line
+# ``Finding.detail`` that ``check --json`` also emits, so an embedded newline
+# renders unindented in one surface and leaks into the other.
+_LOGIN_401_DETAIL = (
+    "qBittorrent refused the login with HTTP 401, and that refusal has two "
+    "causes it does not distinguish: either the username or password is wrong, "
+    "or the port in QBIT_URL is not the port the WebUI listens on "
+    "(WebUI\\Port) — a reverse proxy in front of it, or a container published "
+    "as -p 18080:8080 — which fails qBittorrent's host-header validation and is "
+    "refused 401 even when the credentials are correct. Rule the port out before "
+    "rotating the password: a host-header refusal does not count towards "
+    "WebUI\\MaxAuthenticationFailCount, so retrying will not ban this IP, and "
+    "it will not start working either"
+)
 
 
 def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
@@ -77,11 +105,15 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     wrong, which is what makes it a separate fix for the operator — waiting or
     restarting, never a new password.
 
-    What is *not* distinguishable, and is not claimed to be: a request whose
-    ``Host`` header port differs from ``WebUI\\Port`` is refused with HTTP 401
-    "Unauthorized", byte-for-byte an ordinary bad password, even when the
-    credentials are correct. It does not increment the failure counter. See
-    issue #17 — nothing here can tell the two apart, so nothing here tries.
+    **A 401 is not distinguishable, and is reported as both causes** (issue
+    #17). A request whose ``Host`` header port differs from ``WebUI\\Port`` is
+    refused with HTTP 401 "Unauthorized", byte-for-byte an ordinary bad
+    password, even when the credentials are correct. Nothing here can tell the
+    two apart and nothing here tries; what it does instead is name both in
+    ``_LOGIN_401_DETAIL``, which is the only thing that helps the operator who
+    is actually stuck. The 401 branch exists *only* to replace ``_send``'s
+    ``"/api/v2/auth/login: HTTP 401"`` with that sentence — it classifies
+    nothing, and the ``unauthorised`` kind is unchanged.
     """
     try:
         response = client.post_auth(AUTH_PATH, {"username": cfg.username, "password": cfg.password})
@@ -106,6 +138,10 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
                 "how an unauthenticated request is refused",
                 status=exc.status,
                 body=exc.body,
+            ) from exc
+        if exc.status == 401:
+            raise ServiceError(
+                "unauthorised", _LOGIN_401_DETAIL, status=exc.status, body=exc.body
             ) from exc
         raise
     # _send() already raises ServiceError for any status >= 400, so a

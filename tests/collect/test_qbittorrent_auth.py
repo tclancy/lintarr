@@ -42,7 +42,13 @@ def test_ok_body_authenticates():
 
 
 def test_401_unauthorized_is_unauthorised():
-    """The real qBittorrent 5.2.3 bad-credentials response: 401 'Unauthorized'."""
+    """The real qBittorrent 5.2.3 bad-credentials response: 401 'Unauthorized'.
+
+    It is not *only* the bad-credentials response — a ``Host``-header port
+    mismatch is the same 401 with correct credentials (issue #17) — so this row
+    pins the kind and nothing more. What the detail says about the two causes is
+    pinned in test_qbittorrent_host_header.py.
+    """
     c = _client(lambda r: httpx.Response(401, text="Unauthorized"))
     with pytest.raises(ServiceError) as e:
         authenticate(c, CFG)
