@@ -81,10 +81,45 @@ def test_credentials_without_a_url_are_an_error(env, missing):
         load_config(env)
 
 
-def test_orphaned_credential_error_names_the_missing_variable():
-    with pytest.raises(ValueError) as e:
-        load_config({"QBIT_URLL": "http://q:8080", "QBIT_USER": "u", "QBIT_PASS": "p"})
-    assert "QBIT_URL" in str(e.value)
+@pytest.mark.parametrize(
+    ("env", "missing"),
+    [
+        ({"QBIT_URLL": "http://q:8080", "QBIT_USER": "u", "QBIT_PASS": "p"}, "QBIT_URL"),
+        # The suffixed typo, which is what makes the strengthened assertion
+        # load-bearing rather than cosmetic: "QBIT_URL" is a prefix of
+        # "QBIT_URL__VPN", so an error that named the base variable for a named
+        # instance's orphan would satisfy a bare substring check and send the
+        # operator to look at a variable that is not the one they mistyped.
+        (
+            {"QBIT_URLL__VPN": "http://q:8080", "QBIT_USER__VPN": "u", "QBIT_PASS__VPN": "p"},
+            "QBIT_URL__VPN",
+        ),
+        (
+            {"SONARR_URLL__ANIME": "http://s:8989", "SONARR_API_KEY__ANIME": "k"},
+            "SONARR_URL__ANIME",
+        ),
+    ],
+)
+def test_orphaned_credential_error_names_the_missing_variable(env, missing):
+    """A typo'd URL variable must be named exactly, suffix and all.
+
+    Distinct from ``test_credentials_without_a_url_are_an_error`` above: there
+    the URL variable is absent entirely, here a misspelt one is *present*, so
+    these exercise the path where the operator has something to go and fix.
+
+    The assertion is ``f"{missing} missing"`` rather than ``missing in ...`` to
+    match its parametrised sibling. ``"QBIT_URL" in message`` is satisfied by
+    any message mentioning ``QBIT_URL__VPN`` or ``QBIT_URLS``, so it cannot
+    tell the right variable from a longer one sharing its prefix — and the
+    trailing " missing" is what supplies the word boundary.
+
+    (#6 recorded this as weak because ``"QBIT_URL"`` is a substring of the
+    typo'd ``QBIT_URLL``. Measured: the typo'd name never appears in the
+    message at all, so that is not the hole. The hole is the prefix of a
+    *suffixed* sibling, which the second case above is here to close.)
+    """
+    with pytest.raises(ValueError, match=f"{missing} missing"):
+        load_config(env)
 
 
 def test_password_not_in_repr():
