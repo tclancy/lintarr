@@ -148,6 +148,14 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     # response reaching here is always a 2xx — the modern 204 with an empty
     # body, the legacy 200 with body "Ok.", or the legacy 200 with body
     # "Fails.", which is qBittorrent's old-protocol way of saying no.
+    #
+    # This message keeps its flat claim, deliberately. #17's confound was
+    # measured on the *modern* generation, where the refusal is a 401; whether
+    # an older release answers a ``Host``-header mismatch with 200 "Fails." or
+    # with a 401 has never been measured, and lintarr has no instance of one to
+    # measure. Widening the sentence here would be asserting a confound exists
+    # on a response nobody has seen — the same unmeasured-claim sin #17 is a
+    # complaint about, pointed the other way. Left narrow and recorded as a gap.
     if response.status_code == 200 and decode_text(response, AUTH_PATH).strip() == "Fails.":
         raise ServiceError("unauthorised", "qBittorrent rejected the credentials")
 

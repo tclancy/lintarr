@@ -29,6 +29,7 @@ import pytest
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
 from lintarr.config import QbtConfig
+from tests.collect.test_qbittorrent_ban import BAN_BODY
 
 CFG = QbtConfig(name="main", url="http://qbt:8081", username="admin", password="hunter2")
 
@@ -49,6 +50,22 @@ def _refuse_401() -> ServiceError:
     with pytest.raises(ServiceError) as excinfo:
         authenticate(c, CFG)
     return excinfo.value
+
+
+def test_the_fixture_is_the_response_that_was_measured():
+    """Pin the fixture to rows A4/A6, not merely to "a 401".
+
+    Everything else in this file is downstream of ``UNAUTHORIZED`` being the
+    bytes qBittorrent actually sends. A fixture of ``httpx.Response(401)`` with
+    no body would satisfy every assertion below and would not be the measured
+    state — the whole defect is that the body is *identical* between a wrong
+    password and a correct one behind a port mismatch, and a fixture with no
+    body cannot represent that. 12 bytes is the measured length of both rows.
+    """
+    body, status = UNAUTHORIZED
+    assert status == 401
+    assert body == "Unauthorized"
+    assert len(body.encode()) == 12
 
 
 def test_the_401_still_reports_the_unauthorised_kind():
@@ -108,9 +125,16 @@ def test_identical_responses_produce_identical_details():
             authenticate(c, cfg)
         return excinfo.value.detail
 
-    wrong_password = refuse(CFG)
-    correct_password = refuse(QbtConfig(name="main", url="http://qbt:8081", username="admin", password="theRealOne"))
-    assert wrong_password == correct_password
+    as_configured = refuse(CFG)
+    other_credentials = refuse(
+        QbtConfig(
+            name="main",
+            url="http://qbt:8081",
+            username="operator",
+            password="theRealOneAndItIsLonger",
+        )
+    )
+    assert as_configured == other_credentials
 
 
 def test_the_401_detail_carries_no_newline():
@@ -139,12 +163,13 @@ def test_the_host_header_prose_is_absent_from_the_ban_refusal():
     wait or restart, versus check the port — and #17's whole complaint is a
     confident wrong answer. Pinning the prose *out* of the 403 paths is what
     keeps the fix from becoming a second instance of the defect.
+
+    ``BAN_BODY`` is imported from the ban suite rather than retyped. A second
+    copy of a measured literal is a copy that can drift: if upstream rewords the
+    ban body, the two files disagree and this test starts asserting about a
+    response qBittorrent no longer sends, while still passing.
     """
-    c = _client(
-        lambda r: httpx.Response(
-            403, text="Your IP address has been banned after too many failed authentication attempts."
-        )
-    )
+    c = _client(lambda r: httpx.Response(403, text=BAN_BODY))
     with pytest.raises(ServiceError) as excinfo:
         authenticate(c, CFG)
     assert excinfo.value.kind == "banned"
