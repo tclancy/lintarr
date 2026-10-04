@@ -7,6 +7,8 @@ configuration can be undecidable rather than healthy.
 
 from datetime import UTC, datetime
 
+import pytest
+
 from lintarr.facts import Known, Unknown
 from lintarr.invariants.queue_liveness import check
 from lintarr.models import ArrInstance, IndexerFacts
@@ -35,6 +37,7 @@ def _indexer(
     rss=_UNSET,
     automatic=_UNSET,
     interactive=_UNSET,
+    name="1337x",
 ):
     """One indexer, every fact settable on its own.
 
@@ -48,7 +51,7 @@ def _indexer(
         return _fact(enabled) if override is _UNSET else _wrap(override)
 
     return IndexerFacts(
-        name="1337x",
+        name=name,
         protocol=_wrap(protocol),
         enable_rss=toggle(rss),
         enable_automatic_search=toggle(automatic),
@@ -441,6 +444,181 @@ def test_a_season_pack_seed_time_alone_is_not_a_seed_goal():
     """It bounds season packs only; single-episode torrents still seed forever."""
     packs_only = _arrs(_indexer(seed_ratio=_NO_RATIO, season_pack_seed_time=_fact(20160)))
     assert check(wedged_qbt(), packs_only).outcome is Outcome.FAIL
+
+
+#: Shapes a seed criterion can arrive in that are not numbers, plus ``()`` as a
+#: non-JSON control. No arr emits any of them, which is exactly why nothing
+#: validated them; a plugin or a future API revision can. (Not a reverse proxy
+#: answering with its own body — ``_indexer_payloads`` rejects that whole
+#: response before any field is read.)
+#:
+#: ``"2.0"`` is in here deliberately. A numeric *string* is the tempting one to
+#: coerce, and coercing it would invent a goal the arr never reported — the same
+#: refusal ``_as_limit`` already makes on qBittorrent's side of this question.
+#:
+#: ``False`` and ``True`` are in here because ``isinstance(True, int)`` is True
+#: in Python, so a guard written as ``isinstance(value, (int, float))`` admits
+#: them unless it excludes ``bool`` first.
+_UNUSABLE_SEED_VALUES = ("not-a-number", "2.0", {"a": 1}, [], (), False, True)
+
+
+@pytest.mark.parametrize("value", _UNUSABLE_SEED_VALUES, ids=repr)
+def test_an_unusable_seed_ratio_is_not_a_seed_goal(value):
+    """A value nobody can read is not a configured goal.
+
+    Before this guard every value here produced a **PASS on the homelab#393
+    wedge** — byte-identical to a real ratio of 2.0 — so the flagship check was
+    disarmed by a payload the tool could not interpret. That is a false PASS,
+    which this project ranks above a crash.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize("value", _UNUSABLE_SEED_VALUES, ids=repr)
+def test_an_unusable_seed_time_is_not_a_seed_goal(value):
+    """Both criteria go through the same loop, so both need the same guard.
+
+    Separate from the ratio case on purpose: a guard applied to one field only
+    would leave the other disarming the check, and a test that varies just
+    ``seed_ratio`` cannot see that.
+    """
+    junk = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
+    assert check(wedged_qbt(), junk).outcome is Outcome.FAIL
+    # Co-located restatement of ``test_a_seed_time_goal_alone_prevents_the_conflict``
+    # above, which is what actually kills a mutant dropping ``seed_time`` from
+    # ``_seed_criteria`` (measured). It is repeated here because with
+    # ``seed_ratio`` absent the check is armed whatever ``seed_time`` says, so
+    # the assertion above also passes against an implementation that ignores
+    # ``seed_time`` altogether — and a reader of this test cannot see that from
+    # here. Do not delete the original in favour of this one.
+    assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
+
+
+@pytest.mark.parametrize("value", [2.0, 2])
+def test_a_numeric_seed_goal_still_clears_the_indexer(value):
+    """The control for the two tests above, co-located with them.
+
+    Without a control of some kind they pass on any change that arms the check
+    unconditionally, which would make every healthy stack FAIL;
+    ``test_per_indexer_seed_goals_prevent_the_conflict`` covers the ``2.0`` half
+    elsewhere. ``int`` is listed beside ``float`` because an operator who typed
+    ``2`` into Sonarr has set a goal, and nothing else in the suite says so.
+    """
+    assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(value)))).outcome is Outcome.PASS
+
+
+def test_a_finding_names_the_indexer_whose_seed_criterion_could_not_be_read():
+    """Arming the check is not enough — the remedy has to be the right one.
+
+    "This indexer sets no seed goal" is a true sentence about an absent value
+    and a false one about an unreadable value: an operator who can see a ratio
+    in Sonarr's UI would read the finding as lintarr being wrong, and go and
+    re-set a goal that is already set. The premise cannot carry that
+    distinction (it is a bool), so the detail does.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(wedged_qbt(), junk)
+    assert f.outcome is Outcome.FAIL
+    assert "sonarr[main]/1337x" in f.detail
+    assert "not a number" in f.detail
+    # Two controls, because "unreadable" has to stay narrower than "no goal".
+    # An absent criterion and a null one are both *unset* — the ordinary case on
+    # every stack measured — and neither is a payload anyone failed to read, so
+    # neither may collect this note.
+    assert check(wedged_qbt(), NO_GOALS).detail == ""
+    assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(None)))).detail == ""
+
+
+def test_the_note_does_not_displace_the_detail_a_skip_already_had():
+    """A SKIP's own detail explains the verdict; the note only adds to it."""
+    junk = _arrs(_indexer(seed_ratio=_fact({"a": 1}), protocol=None))
+    f = check(wedged_qbt(), junk)
+    assert f.outcome is Outcome.SKIP
+    assert "required inputs could not be read" in f.detail
+    assert "sonarr[main]/1337x" in f.detail
+
+
+def test_the_note_stays_off_a_verdict_that_never_read_a_seed_criterion():
+    """A starvation finding must not carry a sentence about seed criteria.
+
+    Its "Therefore" line ends "Share limits are not involved, so turning them on
+    will not help", and the premises it lists are the two active-limit ones. A
+    seed-criteria sentence between those two is the coupling defect
+    ``Finding.conflict`` exists to prevent — see the comment above ``_THEREFORE``
+    in ``cli.py``.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(qbt_with(max_active_torrents=0), junk)
+    assert f.outcome is Outcome.FAIL
+    assert f.conflict == "no-slot-for-a-first-download"
+    assert f.detail == ""
+    # Control: the same junk value on the seeding conflict does carry the note,
+    # so the assertion above is about the conflict and not about the guard being
+    # switched off altogether.
+    assert "sonarr[main]/1337x" in check(wedged_qbt(), junk).detail
+
+
+def test_an_unreadable_criterion_on_an_excluded_indexer_wedges_nothing():
+    """Three shapes that carry one and still leave the stack PASSing.
+
+    A disabled indexer and a usenet one are outside the predicate by design, and
+    one whose *other* criterion is a real goal cleared itself. Each is the sole
+    indexer here, so the stack passes — and a PASS has nothing to explain.
+    """
+    disabled = _arrs(_indexer(seed_ratio=_fact("not-a-number"), enabled=False))
+    usenet = _arrs(_indexer(seed_ratio=_fact("not-a-number"), protocol="usenet"))
+    has_a_goal = _arrs(_indexer(seed_ratio=_fact("not-a-number"), seed_time=_fact(2880)))
+    for arrs in (disabled, usenet, has_a_goal):
+        f = check(wedged_qbt(), arrs)
+        assert f.outcome is Outcome.PASS
+        assert f.detail == ""
+
+
+def test_the_note_names_only_the_indexers_the_premise_actually_read():
+    """The mixed stack, which is the only shape that tests the filter.
+
+    The three excluded shapes above cannot reach it on their own: alone, each
+    leaves the stack PASSing, so the conflict gate suppresses the note before the
+    filter is consulted and a mutant dropping the filter SURVIVED. It takes a
+    *fourth* indexer that genuinely wedges the stack to produce a seeding FAIL
+    with excluded indexers still in the list — and then naming them sends an
+    operator to go and look at three indexers this verdict cleared.
+    """
+    f = check(
+        wedged_qbt(),
+        _arrs(
+            _indexer(name="1337x", seed_ratio=_fact("not-a-number")),
+            _indexer(name="NZBgeek", seed_ratio=_fact({"a": 1}), protocol="usenet"),
+            _indexer(name="Nyaa", seed_ratio=_fact([]), enabled=False),
+            _indexer(name="EZTV", seed_ratio=_fact("2.0"), seed_time=_fact(2880)),
+        ),
+    )
+    assert f.outcome is Outcome.FAIL
+    assert f.conflict == "seeders-absorb-every-slot"
+    assert "sonarr[main]/1337x" in f.detail
+    for cleared in ("NZBgeek", "Nyaa", "EZTV"):
+        assert cleared not in f.detail
+
+
+def test_an_unclassifiable_indexer_keeps_its_note():
+    """The companion to the test above: ``None`` is not ``False``.
+
+    An indexer nobody could classify is the one that forces the SKIP, so it is
+    exactly where the explanation is needed. A filter written as
+    ``_is_a_torrent_source(indexer)`` rather than ``is not False`` would drop it.
+    """
+    f = check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact("not-a-number"), protocol=None)))
+    assert f.outcome is Outcome.SKIP
+    assert "sonarr[main]/1337x" in f.detail
+
+
+def test_a_clean_run_carries_no_note_however_unreadable_a_criterion_was():
+    """A stack that cannot wedge is a PASS, and a PASS has nothing to explain."""
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(repaired_qbt(), junk)
+    assert f.outcome is Outcome.PASS
+    assert f.detail == ""
 
 
 # --- No arr data at all ------------------------------------------------------
