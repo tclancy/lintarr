@@ -81,10 +81,48 @@ def test_credentials_without_a_url_are_an_error(env, missing):
         load_config(env)
 
 
-def test_orphaned_credential_error_names_the_missing_variable():
-    with pytest.raises(ValueError) as e:
-        load_config({"QBIT_URLL": "http://q:8080", "QBIT_USER": "u", "QBIT_PASS": "p"})
-    assert "QBIT_URL" in str(e.value)
+@pytest.mark.parametrize(
+    ("env", "missing"),
+    [
+        ({"QBIT_URLL": "http://q:8080", "QBIT_USER": "u", "QBIT_PASS": "p"}, "QBIT_URL"),
+        # The suffixed typo. "QBIT_URL" is a prefix of "QBIT_URL__VPN", so a
+        # bare substring check cannot tell the right variable from a longer one
+        # sharing its prefix — but measured, these cases buy no mutation
+        # coverage the parametrised sibling above does not already have: the
+        # typo'd keys are inert (neither `_instances` nor `_credential_suffixes`
+        # matches "QBIT_URLL__VPN"), so they traverse the same code path with
+        # extra unread variables. Kept for the scenario, not for the coverage.
+        (
+            {"QBIT_URLL__VPN": "http://q:8080", "QBIT_USER__VPN": "u", "QBIT_PASS__VPN": "p"},
+            "QBIT_URL__VPN",
+        ),
+        (
+            {"SONARR_URLL__ANIME": "http://s:8989", "SONARR_API_KEY__ANIME": "k"},
+            "SONARR_URL__ANIME",
+        ),
+    ],
+)
+def test_orphaned_credential_error_names_the_missing_variable(env, missing):
+    """A typo'd URL variable must be named exactly, suffix and all.
+
+    Distinct from ``test_credentials_without_a_url_are_an_error`` above: there
+    the URL variable is absent entirely, here a misspelt one is *present*, so
+    these exercise the path where the operator has something to go and fix.
+
+    The assertion is ``f"{missing} missing"`` rather than ``missing in ...`` to
+    match its parametrised sibling, and that consistency is the whole of what
+    the change buys. ``"QBIT_URL" in message`` is satisfied by any message
+    mentioning ``QBIT_URL__VPN``, so the trailing " missing" is what supplies
+    the word boundary — but the sibling already asserts that for every suffixed
+    variable, so no mutant survives here that did not survive there.
+
+    (#6 recorded this as weak because ``"QBIT_URL"`` is a substring of the
+    typo'd ``QBIT_URLL``. Measured: the typo'd name never appears in the
+    message at all, so that is not the hole. The hole is the prefix of a
+    *suffixed* sibling, which the second case above is here to close.)
+    """
+    with pytest.raises(ValueError, match=f"{missing} missing"):
+        load_config(env)
 
 
 def test_password_not_in_repr():

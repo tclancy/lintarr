@@ -121,4 +121,15 @@ Recorded because they cost real review cycles:
   (`d850a3f`) is an **unrelated history** — the repo was created with an
   initial commit. Local `main` has never been pushed. Reconcile before pushing.
 - MIT licensed. Python 3.13, uv, hatchling, src layout, click, httpx, pytest.
-- Hypothesis is a declared dev dependency with no property tests written yet.
+- Hypothesis is a declared dev dependency and is now used: `tests/strategies.py`
+  holds the fact/snapshot strategies and `tests/test_properties.py` the spec's
+  four properties (issue #6). Two of the spec's four are written differently
+  from its wording and say why in their docstrings — "never PASS with an
+  unknown required fact" is false for the three `arr.*` needs by design, and
+  "premises are a subset of declared needs" is not checkable while a premise
+  label is a derived name with no published mapping back to a need.
+- Reachability controls are not optional in that file: a control that builds
+  its own input cannot vouch for a generator's. The first version of
+  `test_the_strategies_still_generate_every_shape_they_claim` did exactly that,
+  and narrowing `JUNK_VALUES` to booleans left all eighteen property tests
+  green. Both halves now read `MALFORMED_SCALARS`.
