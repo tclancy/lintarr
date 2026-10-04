@@ -19,19 +19,19 @@ other layer matches on.
 
 import json
 import os
-import typing
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
 from lintarr.cli import cli
-from lintarr.collect.http import ErrorKind, ReadOnlyClient, ServiceError
+from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.models import ErrorRow, StackFacts
 from lintarr.outcomes import Outcome
 from lintarr.run import run_checks
+from tests.strategies import ERROR_KINDS
 
 _PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
@@ -44,10 +44,12 @@ ENV = {
     "SONARR_API_KEY": "k",
 }
 
-#: Every value the error-row ``kind`` is allowed to be. Read off the alias
-#: rather than listed here, so a new kind cannot slip past the concatenation
-#: guard below by being absent from a hand-written copy.
-KINDS = frozenset(typing.get_args(ErrorKind.__value__))
+#: Every value the error-row ``kind`` is allowed to be. Shared with the
+#: generator rather than derived a second time: both were
+#: ``frozenset(typing.get_args(ErrorKind.__value__))``, which cannot drift
+#: *from the alias* but can drift from each other if one grows a filter.
+#: ``tests/strategies`` is where the breadth control for it lives.
+KINDS = frozenset(ERROR_KINDS)
 
 
 def _blank_detail_row():
@@ -129,10 +131,12 @@ def test_the_qbittorrent_403_explanation_survives_collection():
     assertion is that the *replacement* arrived — a detail long enough to be
     that sentence, still naming the status code — rather than any of its words.
 
-    Matched this way on purpose: open PR #19 rewrites this sentence (it drops
-    the "see issue #7" hedge for a measured ban-body check), and a test that
-    pinned a phrase from the current wording would turn red on a branch that
-    improves the thing it is guarding.
+    Matched this way on purpose, and the argument has already been paid once:
+    #19 rewrote this sentence after #18 was filed — it dropped the "see issue
+    #7" hedge for a measured ban-body check — and a test that had pinned a
+    phrase from the older wording would have turned red on the branch that
+    improved the thing it was guarding. The wording will move again; the
+    assertion is that the replacement *arrived*, never what it says.
     """
     row = _only_row(_collect(qbt_down=True))
     bare = "/api/v2/auth/login: HTTP 403"
