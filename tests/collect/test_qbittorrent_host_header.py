@@ -107,6 +107,14 @@ def test_the_401_names_the_host_header_port_cause():
     assert "WebUI\\Port" in detail
 
 
+#: The detail's final clause is its last conditional's consequence —
+#: "if the credentials are, five consecutive failed runs will ban it", 64
+#: characters. The bound is that plus a reword's worth of slack, and
+#: deliberately far below the ~95 characters the shortest measured appended
+#: verdict needed. Raise it only after re-reading what now follows the hedge.
+_MAX_CHARS_AFTER_LAST_CONDITIONAL = 100
+
+
 def test_the_401_does_not_claim_the_two_causes_are_distinguishable():
     """Criterion 2 of #17, as a positive assertion rather than an absence.
 
@@ -120,9 +128,47 @@ def test_the_401_does_not_claim_the_two_causes_are_distinguishable():
 
     # Presence assertions alone are satisfied by a detail that leads with the
     # flat wrong answer and concedes the ambiguity in a trailing footnote —
-    # measured, and it passed every other assertion in this file. So: ban the
-    # flat claim outright, and pin the disclaimer ahead of the cause it governs.
-    assert "rejected the credentials" not in detail
+    # measured, and it passed every other assertion in this file.
+    #
+    # The two guards below do different jobs, and NEITHER is "ban the flat
+    # claim outright", which an earlier version of this comment claimed. No
+    # assertion can be, because the claim has unbounded phrasings.
+    #
+    # 1. A denylist of the spellings actually measured to slip through. The
+    #    first entry is also exactly what the legacy ``200 "Fails."`` path
+    #    emits, so pinning that one is a real, targeted guard rather than a
+    #    guess; the rest are the phrasings a review round got past the
+    #    presence assertions above. A synonym nobody has written will pass,
+    #    and that is a stated limit, not an oversight.
+    for verdict in (
+        "rejected the credentials",
+        "the credentials are the cause",
+        "rotate the password",
+        "the port almost never",
+    ):
+        assert verdict not in detail, f"unhedged verdict in the 401 detail: {verdict!r}"
+
+    # 2. A structural guard, and the one that kills an APPENDED verdict
+    #    whatever words it uses: the detail must END at its final
+    #    conditional's consequence, so there is no room after the last
+    #    hedge for an unhedged sentence.
+    #
+    #    This replaced a term-based version of the same idea ("neither cause
+    #    may be named after the last conditional"), which was a denylist
+    #    wearing a structural costume: a measured survivor avoided it just by
+    #    saying "login" and "QBIT_PASS" instead of "password" and "port".
+    #    A length bound cannot be dodged by synonym, which is the whole point.
+    #
+    #    Limit: this bounds the tail, it does not read it. A reword that keeps
+    #    the length and flips the meaning still needs guard 1. Raising the
+    #    bound is a deliberate come-and-look-at-this, not a formality.
+    tail = detail[detail.rindex("if ") :]
+    assert len(tail) <= _MAX_CHARS_AFTER_LAST_CONDITIONAL, (
+        f"the 401 detail runs {len(tail)} chars past its last conditional "
+        f"(bound {_MAX_CHARS_AFTER_LAST_CONDITIONAL}): {tail!r}. Anything "
+        f"appended after the final hedge reads as a verdict on which cause "
+        f"applies — which is the one thing #17 says this message cannot do."
+    )
     assert detail.index("two causes") < detail.index("username or password")
 
 

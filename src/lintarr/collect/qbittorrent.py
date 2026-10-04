@@ -72,10 +72,12 @@ _LOGIN_401_DETAIL = (
     "the port the WebUI listens on "
     "(WebUI\\Port) — a reverse proxy in front of it, or a container published "
     "as -p 18080:8080 — which fails qBittorrent's host-header validation and is "
-    "refused 401 even when the credentials are correct. Rule the port out before "
-    "rotating the password: a host-header refusal does not count towards "
-    "WebUI\\MaxAuthenticationFailCount, so retrying will not ban this IP, and "
-    "it will not start working either"
+    "refused 401 even when the credentials are correct. Rule the port out "
+    "first, but do not leave this running while you do: if the port is the "
+    "cause, a host-header refusal does not count towards "
+    "WebUI\\MaxAuthenticationFailCount, so retrying will neither ban this IP "
+    "nor start working — if the credentials are, five consecutive failed runs "
+    "will ban it"
 )
 
 
@@ -156,13 +158,18 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     # "Fails.", which is qBittorrent's old-protocol way of saying no.
     #
     # This message keeps its flat claim, and the evidence is better than "we did
-    # not look". Under a remapped publish, *every* request comes back 401 —
-    # "login or not", per the measurement doc — so host-header validation fires
-    # ahead of any login handling, and a 200 "Fails." body cannot be the
-    # host-header shape on any build that shares that path. What is unmeasured is
-    # whether a release old enough to still speak 200 "Fails." shares it, and
-    # lintarr has no such instance to point at. So: narrow here, not widened on a
-    # guess about a response nobody has seen.
+    # not look" — but weaker than a row in the axiom table, so here is its
+    # provenance. Under a remapped publish *every* request came back 401,
+    # "login or not": that is the exploratory encounter behind the measurement
+    # doc's "Re-measuring" note, not one of its A1-D4 rows, and
+    # ``tools/probe_qbt_ban.py`` cannot reproduce the non-login half — under
+    # ``-p 18080:8080`` it exits in ``assert_same_instance`` at the outside
+    # login, before issuing anything else. Taking it at face value, host-header
+    # validation fires ahead of any login handling, so a 200 "Fails." body
+    # cannot be the host-header shape on a build that shares that path. What is
+    # flatly unmeasured is whether a release old enough to still speak 200
+    # "Fails." shares it, and lintarr has no such instance to point at. So:
+    # narrow here, not widened on a guess about a response nobody has seen.
     if response.status_code == 200 and decode_text(response, AUTH_PATH).strip() == "Fails.":
         raise ServiceError("unauthorised", "qBittorrent rejected the credentials")
 
