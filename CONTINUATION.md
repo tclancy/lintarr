@@ -55,13 +55,14 @@ To resolve: set a known WebUI password in qBittorrent, and — because this is t
 same class of problem as homelab#393 — put it in the Ansible vault so it
 survives the next rebuild.
 
-### 2. Two parked bugs (first work of P0b)
+### 2. One parked bug (first work of P0b)
 
-- `collect/arr.py` `_fields_as_mapping` does an unguarded `f["name"]`. A
-  malformed arr payload raises a bare `KeyError` that escapes
-  `collect_stack`'s `except ServiceError` and kills the whole run.
 - The orphan-credential guard raises a raw `ValueError` traceback out of the
-  CLI; should be a `click.UsageError`.
+  CLI; should be a `click.UsageError`. Tracked as #3.
+
+The `_fields_as_mapping` bug listed here is fixed — the `fields` list and
+every entry's name are now shape-checked and a malformed payload is recorded
+as `bad-response` rather than aborting the run (#2).
 
 ### 3. There are no checks yet
 

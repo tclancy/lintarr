@@ -66,3 +66,35 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
     assert facts.errors == (("sonarr[anime]", "bad-response"),)
+
+
+def test_malformed_fields_entry_is_recorded_not_raised():
+    """A nameless ``fields`` entry must not abort the whole run.
+
+    One level deeper than the payload-shape case above: ``collect_arr``
+    type-checked the indexer list but not the entries inside each indexer's
+    ``fields``, so ``f["name"]`` raised a bare ``KeyError`` past
+    ``collect_stack``'s ``except ServiceError`` and took the healthy
+    instances' facts down with it.
+    """
+    malformed = [{"name": "nzb", "fields": [{"value": 1.0}]}]
+    facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
+    assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.errors == (("sonarr[anime]", "bad-response"),)
+
+
+def test_non_object_fields_payload_is_recorded_not_raised():
+    """The silent half of the same defect, and the more dangerous one.
+
+    ``fields`` as an array of strings raised nothing at all: ``"value" in
+    "seedCriteria.seedRatio"`` is a substring test, so every entry was
+    filtered out and the instance reported as healthy with its seed criteria
+    ``Unknown("field-absent")`` — a malformed payload indistinguishable from
+    an arr version that does not expose those fields.
+    """
+    malformed = [{"name": "nzb", "fields": ["seedCriteria.seedRatio"]}]
+    facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
+    assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.errors == (("sonarr[anime]", "bad-response"),)

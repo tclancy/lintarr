@@ -39,6 +39,54 @@ _ENABLE_FIELDS = {
 }
 
 
+def _field_entries(indexer: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fetch one indexer's ``fields`` list, rejecting any shape that is not a list of objects.
+
+    The silent shapes are the reason this is a hard error rather than a skip.
+    Iterating a string, an object, or a list of strings yields *strings*, and
+    ``"value" in "seedCriteria.seedRatio"`` is a substring test rather than a
+    key test. It answers ``False``, so every entry is filtered out, the
+    mapping comes back empty and the seed criteria become
+    ``Unknown("field-absent")`` — a malformed payload reported as "this arr
+    version does not expose seed criteria". That is a defaulted fact
+    masquerading as a real one, which is the thing this project exists to
+    refuse.
+
+    Whether a non-dict entry is silent or loud turns on the *type*, not on
+    being a non-dict: ``"value" in x`` is a membership test for anything
+    iterable, so ``[["x"]]`` and ``[()]`` were silent too, and only an entry
+    that is not iterable at all (``[7]``, ``[None]``) raised ``TypeError``.
+    Both halves are rejected here, so the distinction only matters for
+    reading the measurements this guard was built from.
+
+    An explicit ``"fields": null`` is a bad response, while a *missing*
+    ``fields`` key is not: absence matches how the three top-level ``enable*``
+    keys behave on older arr versions, and falls through to
+    ``Unknown("field-absent")`` for every field. Present-but-null is a shape
+    no arr emits, so it is a malformed payload rather than an old one.
+    """
+    fields = indexer.get("fields", [])
+    if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
+        raise ServiceError("bad-response", f"{_INDEXER}: 'fields' is not an array of objects")
+    return fields
+
+
+def _field_name(entry: dict[str, Any]) -> str:
+    """A ``fields`` entry with no usable name is a malformed payload, not an unnamed field.
+
+    Returns the *stripped* name, as ``_read_version`` does. This name is a
+    lookup key, not a label: validating with ``.strip()`` and then returning
+    the padded original would key the mapping on ``"  seedCriteria.seedRatio  "``,
+    so a ratio the operator really had configured would come back
+    ``Unknown("field-absent")`` — the same "this version does not expose it"
+    lie the guard exists to refuse, re-entered through the guard itself.
+    """
+    name = entry.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ServiceError("bad-response", f"{_INDEXER}: a 'fields' entry has no 'name' string")
+    return name.strip()
+
+
 def _fields_as_mapping(indexer: dict[str, Any]) -> dict[str, Any]:
     """Flatten the arr ``fields`` list into ``{name: value}``.
 
@@ -49,8 +97,15 @@ def _fields_as_mapping(indexer: dict[str, Any]) -> dict[str, Any]:
     which is exactly the defaulting this project exists to refuse. Entries
     without ``value`` fall through to ``read()``'s absent branch and become
     ``Unknown("field-absent")``.
+
+    Names are resolved for *every* entry before the ``value`` filter runs, not
+    inside the comprehension. ``value`` is legitimately absent on any
+    never-configured setting — the commonest live shape — so a name check
+    evaluated only for entries that carry one would leave most of a real
+    payload unvalidated.
     """
-    return {f["name"]: f["value"] for f in indexer.get("fields", []) if "value" in f}
+    named = [(_field_name(f), f) for f in _field_entries(indexer)]
+    return {name: f["value"] for name, f in named if "value" in f}
 
 
 def _read_version(client: ReadOnlyClient) -> str:
