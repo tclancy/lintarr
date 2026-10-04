@@ -19,10 +19,50 @@ class ReadOnlyViolation(RuntimeError):
 
 
 class ServiceError(RuntimeError):
-    def __init__(self, kind: ErrorKind, detail: str) -> None:
+    """A service could not be read, and *kind* says what the operator must fix.
+
+    ``status`` and ``body`` carry the HTTP evidence forward so an adapter can
+    classify on the response rather than on a substring of ``detail``. Both are
+    absent for errors with no response at all — a connection failure, a
+    timeout — which is why ``status`` is ``None`` rather than ``0``.
+    """
+
+    def __init__(
+        self, kind: ErrorKind, detail: str, *, status: int | None = None, body: str = ""
+    ) -> None:
         super().__init__(f"{kind}: {detail}")
         self.kind: ErrorKind = kind
         self.detail = detail
+        self.status = status
+        self.body = body
+
+
+_ERROR_BODY_PEEK = 512
+
+
+def peek_error_body(response: httpx.Response) -> str:
+    """A bounded, never-raising look at an error response body.
+
+    Deliberately *not* ``.text``, and *not* ``decode_text``: this runs on the
+    error path, where the body is a diagnostic and the status is the fact we
+    came for. ``.text`` raises ``UnicodeDecodeError`` on a declared-but-absent
+    multibyte charset, and that is not an ``httpx.HTTPError``, so it would not
+    be caught and re-kinded here — it escapes ``_send`` *and*
+    ``collect_stack``'s ``except ServiceError``, aborting every healthy
+    service's collection over one unreadable error page. So: raw bytes,
+    truncated, decoded with ``errors="replace"``, which cannot raise.
+
+    Truncated because the body on this path is attacker- and
+    misconfiguration-shaped — a reverse proxy's HTML error page, a captive
+    portal — and it is retained for as long as anything holds the exception.
+    It is *not* interpolated into the exception message: ``__init__`` formats
+    only ``kind`` and ``detail``, so the bound caps what is held, not what is
+    printed. qBittorrent's longest measured refusal body is 78 bytes; 512
+    leaves room for a wordier release without carrying a page, and
+    ``test_the_peek_bound_cannot_truncate_the_ban_marker`` is what keeps it
+    above the one body a caller classifies on.
+    """
+    return response.content[:_ERROR_BODY_PEEK].decode("utf-8", errors="replace")
 
 
 def decode_text(response: httpx.Response, path: str) -> str:
@@ -95,10 +135,16 @@ class ReadOnlyClient:
             response = self.__client.request(method, path, **kw)
         except httpx.HTTPError as exc:
             raise ServiceError("unreachable", f"{path}: {type(exc).__name__}") from exc
-        if response.status_code in (401, 403):
-            raise ServiceError("unauthorised", f"{path}: HTTP {response.status_code}")
         if response.status_code >= 400:
-            raise ServiceError("bad-response", f"{path}: HTTP {response.status_code}")
+            kind: ErrorKind = (
+                "unauthorised" if response.status_code in (401, 403) else "bad-response"
+            )
+            raise ServiceError(
+                kind,
+                f"{path}: HTTP {response.status_code}",
+                status=response.status_code,
+                body=peek_error_body(response),
+            )
         return response
 
     def get_text(self, path: str) -> str:
