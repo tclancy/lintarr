@@ -294,3 +294,40 @@ def test_check_never_prints_credentials():
     assert "arr.indexer_without_seed_criteria" in output, "the arr was never read"
     assert QBIT_PASSWORD not in output
     assert SONARR_API_KEY not in output
+
+
+# --- An unusable seed-criteria value, end to end (#10) ------------------------
+
+
+def _indexers_with_seed_ratio(value):
+    """WEDGED_INDEXERS with one ``seedCriteria.seedRatio`` field carrying *value*."""
+    field = {"name": "seedCriteria.seedRatio", "label": "Seed Ratio", "value": value}
+    return [WEDGED_INDEXERS[0] | {"fields": [field]}]
+
+
+def test_an_unusable_seed_ratio_reaches_the_operator_as_the_wedge_it_is():
+    """#10, from an HTTP body to an exit code.
+
+    Before the guard this payload exited **0** — a junk value read as a
+    configured goal, so the flagship check went quiet on homelab#393's own
+    configuration. The control below is the same path with a real ratio, which
+    still exits 0: the value's type is the only difference between them.
+    """
+    junk = _run(["check", "--json"], indexers=_indexers_with_seed_ratio("not-a-number"))
+    assert junk.exit_code == 1
+    finding = json.loads(junk.output)["findings"][0]
+    assert finding["outcome"] == "FAIL"
+    assert finding["conflict"] == "seeders-absorb-every-slot"
+    assert "sonarr[main]/1337x" in finding["detail"]
+    assert "not a number" in finding["detail"]
+
+    real = _run(["check", "--json"], indexers=_indexers_with_seed_ratio(2.0))
+    assert real.exit_code == 0
+
+
+def test_the_rendered_finding_puts_the_unreadable_value_above_the_right_cause():
+    """The note and the "Therefore" line have to be about the same conflict."""
+    output = _run(["check"], indexers=_indexers_with_seed_ratio({"a": 1})).output
+    assert "reported a seed criterion that is not a number" in output
+    assert "Therefore: completed torrents hold every active slot" in output
+    assert output.index("not a number") < output.index("Therefore:")

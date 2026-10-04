@@ -216,8 +216,58 @@ def _is_a_torrent_source(indexer: IndexerFacts) -> bool | None:
     return _any_of(tuple(_truth(getattr(indexer, name)) for name in TORRENT_TOGGLES))
 
 
+def _seed_criteria(indexer: IndexerFacts) -> tuple[Fact[Any], ...]:
+    """The criteria that can release a seeder's slot.
+
+    ``season_pack_seed_time`` is collected but deliberately not among them. It
+    bounds season-pack grabs only, so an indexer that sets it and nothing else
+    still seeds every single-episode torrent forever — counting it as a goal
+    would excuse exactly the indexer that can still wedge the queue.
+    """
+    return (indexer.seed_ratio, indexer.seed_time)
+
+
+def _is_a_seed_goal(fact: Fact[Any]) -> bool:
+    """True when this criterion was read as a number the arr could have meant.
+
+    A seed ratio is a ratio and a seed time is a count of minutes, so anything
+    that is not a number is a value we do not have — the same judgement
+    ``_as_limit`` already makes on qBittorrent's side of this question, and the
+    asymmetry between them was a false PASS on the flagship check (#10).
+
+    Three shapes this rejects, each for its own reason:
+
+    - ``Unknown`` and ``Known(None)``: never read, or read back as null. Both
+      already meant "no goal" before this guard existed.
+    - A **numeric string** such as ``"2.0"``. Coercing it would invent a goal
+      the arr never reported, which is this project's cardinal sin wearing a
+      plausible face.
+    - A ``bool``. ``isinstance(True, int)`` is True in Python, so ``bool`` has
+      to be excluded explicitly rather than left to fall out of the ``int``
+      test, which admits it. (Either order works; omitting it does not.)
+
+    What this does *not* decide is range. ``0`` and negative numbers still read
+    as goals, exactly as they did before, because that is a separate question
+    about what Sonarr means by them and nothing here has measured it.
+    """
+    if not is_known(fact) or isinstance(fact.value, bool):
+        return False
+    return isinstance(fact.value, (int, float))
+
+
+def _is_an_unusable_seed_criterion(fact: Fact[Any]) -> bool:
+    """True when a criterion carried a value and that value is not a number.
+
+    Narrower than ``not _is_a_seed_goal(...)``: an absent or null criterion is
+    not unusable, it is *unset*, and Sonarr reports an unset goal exactly that
+    way on every stack measured so far. Only this third class — present,
+    non-null, and not a number — is a payload nobody can read.
+    """
+    return is_known(fact) and fact.value is not None and not _is_a_seed_goal(fact)
+
+
 def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
-    """No usable seed goal — either unreadable, or read and unset.
+    """No usable seed goal — unreadable, unset, or read as something unusable.
 
     Deliberately total rather than three-valued: Sonarr reports "unset" by
     omitting the value, so an Unknown here is the ordinary case, not a gap. See
@@ -227,15 +277,14 @@ def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
     cleared criterion that way, and reading "present but null" as a goal would
     clear the indexer whose goals an operator had explicitly removed.
 
-    ``season_pack_seed_time`` is collected but deliberately not consulted here.
-    It bounds season-pack grabs only, so an indexer that sets it and nothing
-    else still seeds every single-episode torrent forever — counting it as a
-    goal would excuse exactly the indexer that can still wedge the queue.
+    An unusable value lands in this same bucket rather than forcing a SKIP of
+    its own. It cannot FAIL a stack by itself — it is one conjunct of seven, so
+    everything else still has to hold — and of the two ways to be wrong about a
+    payload nobody can read, leaving the wedge check armed is the recoverable
+    one. ``_note_unreadable_seed_criteria`` is what keeps the resulting finding
+    from claiming more than that.
     """
-    for fact in (indexer.seed_ratio, indexer.seed_time):
-        if is_known(fact) and fact.value is not None:
-            return False
-    return True
+    return not any(_is_a_seed_goal(fact) for fact in _seed_criteria(indexer))
 
 
 def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None:
@@ -399,6 +448,86 @@ def _note_arrs_that_reported_no_indexers(
     )
 
 
+def _fed_the_premise_an_unreadable_criterion(indexer: IndexerFacts) -> bool:
+    """True when this indexer's unreadable criterion is what the premise read.
+
+    Two filters beyond "a criterion is not a number", because each of them was a
+    misleading sentence on a real verdict before it existed:
+
+    - ``_lacks_seed_criteria`` — an indexer whose *other* criterion is a real
+      goal never reached the premise, so a junk ``seedRatio`` sitting beside a
+      ``seedTime`` of 2880 is not something any verdict rests on.
+    - ``_is_a_torrent_source(...) is not False`` — a usenet indexer, or one with
+      every toggle off, is excluded from the predicate by design. ``None`` stays
+      in deliberately: an indexer nobody could classify is exactly the one that
+      forces the SKIP this note has to explain.
+    """
+    if not any(_is_an_unusable_seed_criterion(fact) for fact in _seed_criteria(indexer)):
+        return False
+    return _lacks_seed_criteria(indexer) and _is_a_torrent_source(indexer) is not False
+
+
+def _indexers_with_unreadable_seed_criteria(arrs: tuple[ArrInstance, ...]) -> tuple[str, ...]:
+    """Name every indexer whose unreadable criterion fed the seeding premise."""
+    return tuple(
+        f"{arr.kind}[{arr.name}]/{indexer.name}"
+        for arr in arrs
+        for indexer in arr.indexers
+        if _fed_the_premise_an_unreadable_criterion(indexer)
+    )
+
+
+def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ...]) -> Finding:
+    """Say which indexer's seed criterion could not be read, if any could not.
+
+    Arming the check is only half of the fix. "This indexer sets no seed goal"
+    is a true sentence about an absent value and a false one about an unreadable
+    one, and an operator who can see a ratio in Sonarr's UI would read the
+    finding as lintarr being wrong and go re-set a goal that is already set. The
+    premise is a bool and cannot carry the difference, so the detail does.
+
+    Appended rather than assigned: a SKIP arrives already explaining which
+    inputs it could not read, and that sentence is about the verdict while this
+    one is about a value the verdict did not use.
+
+    Only on the seeding finding, and that guard is load-bearing. The starvation
+    conflict does not consult a seed criterion at all, and its "Therefore" line
+    ends "Share limits are not involved, so turning them on will not help" — a
+    sentence about seed criteria printed directly above that is the exact
+    coupling defect ``Finding.conflict`` and the ``_THEREFORE`` keying in
+    ``cli.py`` were written to prevent. A PASS reaches an operator through
+    ``_worst_of``'s starvation fall-through, so this excludes the clean runs too.
+    """
+    if finding.conflict != SEEDING:
+        return finding
+    unreadable = _indexers_with_unreadable_seed_criteria(arrs)
+    if not unreadable:
+        return finding
+    note = (
+        f"{', '.join(unreadable)} reported a seed criterion that is not a number, "
+        "so no goal could be read from it"
+    )
+    return replace(finding, detail=f"{finding.detail}; {note}" if finding.detail else note)
+
+
+def _worst_of(starved: Finding, seeding: Finding, arrs: tuple[ArrInstance, ...]) -> Finding:
+    """Whichever of the two conflicts decides the invariant, annotated.
+
+    Starvation is reported ahead of seeding when both fire: a client that cannot
+    start a first download is the more fundamental fact and the more actionable
+    one, since turning the share limits back on would not help it.
+
+    When neither fires the result is a PASS, which is the one outcome that needs
+    to say whether there was anything to examine — hence the
+    ``_note_arrs_that_reported_no_indexers`` call on that branch alone.
+    """
+    for outcome in (Outcome.FAIL, Outcome.SKIP):
+        for finding in (starved, seeding):
+            if finding.outcome is outcome:
+                return finding
+    return _note_arrs_that_reported_no_indexers(starved, arrs)
+
+
 def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download.
 
@@ -410,12 +539,4 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     queueing = premise("qbt.queueing_enabled", qbt.queueing_enabled)
     starved = _starvation_conflict(qbt, queueing)
     seeding = _seeding_conflict(qbt, arrs, queueing)
-
-    # Starvation is reported ahead of seeding when both fire: a client that
-    # cannot start a first download is the more fundamental fact and the more
-    # actionable one, since turning the share limits back on would not help it.
-    for outcome in (Outcome.FAIL, Outcome.SKIP):
-        for finding in (starved, seeding):
-            if finding.outcome is outcome:
-                return finding
-    return _note_arrs_that_reported_no_indexers(starved, arrs)
+    return _note_unreadable_seed_criteria(_worst_of(starved, seeding, arrs), arrs)
