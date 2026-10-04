@@ -94,6 +94,17 @@ def test_undecodable_body_is_recorded_not_raised():
     """
     transport = _transport(anime_status_body=b'\xff\xfe{"version":"4.0.0"}')
     facts = collect_stack(load_config(ENV), transport=transport)
+    # Restored: these three lines were lost on main when #12, #15 and #20 —
+    # all three editing this file — were merged within ten minutes of each
+    # other. What survived calls collect_stack and asserts nothing, so the
+    # "not raised" half still held and the "is recorded" half did not. It also
+    # left ruff red on main: F841 for the unused `facts`, plus the two missing
+    # blank lines before the next def.
+    assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+
+
 def test_malformed_fields_entry_is_recorded_not_raised():
     """A nameless ``fields`` entry must not abort the whole run.
 
@@ -128,6 +139,8 @@ def test_undecodable_version_text_is_recorded_not_raised():
         "both healthy sonarr instances must still report"
     )
     assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "bad-response")]
+
+
 def test_non_object_fields_payload_is_recorded_not_raised():
     """The silent half of the same defect, and the more dangerous one.
 
