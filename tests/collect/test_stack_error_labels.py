@@ -11,6 +11,9 @@ attempted. A wrong label makes a failed service report an ERROR *and* a
 spurious "declared but never collected" SKIP for the same service, so the
 operator is told both that the read failed and that it never happened.
 
+Compared by projecting to ``(label, kind)``: since #18 a row also carries an
+operator-facing detail, and this file is about the label, not the prose.
+
 Kept out of ``test_stack.py`` deliberately: that file is in flight on two open
 PRs (#12, #15), and a residuals fix should not land a conflict in either.
 """
@@ -63,7 +66,7 @@ def _transport(*, down: frozenset[str] = frozenset()) -> httpx.MockTransport:
 def test_a_failing_qbittorrent_is_recorded_under_its_own_label():
     """``qbittorrent[name]`` — the kind, then the instance name in brackets."""
     facts = collect_stack(load_config(ENV), transport=_transport(down=frozenset({"qbt"})))
-    assert facts.errors == (("qbittorrent[main]", "unreachable"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "unreachable")]
 
 
 def test_the_label_names_the_instance_that_failed_and_not_its_healthy_sibling():
@@ -73,7 +76,7 @@ def test_the_label_names_the_instance_that_failed_and_not_its_healthy_sibling():
     and look at a service that is working.
     """
     facts = collect_stack(load_config(ENV), transport=_transport(down=frozenset({"vpnqbt"})))
-    assert facts.errors == (("qbittorrent[vpn]", "unreachable"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[vpn]", "unreachable")]
     assert [q.name for q in facts.qbits] == ["main"]
 
 
@@ -81,7 +84,7 @@ def test_an_arr_is_recorded_under_its_kind_not_the_word_arr():
     """``sonarr[main]``, because ``run.py`` matches the label's kind against a
     declaration, and nothing ever declares ``arr``."""
     facts = collect_stack(load_config(ENV), transport=_transport(down=frozenset({"sonarr"})))
-    assert facts.errors == (("sonarr[main]", "unreachable"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[main]", "unreachable")]
 
 
 @pytest.mark.parametrize(

@@ -234,4 +234,7 @@ def test_a_ban_reaches_the_error_report_as_banned():
 
     facts = collect_stack(load_config(env), transport=httpx.MockTransport(handle))
     assert facts.qbits == ()
-    assert facts.errors == (("qbittorrent[main]", "banned"),)
+    # Projected to (label, kind): the row also carries the recovery
+    # instruction since #18, and that half is pinned in
+    # tests/test_error_detail_route.py, where rewording it is the point.
+    assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "banned")]
