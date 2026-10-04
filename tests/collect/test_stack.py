@@ -14,7 +14,9 @@ ENV = {
 }
 
 
-def _transport(sonarr_down=False, anime_indexers=None):
+def _transport(
+    sonarr_down=False, anime_indexers=None, anime_status_body=None, qbt_version_response=None
+):
     def handle(request: httpx.Request) -> httpx.Response:
         host, path = request.url.host, request.url.path
         if host == "qbt":
@@ -22,6 +24,8 @@ def _transport(sonarr_down=False, anime_indexers=None):
                 case "/api/v2/auth/login":
                     return httpx.Response(200, text="Ok.")
                 case "/api/v2/app/version":
+                    if qbt_version_response is not None:
+                        return qbt_version_response()
                     return httpx.Response(200, text="v5.2.3")
                 case "/api/v2/app/preferences":
                     return httpx.Response(200, json={"queueing_enabled": True})
@@ -29,6 +33,10 @@ def _transport(sonarr_down=False, anime_indexers=None):
                     return httpx.Response(200, json={})
         if host == "anime" and sonarr_down:
             raise httpx.ConnectError("refused", request=request)
+        if host == "anime" and anime_status_body is not None and path == "/api/v3/system/status":
+            return httpx.Response(
+                200, content=anime_status_body, headers={"content-type": "application/json"}
+            )
         if host == "anime" and anime_indexers is not None and path == "/api/v3/indexer":
             return httpx.Response(200, json=anime_indexers)
         match path:
@@ -68,6 +76,15 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     assert facts.errors == (("sonarr[anime]", "bad-response"),)
 
 
+def test_undecodable_body_is_recorded_not_raised():
+    """A 200 whose bytes are not decodable text must not abort the whole run.
+
+    ``get_json`` caught only ``JSONDecodeError``, so an undecodable body raised
+    ``UnicodeDecodeError`` past collect_stack's ``except ServiceError`` and took
+    every healthy instance's facts down with it.
+    """
+    transport = _transport(anime_status_body=b'\xff\xfe{"version":"4.0.0"}')
+    facts = collect_stack(load_config(ENV), transport=transport)
 def test_malformed_fields_entry_is_recorded_not_raised():
     """A nameless ``fields`` entry must not abort the whole run.
 
@@ -84,6 +101,24 @@ def test_malformed_fields_entry_is_recorded_not_raised():
     assert facts.errors == (("sonarr[anime]", "bad-response"),)
 
 
+def test_undecodable_version_text_is_recorded_not_raised():
+    """The ``get_text`` half of the same promise, and it fails *earlier*.
+
+    qBittorrent is the first instance collect_stack visits, so an unguarded
+    decode failure here destroys both healthy sonarr instances as well as its
+    own. Plain ASCII bytes under a declared ``charset=utf-16`` are enough.
+    """
+    transport = _transport(
+        qbt_version_response=lambda: httpx.Response(
+            200, content=b"v5.2.3", headers={"content-type": "text/plain; charset=utf-16"}
+        )
+    )
+    facts = collect_stack(load_config(ENV), transport=transport)
+    assert facts.qbits == ()
+    assert sorted(a.name for a in facts.arrs) == ["anime", "main"], (
+        "both healthy sonarr instances must still report"
+    )
+    assert facts.errors == (("qbittorrent[main]", "bad-response"),)
 def test_non_object_fields_payload_is_recorded_not_raised():
     """The silent half of the same defect, and the more dangerous one.
 

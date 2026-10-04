@@ -6,7 +6,7 @@ an IP after WebUI\\MaxAuthenticationFailCount failures (default 3, ban 3600s),
 so a retry loop would eventually lock lintarr out of the stack it is checking.
 """
 
-from lintarr.collect.http import ReadOnlyClient, ServiceError
+from lintarr.collect.http import ReadOnlyClient, ServiceError, decode_text
 from lintarr.config import QbtConfig
 from lintarr.facts import read
 from lintarr.models import QbtInstance
@@ -56,7 +56,7 @@ def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
     # response reaching here is always a 2xx — the modern 204 with an empty
     # body, the legacy 200 with body "Ok.", or the legacy 200 with body
     # "Fails.", which is qBittorrent's old-protocol way of saying no.
-    if response.status_code == 200 and response.text.strip() == "Fails.":
+    if response.status_code == 200 and decode_text(response, AUTH_PATH).strip() == "Fails.":
         raise ServiceError("unauthorised", "qBittorrent rejected the credentials")
 
 

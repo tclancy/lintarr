@@ -110,3 +110,77 @@ def test_rejected_mutating_verb_is_not_recorded_in_methods_used():
     with pytest.raises(ReadOnlyViolation):
         c._send("DELETE", "/api/v2/torrents/delete")
     assert c.methods_used == ()
+
+
+def test_undecodable_body_is_bad_response():
+    """A 200 whose bytes are not decodable text is a bad response, not a crash.
+
+    ``response.json()`` raises ``UnicodeDecodeError`` rather than
+    ``JSONDecodeError`` when the body cannot be turned into text at all, and
+    only the latter used to be caught — so this escaped as an unhandled
+    exception past ``collect_stack``'s ``except ServiceError``.
+    """
+    body = b'\xff\xfe{"version":"4.0.0"}'
+
+    def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    with pytest.raises(ServiceError) as e:
+        _client(handler).get_json("/x")
+    assert e.value.kind == "bad-response"
+    # Pin the *cause*, not just the kind. Without this the fixture's potency is
+    # an unstated property of those bytes: give the BOM an even-length payload
+    # (b'\xff\xfex\x00x\x00' decodes to "xx") and the body fails as a plain
+    # JSONDecodeError instead, so both new tests would pass against the narrow
+    # catch they exist to rule out.
+    assert "UnicodeDecodeError" in e.value.detail
+
+
+def test_deeply_nested_body_is_bad_response():
+    """``json.loads`` raises ``RecursionError``, which is not a ``ValueError``.
+
+    Same escape route as the undecodable body, different base class — so it
+    has to be named rather than covered by widening to ``ValueError``.
+    """
+    body = b"[" * 20_000 + b"]" * 20_000
+
+    def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    with pytest.raises(ServiceError) as e:
+        _client(handler).get_json("/x")
+    assert e.value.kind == "bad-response"
+    assert "RecursionError" in e.value.detail
+
+
+def test_declared_charset_with_no_bom_is_bad_response():
+    """``get_text`` has the same hole, and a *plainer* body reaches it.
+
+    ``.text`` decodes with ``errors="replace"``, so an undeclared bad encoding
+    comes back as replacement characters. A **declared** multibyte charset
+    whose BOM is absent raises instead: ``charset=utf-16`` over the ASCII bytes
+    ``b"v5.2.3"`` is a ``UnicodeDecodeError`` before any adapter sees it.
+    """
+
+    def handler(request):
+        return httpx.Response(
+            200, content=b"v5.2.3", headers={"content-type": "text/plain; charset=utf-16"}
+        )
+
+    with pytest.raises(ServiceError) as e:
+        _client(handler).get_text("/api/v2/app/version")
+    assert e.value.kind == "bad-response"
+    assert "UnicodeDecodeError" in e.value.detail
+
+
+def test_undeclared_bad_encoding_still_decodes_to_text():
+    """The control for the test above: this is the case that does NOT raise.
+
+    Without it, the guard looks like it covers every undecodable body, and the
+    next reader has no way to tell which half of the behaviour was measured.
+    """
+
+    def handler(request):
+        return httpx.Response(200, content=b"\xff\xfev5.2.3", headers={})
+
+    assert _client(handler).get_text("/api/v2/app/version")

@@ -86,3 +86,22 @@ def test_password_absent_from_error_message():
     with pytest.raises(ServiceError) as e:
         authenticate(c, CFG)
     assert "pw" not in str(e.value)
+
+
+def test_undecodable_login_body_is_bad_response_not_a_crash():
+    """The legacy-protocol check reads ``.text``, so it has the same hole.
+
+    A 200 login response under a declared ``charset=utf-16`` with no BOM
+    raised ``UnicodeDecodeError`` straight out of ``authenticate`` — past
+    collect_stack's ``except ServiceError`` — before this read went through
+    the shared ``decode_text`` guard.
+    """
+    c = _client(
+        lambda r: httpx.Response(
+            200, content=b"Ok.", headers={"content-type": "text/plain; charset=utf-16"}
+        )
+    )
+    with pytest.raises(ServiceError) as e:
+        authenticate(c, CFG)
+    assert e.value.kind == "bad-response"
+    assert "UnicodeDecodeError" in e.value.detail
