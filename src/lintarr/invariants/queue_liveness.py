@@ -227,7 +227,7 @@ def _seed_criteria(indexer: IndexerFacts) -> tuple[Fact[Any], ...]:
     return (indexer.seed_ratio, indexer.seed_time)
 
 
-def _is_a_seed_goal(fact: Fact[Any]) -> bool:
+def _is_a_readable_seed_criterion(fact: Fact[Any]) -> bool:
     """True when this criterion was read as a number the arr could have meant.
 
     A seed ratio is a ratio and a seed time is a count of minutes, so anything
@@ -246,24 +246,66 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
       to be excluded explicitly rather than left to fall out of the ``int``
       test, which admits it. (Either order works; omitting it does not.)
 
-    What this does *not* decide is range. ``0`` and negative numbers still read
-    as goals, exactly as they did before, because that is a separate question
-    about what Sonarr means by them and nothing here has measured it.
+    This decides *type* and deliberately says nothing about *range*: ``-1`` is a
+    perfectly readable number. ``_is_a_seed_goal`` is what adds the range rule,
+    and keeping the two apart is load-bearing rather than tidy — a negative
+    ratio must read as "no goal set" and must NOT collect
+    ``_note_unreadable_seed_criteria``'s "not a number" note, which would send
+    an operator to re-read a field whose value lintarr understood perfectly.
     """
     if not is_known(fact) or isinstance(fact.value, bool):
         return False
     return isinstance(fact.value, (int, float))
 
 
+def _is_a_seed_goal(fact: Fact[Any]) -> bool:
+    """True when this criterion is a number that can ever release the slot.
+
+    Type first (``_is_a_readable_seed_criterion``), then range. The range rule
+    is ``>= 0`` and it is not a guess: see
+    ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``, measured from
+    Sonarr's and qBittorrent's own source rather than reasoned.
+
+    The short version, for ``seedCriteria.seedRatio`` and ``seedCriteria.seedTime``:
+
+    - Sonarr neither clamps nor interprets the value. ``SeedConfigProvider``
+      assigns ``Ratio = seedCriteria.SeedRatio`` verbatim, and its validator
+      ``AsWarning()``s a non-positive number rather than refusing it — so a
+      negative goal saves, and arrives at the download client intact.
+    - qBittorrent enforces a ratio limit only ``if (shareLimits.ratioLimit >= 0)``
+      and skips the whole check when every limit ``< 0``. **Every** negative is
+      therefore "no limit", not just the ``-1`` sentinel — a ``-5`` seeds
+      forever exactly as ``-1`` does, which is the half the ticket had wrong.
+    - ``0`` stays a goal. ``ratio >= 0`` is satisfied the moment the torrent
+      finishes, so the slot is released immediately. That is an aggressive goal,
+      not an absent one.
+
+    So a negative criterion is an indexer whose torrents never stop seeding,
+    which is the homelab#393 wedge itself — and before this guard it disarmed
+    the check that exists to find it, byte-identically to a real ratio of 2.0.
+    """
+    return _is_a_readable_seed_criterion(fact) and fact.value >= 0
+
+
 def _is_an_unusable_seed_criterion(fact: Fact[Any]) -> bool:
     """True when a criterion carried a value and that value is not a number.
 
-    Narrower than ``not _is_a_seed_goal(...)``: an absent or null criterion is
-    not unusable, it is *unset*, and Sonarr reports an unset goal exactly that
-    way on every stack measured so far. Only this third class — present,
-    non-null, and not a number — is a payload nobody can read.
+    Narrower than ``not _is_a_seed_goal(...)``, in two different ways now:
+
+    - An absent or null criterion is not unusable, it is *unset*, and Sonarr
+      reports an unset goal exactly that way on every stack measured so far.
+    - A **negative** criterion is not unusable either. It is a number, it is
+      the number the operator typed, and its meaning is known and measured:
+      no limit. It must arm the check without claiming nobody could read it,
+      which is why this delegates to ``_is_a_readable_seed_criterion`` rather
+      than to ``_is_a_seed_goal``. Written against the latter, every negative
+      would collect the "not a number" note and send the operator to look at a
+      field lintarr read correctly.
+
+    Only the remaining class — present, non-null, and not a number — is a
+    payload nobody can read.
     """
-    return is_known(fact) and fact.value is not None and not _is_a_seed_goal(fact)
+    return is_known(fact) and fact.value is not None and not _is_a_readable_seed_criterion(fact)
 
 
 def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:

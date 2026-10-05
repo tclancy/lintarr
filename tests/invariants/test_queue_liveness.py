@@ -508,6 +508,113 @@ def test_a_numeric_seed_goal_still_clears_the_indexer(value):
     assert check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact(value)))).outcome is Outcome.PASS
 
 
+#: Seed criteria that are numbers and are still not goals, because every
+#: negative value reaches qBittorrent as "no limit".
+#:
+#: Measured from source, not reasoned — see
+#: ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``. Sonarr passes the
+#: value through verbatim (``SeedConfigProvider``: ``Ratio = seedCriteria.SeedRatio``)
+#: and only ``AsWarning()``s a non-positive one, so it saves and it travels.
+#: qBittorrent then tests ``shareLimits.ratioLimit >= 0`` before enforcing
+#: anything and returns early when every limit is ``< 0``.
+#:
+#: ``-1`` is in here as the sentinel the ticket suspected. ``-5`` and ``-0.5``
+#: are in here because the ticket was *wrong* about them: it read a
+#: negative-but-not-``-1`` as junk closer to an unreadable payload, and the
+#: measurement says a ``-5`` seeds forever in precisely the way a ``-1`` does.
+#: ``-2`` has its own test below, because its reason is a third one again.
+_NO_LIMIT_SEED_VALUES = (-1, -1.0, -5, -0.5)
+
+
+@pytest.mark.parametrize("value", _NO_LIMIT_SEED_VALUES, ids=repr)
+def test_a_negative_seed_ratio_is_not_a_seed_goal(value):
+    """An indexer configured to seed forever is the homelab#393 wedge itself.
+
+    Before the range rule every value here produced a **PASS**, byte-identical
+    to a real ratio of ``2.0`` (#14 measured all four). So the flagship check
+    was disarmed by the one configuration it exists to catch — a false PASS, in
+    the direction this project refuses.
+    """
+    forever = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), forever).outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize("value", _NO_LIMIT_SEED_VALUES, ids=repr)
+def test_a_negative_seed_time_is_not_a_seed_goal(value):
+    """Both criteria go through the same loop, so both need the same range rule.
+
+    Separate from the ratio case for the reason
+    ``test_an_unusable_seed_time_is_not_a_seed_goal`` gives: a rule applied to
+    one field only would leave the other disarming the check. qBittorrent's
+    ``seedingTimeLimit`` is gated on the same ``>= 0`` test as ``ratioLimit``,
+    so the two are not merely symmetrical by taste.
+    """
+    forever = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
+    assert check(wedged_qbt(), forever).outcome is Outcome.FAIL
+    # Same co-located restatement, and for the same reason: with ``seed_ratio``
+    # absent the check is armed whatever ``seed_time`` says, so the assertion
+    # above also passes against an implementation that ignores ``seed_time``.
+    assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
+
+
+def test_a_use_global_seed_ratio_is_not_an_indexer_goal():
+    """``-2`` is not "no limit" — it is "defer to the global setting".
+
+    Its own test because its reason is its own. Sonarr's add path treats ``-2``
+    identically to an unset ratio (``if (ratioLimit != -2 || always)`` omits the
+    parameter), and on the explicit ``setShareLimits`` call it sends ``-2``,
+    which qBittorrent reads as ``DEFAULT_RATIO_LIMIT``. Either way the
+    *indexer* has set no goal of its own, so this premise must stay armed —
+    whether the global setting saves the stack is a different fact, and
+    ``_category_sets_its_own_limit`` is where this file already reads it.
+    """
+    deferring = _arrs(_indexer(seed_ratio=_fact(-2)))
+    assert check(wedged_qbt(), deferring).outcome is Outcome.FAIL
+
+
+@pytest.mark.parametrize("value", [0, 0.0])
+def test_a_zero_seed_ratio_is_still_a_seed_goal(value):
+    """The control that keeps the range rule at ``>= 0`` instead of ``> 0``.
+
+    ``0`` is a real goal and the most aggressive one there is: qBittorrent's
+    ``ratio >= shareLimits.ratioLimit`` is satisfied the moment the torrent
+    finishes, so the slot is released immediately and nothing wedges. Writing
+    the rule as ``> 0`` would FAIL a stack that cannot wedge, and no other test
+    here can tell the two spellings apart.
+
+    Sonarr does warn on it ("Should be greater than zero"), but a warning saves
+    — and the operator's intent is beside the point when the behaviour is
+    measured.
+    """
+    immediate = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), immediate).outcome is Outcome.PASS
+
+
+def test_a_negative_seed_ratio_is_not_reported_as_unreadable():
+    """Armed, yes — but not with the wrong explanation.
+
+    "This value is not a number" is a false sentence about ``-1``. lintarr read
+    it exactly right; it is the *arr* that cannot enforce it. An operator sent
+    that note would go and look at a field whose value was never in doubt,
+    which is the same class of wrong-remedy failure
+    ``test_a_finding_names_the_indexer_whose_seed_criterion_could_not_be_read``
+    exists to prevent, arriving from the other side.
+
+    This is the test that pins ``_is_an_unusable_seed_criterion`` to
+    ``_is_a_readable_seed_criterion`` rather than to ``_is_a_seed_goal``. Both
+    wirings arm the check, so every other assertion in this section passes
+    against either one.
+    """
+    forever = _arrs(_indexer(seed_ratio=_fact(-1)))
+    f = check(wedged_qbt(), forever)
+    assert f.outcome is Outcome.FAIL
+    assert f.detail == ""
+    # The control: an actually-unreadable payload still collects the note, so
+    # the assertion above is not passing because the note was deleted outright.
+    junk = check(wedged_qbt(), _arrs(_indexer(seed_ratio=_fact("not-a-number"))))
+    assert "not a number" in junk.detail
+
+
 def test_a_finding_names_the_indexer_whose_seed_criterion_could_not_be_read():
     """Arming the check is not enough — the remedy has to be the right one.
 
