@@ -1,7 +1,11 @@
 # Scope — deploying lintarr to homelab
 
 **Date:** 2026-10-05 (UTC)
-**Status:** Decided 2026-10-05: shape A (systemd timer on the host). IN PROGRESS: plan task 1.
+**Status:** Decided 2026-10-05: shape A (systemd timer on the host). Task 1 in
+review (lintarr#30). Task 2 done (keys vaulted as `arr_sonarr_api_key` /
+`arr_radarr_api_key`, homelab 8972c77).
+DECISION NEEDED: alert noise (see "Alerting: the blocker") and whether to
+keep the vaulted keys or read them from `config.xml`.
 
 ## Goal
 
@@ -59,9 +63,14 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
    (oneshot, `OnFailure=`, `SuccessExitStatus=143 SIGTERM`, `SyslogIdentifier`,
    `TimeoutStartSec`), `lintarr.timer.j2` (hourly, `Persistent=false`) and
    `lintarr.env.j2`.
-3. homelab vault: add `vault_lintarr_sonarr_api_key` and
-   `vault_lintarr_radarr_api_key`, and reuse the already-vaulted qBittorrent
-   password.
+3. Credentials. Sonarr and Radarr keys are vaulted as `arr_sonarr_api_key` /
+   `arr_radarr_api_key` (homelab 8972c77). The alternative is to read
+   `<ApiKey>` from each app's `config.xml` at play time (`slurp`, `no_log`,
+   gated on `stat`), the way `cleanuparr-config.yml:47-52` does and argues
+   for. A vaulted copy goes stale silently when the app regenerates its key on
+   a rebuild. qBittorrent: the vaulted password plus `qbittorrent_webui_username`
+   (`vars.yml:545`). Both are required, because `config.py` raises on
+   `QBIT_URL` without them, whatever the auth-subnet whitelist does.
 4. homelab tasks: a `Clone or pull lintarr source` git task that triggers
    a `restart lintarr` step, plus rendering the env file and enabling the timer.
    That git task is the **only** thing that runs `restart.sh`. itguy's
@@ -70,7 +79,23 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
    `itguy restart lintarr` will exit 1 by design, because every unit is
    `Type=oneshot` and there's nothing long-running to bounce
    (`deploy.py:_restart_systemd_units`). Deploy, don't restart.
-5. First real run, checked by hand, then `CONTINUATION.md` updated.
+   The catalog only makes `lintarr` a subject when its tag is registered in
+   `apps.yml` (itguy `catalog.py:112-121`), so every task needs
+   `tags: [native-apps, lintarr]`, plus a `lintarr_enabled` gate and a
+   keyless-https `lintarr_repo` var like `sandy_repo` (`vars.yml:908`).
+   The handler goes after `reload user systemd` and copies the
+   `XDG_RUNTIME_DIR` / `DBUS_SESSION_BUS_ADDRESS` env from `resync
+   parsons-pulse`. Env file: `~/.config/lintarr/environment` at 0600 in a
+   0700 dir, loaded with `EnvironmentFile=`, never `Environment=`. Changes to
+   the env file or unit alone don't run `restart.sh`; the next tick picks
+   them up. uv and linger come from sandy-gated tasks, which already ran on
+   the box but wouldn't on a rebuild that deploys only lintarr.
+   Correction: systemd subjects never run `pre_deploy.py` (itguy
+   `cli.py:369-375`). The conclusion, that only Ansible pulls, still holds.
+5. Timer: `OnCalendar=` must be a shape that
+   `tests/test_unit_failure_alert_escalation.py:700-714` parses, e.g.
+   `*-*-* *:17:00`. A literal `hourly` raises.
+6. First real run, checked by hand, then `CONTINUATION.md` updated.
 
 ## Out of scope
 
@@ -79,19 +104,50 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
 - Any write access to the arr stack. The read-only guarantee stands
   (`tests/test_readonly_guarantee.py`)
 
+## Alerting: the blocker (adversarial review, 2026-10-05)
+
+The original claim, that streak dedup stops a persistent failure paging every
+tick, was **wrong for an hourly unit**:
+
+- `unit_failure_alert_min_interval: 3600` (`vars.yml:118`) is exactly
+  lintarr's cadence, so a persistent FAIL pushes every 1–2 hours.
+- From failure #3 every push is `urgent` and copied to the `claude` topic,
+  which is Tom's phone (`vars.yml:122,135`). That includes overnight.
+- The 8-day streak window re-arms on every failure, so it never resets.
+- The wedge axiom is still unvalidated against a live client
+  (`queue_liveness.py:31-38`). A false-positive FAIL would page urgent
+  indefinitely.
+
+Options:
+
+- **(a)** A per-unit `min_interval` override in the shared alert script
+  (homelab).
+- **(b)** lintarr edge-triggers: persist the last run's outcome and exit
+  non-zero only on a transition into FAIL/ERROR. This is the spec's own model
+  ("edge-triggered with dedup", Runtime section), and it's back-end code with
+  unit tests.
+- **(c)** Run less often. That only dilutes the problem.
+
+Must be settled before task 4 (first deploy).
+
 ## Risks / open questions
 
-- **Exit 3 (SKIP) under `--strict` pages.** A run that can't reach one service
-  exits non-zero. That's probably right, because the tool's whole point is "a
-  silent green on an unchecked service is the worst outcome". But if it's
-  noisy, it's a one-flag change (`--no-strict`).
+- **Exit 3 under `--strict` pages, for SKIP and for N/A** (`outcomes.py`
+  `exit_code`; N/A comes from `run.py:102-110`). A run that can't reach one
+  service exits non-zero. That's intended ("a silent green on an unchecked
+  service is the worst outcome"), but combined with the alerting blocker any
+  structurally permanent SKIP/N/A becomes a permanent urgent page.
 - **qBittorrent ban.** One bad password per hour stays well under qBittorrent's
-  fail count, and lintarr makes exactly one login attempt per run. The
-  host-to-bridge whitelist (homelab#197) may make credentials moot anyway.
-  Confirm on the first run.
-- **Acceptance fixture.** homelab#393's before/after table must already be a
-  test fixture before anyone trusts a PASS in production. Check that it is
-  before step 5.
+  fail count, and lintarr makes exactly one login attempt per run. Host
+  callers come from the bridge gateway, which the #197 whitelist covers. If
+  the whitelist ever broke, a ban would also lock out Ansible's
+  qbt-preferences tasks and `itguy arr delete`.
+- **itguy discovery fallback.** If `systemctl --user list-unit-files`/`show`
+  fails, itguy treats `lintarr.service` as a daemon (`units.py:154-160`) and
+  may report a false restart failure on a good deploy. Rare.
+- ~~Acceptance fixture~~: already present. `tests/fixtures/homelab.py`
+  (wedged + repaired) is used by `tests/invariants/test_queue_liveness.py`
+  and `tests/test_check_cli.py:82-99`.
 
 ## Plan
 
@@ -99,9 +155,10 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
 |---|---|---|---|
 | 0 | Tom picks A or B | — | **done**: A |
 | 1 | `restart.sh` + README "Deploying" section | lintarr | PR merged |
-| 2 | Vault the two arr API keys | homelab | `ansible-vault view` shows them |
+| 2 | Vault the two arr API keys | homelab | **done** (8972c77). May be superseded by `config.xml` reads |
+| 2b | Fix alert noise: option (a), (b) or (c) above | lintarr or homelab | DECISION NEEDED |
 | 3 | Service, timer and env templates + tasks + tests (match the existing `test_syslog_identifiers.py`-style guards) | homelab | PR merged, `itguy list` shows `lintarr` after `git pull` on the box |
-| 4 | `itguy deploy lintarr`, then `systemctl --user start lintarr.service` once by hand | homelab | `itguy logs lintarr --level info` shows a full `check` run |
+| 4 | (after 2b) `itguy deploy lintarr`, then `systemctl --user start lintarr.service` once by hand | homelab | `itguy logs lintarr --level info` shows a full `check` run |
 | 5 | Prove the alert path: point one URL at a dead port, see the ntfy, revert | homelab | ntfy received, then green again |
 | 6 | Refresh `CONTINUATION.md` | lintarr | merged |
 
