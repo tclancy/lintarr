@@ -423,6 +423,76 @@ def test_a_findings_instance_is_never_empty(facts, declared):
         assert finding.invariant
 
 
+@_SETTINGS
+@given(STACK_FACTS, DECLARED)
+def test_a_findings_error_kind_is_its_own_rows_kind_and_empty_otherwise(facts, declared):
+    """The published kind has to name *this* finding's row, and only an error's.
+
+    ``check --json`` publishes ``Finding.error_kind`` so a consumer never parses
+    prose for a kind (#25), and that is only worth anything if the value
+    corresponds to the service the finding is about. Asserting the value is a
+    bare ``ErrorKind`` does not establish that — a hardcoded kind and a kind
+    read off ``facts.errors[0]`` are both bare ``ErrorKind`` values, and both
+    survived the full suite when membership was all that was asserted.
+
+    The second half is the sentinel's contract: a consumer reading a non-empty
+    ``kind`` as "this is a collect error I can match on" is relying on the two
+    sets being complementary, which no single-scenario test states. Written as
+    ``bool(...) is (...)`` so the first invariant finding to carry
+    ``Outcome.ERROR`` fails here rather than silently publishing ``""`` to that
+    consumer.
+
+    Paired by zip against ``facts.errors`` rather than by label lookup, because
+    two drawn rows may share a label; ``instance == row.label`` is asserted
+    alongside so a reordering of ``run_checks``' error comprehension fails
+    loudly instead of making the kind assertion compare the wrong pair.
+    """
+    findings = run_checks(facts, declared=declared)
+    errors = [f for f in findings if f.outcome is Outcome.ERROR]
+    assert len(errors) == len(facts.errors), (
+        f"{len(facts.errors)} error rows produced {len(errors)} ERROR findings"
+    )
+    for finding, row in zip(errors, facts.errors, strict=True):
+        assert finding.instance == row.label
+        assert finding.error_kind == row.kind
+    for finding in findings:
+        assert bool(finding.error_kind) is (finding.outcome is Outcome.ERROR), (
+            f"{finding.invariant} is {finding.outcome} with error_kind={finding.error_kind!r}"
+        )
+
+
+def test_a_snapshot_really_carries_two_error_rows_of_differing_kinds():
+    """Reachability control for the property above, on the case that discriminates.
+
+    The pairing assertion only tells a row's own kind from the first row's kind
+    when a snapshot holds two rows whose kinds differ — on one row, or on two
+    rows that happen to agree, the two readings are identical and the property
+    passes over the bug. ``STACK_FACTS`` draws up to two rows from four kinds so
+    it reaches that shape, but "reaches it sometimes" is not something the
+    property can assert about itself, and a narrowed draw would remove the case
+    silently. Hand-built here, in the same spirit as the control below: this is
+    the snapshot the property needs to exist, proved to discriminate by reading
+    the two findings back and showing they do not agree.
+    """
+    facts = StackFacts(
+        qbits=(),
+        arrs=(),
+        errors=(
+            ErrorRow("sonarr[x]", "unreachable", "connection refused"),
+            ErrorRow("qbittorrent[main]", "banned", "403 from the Web API"),
+        ),
+    )
+    errors = [
+        f
+        for f in run_checks(facts, declared=frozenset({"sonarr", "qbittorrent"}))
+        if f.outcome is Outcome.ERROR
+    ]
+    assert [f.error_kind for f in errors] == ["unreachable", "banned"]
+    assert errors[0].error_kind != errors[1].error_kind, (
+        "the control's own rows agree, so it would not discriminate"
+    )
+
+
 def test_a_snapshot_can_produce_findings_of_every_shape_the_property_loops_over():
     """Reachability control for the property above, which loops over findings.
 

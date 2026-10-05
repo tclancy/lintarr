@@ -220,6 +220,13 @@ def _finding_to_dict(finding) -> dict[str, Any]:
         # is the machine-readable form of the same defect the "Therefore" line
         # above had.
         "conflict": finding.conflict,
+        # Spelled `kind` here and `error_kind` on the dataclass, deliberately.
+        # `dump-facts --json` already publishes an error row's kind under `kind`,
+        # and two JSON surfaces disagreeing about the name of one concept is worse
+        # than a field whose attribute reads differently — while on a `Finding`,
+        # which is mostly not an error, a bare `kind` would read as the finding's
+        # own kind (#25).
+        "kind": finding.error_kind,
         "detail": finding.detail,
         "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
     }
@@ -281,6 +288,12 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     — exits 2 having printed a usage error and no payload at all. Both mean
     "lintarr could not look", which is why they share a code; a run that
     emitted no JSON is the one that never got as far as checking.
+
+    A finding's ``kind`` carries the ``ErrorKind`` of the collect error behind
+    it and is empty on every other finding, so a non-empty ``kind`` is how a
+    consumer recognises "this service could not be read" without parsing
+    ``detail`` — which leads with the kind and then carries operator prose, and
+    must not be parsed for it.
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))

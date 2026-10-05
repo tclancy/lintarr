@@ -49,6 +49,23 @@ class Finding:
     #: explaining a finding downstream must key on this too, or it will state a
     #: cause that does not follow from the premises it just listed.
     conflict: str = ""
+    #: For a ``collect`` ERROR, the ``ErrorKind`` of the row behind it, published
+    #: so a consumer never has to parse prose for it (#25). ``detail`` leads with
+    #: the kind and then carries operator prose, and ``tests/strategies``
+    #: deliberately generates prose *ending* in another kind's name, so parsing it
+    #: is not merely awkward — the suite is built to make it wrong.
+    #:
+    #: ``""`` on every other finding, matching ``conflict`` above: a schema whose
+    #: keys come and go is harder to consume than one whose values do, and the
+    #: empty string is not an ``ErrorKind``, which makes "not applicable"
+    #: unmistakable.
+    #:
+    #: Annotated ``str`` rather than ``ErrorKind``, which is the narrower type
+    #: ``ErrorRow.kind`` carries — deliberately, and for the sentinel rather than
+    #: for convenience: the honest annotation would be ``ErrorKind | Literal[""]``
+    #: and would make this module import from ``collect.http``, which is the
+    #: layering ``models`` already declines under ``TYPE_CHECKING``.
+    error_kind: str = ""
 
 
 def worst(outcomes: Iterable[Outcome]) -> Outcome:
