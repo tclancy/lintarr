@@ -86,16 +86,18 @@ def test_wedged_config_exits_one_and_names_the_settings():
     assert "qbt.no_global_ratio" in result.output
 
 
+REPAIRED_PREFS = WEDGED_PREFS | {
+    "max_active_downloads": 6,
+    "max_active_torrents": 10,
+    "dont_count_slow_torrents": True,
+    "max_ratio_enabled": True,
+    "max_ratio": 1.5,
+    "max_seeding_time_enabled": True,
+}
+
+
 def test_repaired_config_exits_zero():
-    repaired = WEDGED_PREFS | {
-        "max_active_downloads": 6,
-        "max_active_torrents": 10,
-        "dont_count_slow_torrents": True,
-        "max_ratio_enabled": True,
-        "max_ratio": 1.5,
-        "max_seeding_time_enabled": True,
-    }
-    result = _run(["check"], prefs=repaired)
+    result = _run(["check"], prefs=REPAIRED_PREFS)
     assert result.exit_code == 0
 
 
@@ -331,3 +333,63 @@ def test_the_rendered_finding_puts_the_unreadable_value_above_the_right_cause():
     assert "reported a seed criterion that is not a number" in output
     assert "Therefore: completed torrents hold every active slot" in output
     assert output.index("not a number") < output.index("Therefore:")
+
+
+# --- edge-triggered: check --state-file ----------------------------------
+
+
+def _edge(tmp_path, *extra, prefs=WEDGED_PREFS):
+    return _run(["check", "--state-file", str(tmp_path / "state.json"), *extra], prefs=prefs)
+
+
+def test_edge_first_run_pages_and_records_the_problem(tmp_path):
+    result = _edge(tmp_path)
+    assert result.exit_code == 1
+    assert (tmp_path / "state.json").exists()
+
+
+def test_edge_repeat_run_is_quiet_but_still_reports_the_finding(tmp_path):
+    _edge(tmp_path)
+    result = _edge(tmp_path)
+    assert result.exit_code == 0
+    # Quiet means "don't page", not "don't say": the journal still shows it.
+    assert "FAIL" in result.stdout
+    assert "queue-liveness" in result.stdout
+    assert "0 new" in result.stderr
+
+
+def test_edge_repaired_then_rewedged_pages_again(tmp_path):
+    assert _edge(tmp_path).exit_code == 1
+    assert _edge(tmp_path, prefs=REPAIRED_PREFS).exit_code == 0
+    assert _edge(tmp_path).exit_code == 1
+
+
+def test_edge_corrupt_state_warns_and_pages(tmp_path):
+    (tmp_path / "state.json").write_text("not json")
+    result = _edge(tmp_path)
+    assert result.exit_code == 1
+    assert "state" in result.stderr and "ignored" in result.stderr
+    # And the next run is back to normal: the state was rewritten.
+    assert _edge(tmp_path).exit_code == 0
+
+
+def test_edge_unwritable_state_exits_two_without_a_traceback(tmp_path):
+    (tmp_path / "blocker").write_text("a file where a directory must go")
+    result = _run(["check", "--state-file", str(tmp_path / "blocker" / "state.json")])
+    assert result.exit_code == 2
+    assert "could not save" in result.stderr
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_edge_json_marks_which_findings_are_new(tmp_path):
+    first = json.loads(_edge(tmp_path, "--json").stdout)
+    second = json.loads(_edge(tmp_path, "--json").stdout)
+    assert [f["new"] for f in first["findings"]] == [True]
+    assert [f["new"] for f in second["findings"]] == [False]
+    assert (first["exit_code"], second["exit_code"]) == (1, 0)
+
+
+def test_level_mode_json_has_no_new_field():
+    # Without a state file there is no "previous", so "new" would be a lie.
+    payload = json.loads(_run(["check", "--json"]).stdout)
+    assert all("new" not in f for f in payload["findings"])
