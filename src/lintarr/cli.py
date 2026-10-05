@@ -288,6 +288,12 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     — exits 2 having printed a usage error and no payload at all. Both mean
     "lintarr could not look", which is why they share a code; a run that
     emitted no JSON is the one that never got as far as checking.
+
+    A finding's ``kind`` carries the ``ErrorKind`` of the collect error behind
+    it and is empty on every other finding, so a non-empty ``kind`` is how a
+    consumer recognises "this service could not be read" without parsing
+    ``detail`` — which leads with the kind and then carries operator prose, and
+    must not be parsed for it.
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))

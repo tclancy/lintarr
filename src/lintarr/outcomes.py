@@ -59,6 +59,12 @@ class Finding:
     #: keys come and go is harder to consume than one whose values do, and the
     #: empty string is not an ``ErrorKind``, which makes "not applicable"
     #: unmistakable.
+    #:
+    #: Annotated ``str`` rather than ``ErrorKind``, which is the narrower type
+    #: ``ErrorRow.kind`` carries — deliberately, and for the sentinel rather than
+    #: for convenience: the honest annotation would be ``ErrorKind | Literal[""]``
+    #: and would make this module import from ``collect.http``, which is the
+    #: layering ``models`` already declines under ``TYPE_CHECKING``.
     error_kind: str = ""
 
 

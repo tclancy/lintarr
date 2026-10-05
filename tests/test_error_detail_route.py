@@ -287,9 +287,18 @@ def test_attempted_still_recovers_the_service_kind_from_the_label():
 
 
 @pytest.mark.parametrize(
-    "down", [{"qbt_down": True}, {"sonarr_down": True}], ids=["qbittorrent-arm", "arr-arm"]
+    ("down", "expected"),
+    [
+        ({"qbt_down": True}, {"qbittorrent[main]": "unauthorised"}),
+        ({"sonarr_down": True}, {"sonarr[main]": "unreachable"}),
+        (
+            {"qbt_down": True, "sonarr_down": True},
+            {"qbittorrent[main]": "unauthorised", "sonarr[main]": "unreachable"},
+        ),
+    ],
+    ids=["qbittorrent-arm", "arr-arm", "both-arms"],
 )
-def test_check_json_publishes_the_error_kind_as_its_own_field(down):
+def test_check_json_publishes_the_error_kind_as_its_own_field(down, expected):
     """``check --json`` has to be readable without parsing prose (#25).
 
     The sibling surface of ``test_every_kind_the_json_emits_is_a_bare_error_kind_value``
@@ -297,12 +306,23 @@ def test_check_json_publishes_the_error_kind_as_its_own_field(down):
     ``detail`` — and since #18 that string is ``kind``, a full stop, then operator
     prose, so the kind was there but only recoverable by parsing. Both arms,
     because each has its own ``except ServiceError``.
+
+    Membership in ``KINDS`` is #25's stated criterion and is asserted first, but
+    membership is *not* correspondence and on its own it is a weak guard: a
+    hardcoded kind and a kind read off the wrong row both publish a real
+    ``ErrorKind``. Both survived the whole suite against a membership-only
+    assertion. So the instance-to-kind mapping is asserted too, and the
+    ``both-arms`` case exists for the second of those: one service down cannot
+    tell "this row's kind" from "the first row's kind", because they are the
+    same row. Compared as sorted pairs rather than a dict so a duplicated
+    instance fails on the length instead of collapsing into one key.
     """
     payload = json.loads(_run(["check", "--json"], **down).output)
     errors = [f for f in payload["findings"] if f["outcome"] == "ERROR"]
     assert errors, "no ERROR finding emitted — this guard would be vacuous"
     for finding in errors:
         assert finding["kind"] in KINDS, f"{finding['kind']!r} is not one of {sorted(KINDS)}"
+    assert sorted((f["instance"], f["kind"]) for f in errors) == sorted(expected.items())
 
 
 def test_the_published_kind_is_not_recoverable_from_the_detail_by_parsing():
