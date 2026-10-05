@@ -22,12 +22,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UNIT=lintarr.service
 
 # Non-interactive SSH shells don't source the login profile, so uv's install
-# dir may be missing from PATH. Appended, not prepended: a uv already on PATH
-# wins, and these are only the fallback.
+# dir may be missing from PATH. Prepended, as in the siblings: the unit runs
+# ~/.local/bin/uv by absolute path, and a manual run should sync with that
+# same uv rather than whichever one a distro put earlier on PATH.
 for bin_dir in "$HOME/.local/bin" "$HOME/.cargo/bin"; do
     case ":$PATH:" in
         *":$bin_dir:"*) ;;
-        *) [ -d "$bin_dir" ] && PATH="$PATH:$bin_dir" ;;
+        *) [ -d "$bin_dir" ] && PATH="$bin_dir:$PATH" ;;
     esac
 done
 export PATH
@@ -42,11 +43,18 @@ cd "$SCRIPT_DIR"
 echo "Syncing dependencies..."
 # --frozen: run locked versions, never rewrite the tracked uv.lock (a dirty
 # lock breaks the Ansible git task's idempotency — see sandy/restart.sh).
-# --no-dev: the box runs checks, not the test suite.
-uv sync --frozen --no-dev --quiet
+# No --no-dev: the unit's `uv run --frozen` syncs the default groups, so
+# stripping dev here would only have the next tick reinstall it, fetching
+# packages inside a run that should be pure checking.
+uv sync --frozen --quiet
 
 # On a first deploy Ansible may pull the source before it installs the unit.
-if ! systemctl --user cat "$UNIT" >/dev/null 2>&1; then
+# LoadState, not `systemctl --user cat`: cat exits non-zero for "no such unit"
+# and for "no user bus" alike, so a run without XDG_RUNTIME_DIR would report
+# "not installed" and exit 0. `show` fails outright on a bus error and set -e
+# stops the deploy there.
+load_state="$(systemctl --user show -p LoadState --value "$UNIT")"
+if [ "$load_state" = not-found ]; then
     echo "$UNIT not installed yet — the timer will run the first check once Ansible installs it."
     exit 0
 fi

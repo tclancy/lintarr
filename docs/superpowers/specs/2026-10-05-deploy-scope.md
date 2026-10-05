@@ -51,7 +51,10 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
 
 ## In scope (shape A)
 
-1. lintarr repo: add `restart.sh` (`uv sync --frozen`, then restart the timer).
+1. lintarr repo: add `restart.sh` (`uv sync --frozen`, then
+   `systemctl --user start --no-block lintarr.service`, never `restart`).
+   Keep `uv sync` and the unit's `uv run` on the same dependency groups, or
+   every tick re-syncs.
 2. homelab repo, `roles/native-apps/templates/`: add `lintarr.service.j2`
    (oneshot, `OnFailure=`, `SuccessExitStatus=143 SIGTERM`, `SyslogIdentifier`,
    `TimeoutStartSec`), `lintarr.timer.j2` (hourly, `Persistent=false`) and
