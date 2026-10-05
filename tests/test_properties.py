@@ -14,6 +14,7 @@ report green while proving nothing. The controls assert the states being
 quantified over are actually produced.
 """
 
+import typing
 from dataclasses import replace
 from itertools import combinations
 
@@ -21,10 +22,11 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
 from lintarr.invariants import queue_liveness
 from lintarr.invariants.queue_liveness import NEEDS, check
-from lintarr.models import StackFacts
+from lintarr.models import ErrorRow, StackFacts
 from lintarr.outcomes import Finding, Outcome
 from lintarr.run import run_checks
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
@@ -32,6 +34,8 @@ from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
 from tests.strategies import (
     ARR_INSTANCES,
     DECLARED,
+    ERROR_KINDS,
+    ERRORS,
     MALFORMED_CATEGORY_MAPS,
     MALFORMED_SCALARS,
     READ_AT,
@@ -427,6 +431,37 @@ def test_a_snapshot_can_produce_findings_of_every_shape_the_property_loops_over(
     finding from each path, and a generated snapshot cannot be relied on to
     carry all three at once.
     """
-    facts = StackFacts(qbits=(wedged_qbt(),), arrs=NO_GOALS, errors=(("sonarr[x]", "unreachable"),))
+    facts = StackFacts(
+        qbits=(wedged_qbt(),),
+        arrs=NO_GOALS,
+        errors=(ErrorRow("sonarr[x]", "unreachable", "connection refused"),),
+    )
     findings = run_checks(facts, declared=frozenset({"radarr"}))
     assert len(findings) >= 3, [f.invariant for f in findings]
+
+
+def test_the_error_strategy_draws_every_kind_the_alias_admits():
+    """Breadth control for ``ERRORS``, which feeds every property above.
+
+    A narrowed generator is the one failure that makes all four properties
+    *more* likely to pass: no assertion mentions a kind, so dropping one from
+    the draw removes cases silently and the suite stays green over whatever is
+    left. The generator therefore reads its values off ``ErrorKind`` rather
+    than listing them, and this pins that it did — both that the derivation is
+    non-empty and that it matches the alias, since
+    ``typing.get_args`` returns ``()`` rather than raising on a shape it does
+    not recognise, and ``sampled_from(())`` would then make the properties
+    draw no error rows at all.
+    """
+    assert frozenset(ERROR_KINDS) == frozenset(typing.get_args(ErrorKind.__value__))
+    assert len(ERROR_KINDS) >= 4, "the alias has lost kinds, or the derivation broke"
+
+    drawn = set()
+
+    @settings(max_examples=200, deadline=None, suppress_health_check=list(HealthCheck))
+    @given(ERRORS)
+    def draw(row):
+        drawn.add(row.kind)
+
+    draw()
+    assert drawn == frozenset(ERROR_KINDS), f"kinds never drawn: {frozenset(ERROR_KINDS) - drawn}"

@@ -1,3 +1,12 @@
+"""``collect_stack``'s per-instance error recording.
+
+Error rows are compared by projecting to ``(label, kind)`` rather than whole:
+since #18 a row also carries an operator-facing explanation, and a test that
+pinned that prose would turn red every time the message was improved. ``kind``
+is the half with a contract; ``detail`` is pinned in
+``tests/test_error_detail_route.py``, where rewording it is the point.
+"""
+
 import httpx
 
 from lintarr.collect.stack import collect_stack
@@ -59,7 +68,7 @@ def test_collects_every_configured_instance():
 def test_unreachable_instance_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(sonarr_down=True))
     assert [a.name for a in facts.arrs] == ["main"]
-    assert facts.errors == (("sonarr[anime]", "unreachable"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "unreachable")]
 
 
 def test_unexpected_json_shape_is_recorded_not_raised():
@@ -73,7 +82,7 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=transport)
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
-    assert facts.errors == (("sonarr[anime]", "bad-response"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
 
 
 def test_undecodable_body_is_recorded_not_raised():
@@ -85,6 +94,17 @@ def test_undecodable_body_is_recorded_not_raised():
     """
     transport = _transport(anime_status_body=b'\xff\xfe{"version":"4.0.0"}')
     facts = collect_stack(load_config(ENV), transport=transport)
+    # Restored: these three lines were lost on main when #12, #15 and #20 —
+    # all three editing this file — were merged within ten minutes of each
+    # other. What survived calls collect_stack and asserts nothing, so the
+    # "not raised" half still held and the "is recorded" half did not. It also
+    # left ruff red on main: F841 for the unused `facts`, plus the two missing
+    # blank lines before the next def.
+    assert [a.name for a in facts.arrs] == ["main"]
+    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+
+
 def test_malformed_fields_entry_is_recorded_not_raised():
     """A nameless ``fields`` entry must not abort the whole run.
 
@@ -98,7 +118,7 @@ def test_malformed_fields_entry_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
-    assert facts.errors == (("sonarr[anime]", "bad-response"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
 
 
 def test_undecodable_version_text_is_recorded_not_raised():
@@ -118,7 +138,9 @@ def test_undecodable_version_text_is_recorded_not_raised():
     assert sorted(a.name for a in facts.arrs) == ["anime", "main"], (
         "both healthy sonarr instances must still report"
     )
-    assert facts.errors == (("qbittorrent[main]", "bad-response"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "bad-response")]
+
+
 def test_non_object_fields_payload_is_recorded_not_raised():
     """The silent half of the same defect, and the more dangerous one.
 
@@ -132,4 +154,4 @@ def test_non_object_fields_payload_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.qbits, "the healthy qBittorrent instance must still report"
-    assert facts.errors == (("sonarr[anime]", "bad-response"),)
+    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]

@@ -8,13 +8,15 @@ limit that arrives as a string, a category map that is a list. Each of those
 has at some point reached a predicate that assumed otherwise.
 """
 
+import typing
 from datetime import UTC, datetime
 from typing import Any
 
 from hypothesis import strategies as st
 
+from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
-from lintarr.models import ArrInstance, IndexerFacts, QbtInstance, StackFacts
+from lintarr.models import ArrInstance, ErrorRow, IndexerFacts, QbtInstance, StackFacts
 
 #: Fixed so a shrunk counterexample is reproducible; the predicates under test
 #: never read it.
@@ -165,11 +167,23 @@ ARR_INSTANCES = st.builds(
     indexers=st.lists(INDEXERS, max_size=3).map(tuple),
 )
 
-#: Error rows as ``collect_stack`` writes them: ``kind[name]`` and an
-#: ``ErrorKind``. ``run.py`` splits the label on ``[`` to recover the kind, so
-#: a label without one is included on purpose.
-ERRORS = st.tuples(
-    st.one_of(
+#: Every value the ``ErrorKind`` alias admits, read off the alias rather than
+#: retyped. A hand-written list here cannot see the alias gain a kind, so the
+#: strategy would keep generating the old breadth and the property would keep
+#: passing over a value nothing had ever drawn.
+ERROR_KINDS = sorted(typing.get_args(ErrorKind.__value__))
+
+#: Error rows as ``collect_stack`` writes them: ``kind[name]``, an
+#: ``ErrorKind``, and the operator-facing detail added by #18. ``run.py``
+#: splits the label on ``[`` to recover the kind, so a label without one is
+#: included on purpose.
+#:
+#: Half the details drawn end in *another* kind's name. Nothing may recover a
+#: kind by reading prose (#18's third criterion), and a detail that never
+#: mentions one cannot catch an implementation that tries.
+ERRORS = st.builds(
+    ErrorRow,
+    label=st.one_of(
         st.builds(
             "{}[{}]".format,
             st.sampled_from(["sonarr", "radarr", "qbittorrent"]),
@@ -177,7 +191,11 @@ ERRORS = st.tuples(
         ),
         st.text(min_size=1, max_size=6),
     ),
-    st.sampled_from(["unreachable", "unauthorised", "banned", "bad-response"]),
+    kind=st.sampled_from(ERROR_KINDS),
+    detail=st.one_of(
+        st.text(max_size=12),
+        st.builds("{} looked {}".format, st.text(max_size=6), st.sampled_from(ERROR_KINDS)),
+    ),
 )
 
 DECLARED = st.frozensets(st.sampled_from(["qbittorrent", "sonarr", "radarr"]), max_size=3)

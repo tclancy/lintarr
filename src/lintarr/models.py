@@ -6,9 +6,12 @@ after invariants exist is expensive.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from lintarr.facts import Fact
+
+if TYPE_CHECKING:
+    from lintarr.collect.http import ErrorKind
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +56,35 @@ class ArrInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class ErrorRow:
+    """One service that could not be read, and why.
+
+    This was a bare ``(label, kind)`` tuple until #18. The kind is what every
+    other layer matches on and the only half that reached the operator; the
+    detail is where the collect layer says which path failed, which httpx
+    exception was raised, or — on qBittorrent's 403 — that an IP ban may be
+    active and how to clear it. Forty words of that were being written for a
+    traceback nobody sees.
+
+    ``ErrorKind`` is imported under ``TYPE_CHECKING`` only. There is no import
+    cycle to dodge — ``collect.http`` imports nothing from this package — but
+    this module is the inner layer and a runtime edge from it out to an HTTP
+    adapter is a direction of dependency worth not creating for an annotation.
+    An earlier draft of this docstring claimed a cycle; there isn't one.
+
+    The repo declares no type checker, so the narrow annotation is documentation
+    today rather than a gate. ``tests/test_error_detail_route.py`` asserts
+    membership against the alias at runtime instead, which is also what catches
+    prose being concatenated into the kind.
+    """
+
+    label: str
+    kind: "ErrorKind"
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
 class StackFacts:
     qbits: tuple[QbtInstance, ...]
     arrs: tuple[ArrInstance, ...]
-    errors: tuple[tuple[str, str], ...] = ()
+    errors: tuple[ErrorRow, ...] = ()

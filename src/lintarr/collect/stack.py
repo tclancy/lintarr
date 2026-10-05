@@ -10,7 +10,7 @@ from lintarr.collect.arr import collect_arr
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.collect.qbittorrent import AUTH_PATH, collect_qbt
 from lintarr.config import LintarrConfig
-from lintarr.models import ArrInstance, QbtInstance, StackFacts
+from lintarr.models import ArrInstance, ErrorRow, QbtInstance, StackFacts
 
 
 def collect_stack(
@@ -18,7 +18,7 @@ def collect_stack(
 ) -> StackFacts:
     qbits: list[QbtInstance] = []
     arrs: list[ArrInstance] = []
-    errors: list[tuple[str, str]] = []
+    errors: list[ErrorRow] = []
 
     for qbt in cfg.qbits:
         label = f"qbittorrent[{qbt.name}]"
@@ -26,7 +26,7 @@ def collect_stack(
             with ReadOnlyClient(qbt.url, transport=transport, auth_path=AUTH_PATH) as client:
                 qbits.append(collect_qbt(client, qbt))
         except ServiceError as exc:
-            errors.append((label, exc.kind))
+            errors.append(ErrorRow(label, exc.kind, exc.detail))
 
     for arr in cfg.arrs:
         label = f"{arr.kind}[{arr.name}]"
@@ -36,6 +36,6 @@ def collect_stack(
             ) as client:
                 arrs.append(collect_arr(client, arr))
         except ServiceError as exc:
-            errors.append((label, exc.kind))
+            errors.append(ErrorRow(label, exc.kind, exc.detail))
 
     return StackFacts(qbits=tuple(qbits), arrs=tuple(arrs), errors=tuple(errors))
