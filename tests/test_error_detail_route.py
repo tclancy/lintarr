@@ -24,7 +24,7 @@ import httpx
 import pytest
 from click.testing import CliRunner
 
-from lintarr.cli import cli
+from lintarr.cli import _finding_to_dict, cli
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
@@ -281,3 +281,90 @@ def test_attempted_still_recovers_the_service_kind_from_the_label():
     assert [(f.outcome, f.instance) for f in findings if f.instance.startswith("sonarr")] == [
         (Outcome.ERROR, "sonarr[main]")
     ]
+
+
+# ------------------------------------------------- check --json: the kind field
+
+
+@pytest.mark.parametrize(
+    "down", [{"qbt_down": True}, {"sonarr_down": True}], ids=["qbittorrent-arm", "arr-arm"]
+)
+def test_check_json_publishes_the_error_kind_as_its_own_field(down):
+    """``check --json`` has to be readable without parsing prose (#25).
+
+    The sibling surface of ``test_every_kind_the_json_emits_is_a_bare_error_kind_value``
+    above, which guards ``dump-facts --json``. ``check --json`` published only
+    ``detail`` — and since #18 that string is ``kind``, a full stop, then operator
+    prose, so the kind was there but only recoverable by parsing. Both arms,
+    because each has its own ``except ServiceError``.
+    """
+    payload = json.loads(_run(["check", "--json"], **down).output)
+    errors = [f for f in payload["findings"] if f["outcome"] == "ERROR"]
+    assert errors, "no ERROR finding emitted — this guard would be vacuous"
+    for finding in errors:
+        assert finding["kind"] in KINDS, f"{finding['kind']!r} is not one of {sorted(KINDS)}"
+
+
+def test_the_published_kind_is_not_recoverable_from_the_detail_by_parsing():
+    """#18's third criterion, which is the whole argument for a real field.
+
+    ``tests/strategies`` deliberately generates details whose prose *ends* in
+    another kind's name, precisely so nothing can recover a kind by reading
+    prose. This row is built to that shape: a ``banned`` row whose detail ends
+    in the word ``unreachable``. A consumer taking the last word, or matching any
+    kind it finds in the string, gets the wrong answer; the field gets the right
+    one.
+    """
+    row = ErrorRow(
+        label="qbittorrent[main]",
+        kind="banned",
+        detail="login refused five times; the host may now be unreachable",
+    )
+    findings = run_checks(
+        StackFacts(arrs=(), qbits=(), errors=(row,)), declared=frozenset({"qbittorrent"})
+    )
+    error = next(f for f in findings if f.outcome is Outcome.ERROR)
+    published = _finding_to_dict(error)
+
+    assert published["kind"] == "banned"
+    assert published["detail"].endswith("unreachable"), (
+        "the fixture must keep the trap the guard is written against"
+    )
+    assert published["detail"].split()[-1] in KINDS, (
+        "a consumer parsing the detail's last word would read a kind — and the wrong one"
+    )
+
+
+def test_publishing_the_kind_leaves_the_detail_exactly_as_it_was():
+    """Additive, by instruction: #18's operator prose is the point and it stays.
+
+    Asserted against ``Finding.detail`` rather than a literal, so a reworded
+    detail does not turn this red — the claim is that the JSON passes the string
+    through untouched, not what the string says.
+    """
+    row = ErrorRow(label="sonarr[main]", kind="unreachable", detail="GET /api/v3: refused")
+    findings = run_checks(
+        StackFacts(arrs=(), qbits=(), errors=(row,)), declared=frozenset({"sonarr"})
+    )
+    error = next(f for f in findings if f.outcome is Outcome.ERROR)
+    assert _finding_to_dict(error)["detail"] == error.detail
+    assert error.detail.startswith("could not read this service: unreachable")
+
+
+def test_a_finding_that_is_not_a_collect_error_publishes_an_empty_kind():
+    """No bogus kind on an invariant finding, and the key is always present.
+
+    ``""`` rather than a missing key or ``null``, matching ``conflict`` in the
+    same dict — that field already means "not applicable" with an empty string,
+    and a schema whose keys come and go is worse for a consumer than one whose
+    values do. The empty string is not an ``ErrorKind``, which is what makes it
+    unmistakable.
+    """
+    findings = run_checks(_collect(), declared=frozenset({"qbittorrent", "sonarr"}))
+    non_errors = [f for f in findings if f.outcome is not Outcome.ERROR]
+    assert non_errors, "no non-ERROR finding produced — this guard would be vacuous"
+    for finding in non_errors:
+        published = _finding_to_dict(finding)
+        assert "kind" in published, "the key must be present on every finding"
+        assert published["kind"] == ""
+        assert published["kind"] not in KINDS

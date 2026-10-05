@@ -49,6 +49,17 @@ class Finding:
     #: explaining a finding downstream must key on this too, or it will state a
     #: cause that does not follow from the premises it just listed.
     conflict: str = ""
+    #: For a ``collect`` ERROR, the ``ErrorKind`` of the row behind it, published
+    #: so a consumer never has to parse prose for it (#25). ``detail`` leads with
+    #: the kind and then carries operator prose, and ``tests/strategies``
+    #: deliberately generates prose *ending* in another kind's name, so parsing it
+    #: is not merely awkward — the suite is built to make it wrong.
+    #:
+    #: ``""`` on every other finding, matching ``conflict`` above: a schema whose
+    #: keys come and go is harder to consume than one whose values do, and the
+    #: empty string is not an ``ErrorKind``, which makes "not applicable"
+    #: unmistakable.
+    error_kind: str = ""
 
 
 def worst(outcomes: Iterable[Outcome]) -> Outcome:

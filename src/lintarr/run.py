@@ -131,6 +131,9 @@ def run_checks(facts: StackFacts, *, declared: frozenset[str]) -> tuple[Finding,
             instance=row.label,
             outcome=Outcome.ERROR,
             detail=_error_detail(row),
+            # The same kind `_error_detail` puts at the head of the sentence, kept
+            # as a field so `check --json` publishes it rather than implying it.
+            error_kind=row.kind,
         )
         for row in facts.errors
     ]

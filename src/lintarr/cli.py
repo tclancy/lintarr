@@ -220,6 +220,13 @@ def _finding_to_dict(finding) -> dict[str, Any]:
         # is the machine-readable form of the same defect the "Therefore" line
         # above had.
         "conflict": finding.conflict,
+        # Spelled `kind` here and `error_kind` on the dataclass, deliberately.
+        # `dump-facts --json` already publishes an error row's kind under `kind`,
+        # and two JSON surfaces disagreeing about the name of one concept is worse
+        # than a field whose attribute reads differently — while on a `Finding`,
+        # which is mostly not an error, a bare `kind` would read as the finding's
+        # own kind (#25).
+        "kind": finding.error_kind,
         "detail": finding.detail,
         "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
     }
