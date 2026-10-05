@@ -2,10 +2,9 @@
 
 **Date:** 2026-10-05 (UTC)
 **Status:** Decided 2026-10-05: shape A (systemd timer on the host). Task 1 in
-review (lintarr#30). Task 2 done (keys vaulted as `arr_sonarr_api_key` /
-`arr_radarr_api_key`, homelab 8972c77).
-DECISION NEEDED: alert noise (see "Alerting: the blocker") and whether to
-keep the vaulted keys or read them from `config.xml`.
+review (lintarr#30). Decided 2026-10-05: alert noise → option (b), in review
+as lintarr#31. Credentials → read from `config.xml`; the vaulted copies are
+reverted in homelab#534. NEXT: task 3 (homelab templates + tasks).
 
 ## Goal
 
@@ -63,12 +62,11 @@ paths. That doesn't matter for `queue-liveness`. It does matter for the P3
    (oneshot, `OnFailure=`, `SuccessExitStatus=143 SIGTERM`, `SyslogIdentifier`,
    `TimeoutStartSec`), `lintarr.timer.j2` (hourly, `Persistent=false`) and
    `lintarr.env.j2`.
-3. Credentials. Sonarr and Radarr keys are vaulted as `arr_sonarr_api_key` /
-   `arr_radarr_api_key` (homelab 8972c77). The alternative is to read
-   `<ApiKey>` from each app's `config.xml` at play time (`slurp`, `no_log`,
-   gated on `stat`), the way `cleanuparr-config.yml:47-52` does and argues
-   for. A vaulted copy goes stale silently when the app regenerates its key on
-   a rebuild. qBittorrent: the vaulted password plus `qbittorrent_webui_username`
+3. Credentials (decided: `config.xml`). Read `<ApiKey>` from each app's
+   `config.xml` at play time (`slurp`, `no_log`, gated on `stat`), the way
+   `cleanuparr-config.yml:47-52` does and argues for. A vaulted copy goes stale
+   silently when the app regenerates its key on a rebuild. The briefly vaulted
+   copies (homelab 8972c77) are reverted in homelab#534. qBittorrent: the vaulted password plus `qbittorrent_webui_username`
    (`vars.yml:545`). Both are required, because `config.py` raises on
    `QBIT_URL` without them, whatever the auth-subnet whitelist does.
 4. homelab tasks: a `Clone or pull lintarr source` git task that triggers
@@ -155,12 +153,12 @@ Must be settled before task 4 (first deploy).
 |---|---|---|---|
 | 0 | Tom picks A or B | — | **done**: A |
 | 1 | `restart.sh` + README "Deploying" section | lintarr | PR merged |
-| 2 | Vault the two arr API keys | homelab | **done** (8972c77). May be superseded by `config.xml` reads |
-| 2b | Fix alert noise: option (a), (b) or (c) above | lintarr or homelab | DECISION NEEDED |
+| 2 | Arr API keys | homelab | **superseded**: read from `config.xml` in task 3; vault copies reverted (homelab#534) |
+| 2b | Edge-triggered `check --state-file` (option b) | lintarr | lintarr#31 merged; ExecStart passes `--state-file %S/lintarr/state.json` |
 | 3 | Service, timer and env templates + tasks + tests (match the existing `test_syslog_identifiers.py`-style guards) | homelab | PR merged, `itguy list` shows `lintarr` after `git pull` on the box |
 | 4 | (after 2b) `itguy deploy lintarr`, then `systemctl --user start lintarr.service` once by hand | homelab | `itguy logs lintarr --level info` shows a full `check` run |
 | 5 | Prove the alert path: point one URL at a dead port, see the ntfy, revert | homelab | ntfy received, then green again |
 | 6 | Refresh `CONTINUATION.md` | lintarr | merged |
 
-Tasks 1 and 3 are separate PRs in separate repos. Task 3 depends on the vault
-entries from task 2.
+Tasks 1, 2b and 3 are separate PRs. Task 3 needs #30 and #31 merged first, so
+the unit runs a `restart.sh` and `--state-file` that exist on `main`.
