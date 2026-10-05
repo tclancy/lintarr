@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from lintarr.collect.arr import collect_arr
+from lintarr.collect.arr import _READ_FIELD_NAMES, _SEED_FIELDS, collect_arr
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.config import ArrConfig
 from lintarr.facts import is_known
@@ -468,3 +468,109 @@ def test_a_conflict_is_found_when_only_the_last_of_three_duplicates_disagrees():
     with pytest.raises(ServiceError) as e:
         _collect([_indexer("Three", fields=dupes)])
     assert e.value.kind == "bad-response"
+
+
+@pytest.mark.parametrize("order", [(0, False), (False, 0), (1, True), (True, 1)])
+def test_values_that_are_equal_but_not_the_same_fact_are_a_conflict(order):
+    """`False == 0` in Python, and the invariants layer draws its line in that gap.
+
+    `_is_a_seed_goal` excludes `bool` explicitly — `isinstance(True, int)` —
+    while `0` reads as a goal of zero. So `[0, False]` and `[False, 0]` are
+    opposite verdicts on the flagship premise, decided by list order, which is
+    the defect this whole guard exists to remove. A plain `!=` comparison called
+    these pairs *agreeing* and returned whichever came first.
+
+    Both orders of both pairs, because an `==`-only guard passes all four
+    identically and a `return values[-1]` mutant is invisible without them.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", order[0]),
+        _field("seedCriteria.seedRatio", order[1]),
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("BoolInt", fields=dupes)])
+    assert e.value.kind == "bad-response"
+
+
+@pytest.mark.parametrize("order", [(2, 2.0), (2.0, 2)])
+def test_an_int_and_an_equal_float_are_one_fact_not_a_conflict(order):
+    """The other side of the same line, and why this tests bool-ness not `type()`.
+
+    `_is_a_seed_goal` admits `int` and `float` alike, so `2` and `2.0` cannot
+    produce different verdicts and splitting them would raise a conflict over a
+    payload nobody could misread. A `type(a) is not type(b)` guard — the obvious
+    way to fix the bool case — fails exactly here.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", order[0]),
+        _field("seedCriteria.seedRatio", order[1]),
+    ]
+    arr, _ = _collect([_indexer("IntFloat", fields=dupes)])
+    assert arr.indexers[0].seed_ratio.value == 2
+
+
+def test_a_conflict_in_a_field_lintarr_never_reads_does_not_discard_the_instance():
+    """Scope: the guard covers the names read out of the mapping, and no others.
+
+    `_fields_as_mapping` resolves every name, so an unscoped guard fired on
+    `categories` too — discarding a perfectly readable `seedRatio`, and with it
+    every indexer on that instance, over ambiguity in data this collector does
+    not consume and cannot report on. That trades a certain loss of facts for a
+    misreading that cannot happen.
+    """
+    fields = [
+        _field("categories", [5000], type="select"),
+        _field("categories", [5030], type="select"),
+        _field("seedCriteria.seedRatio", 2.0, type="number"),
+    ]
+    arr, _ = _collect([_indexer("Unread", fields=fields)])
+    assert arr.indexers[0].seed_ratio.value == 2.0
+
+
+def test_the_guarded_names_are_derived_from_the_fields_actually_read():
+    """`_READ_FIELD_NAMES` must stay derived, not become a second hand-kept list.
+
+    If it is ever restated as a literal, adding a seed criterion to
+    `_SEED_FIELDS` silently leaves the new field on last-win — the original bug,
+    reintroduced for one field only and invisible to every test above. The
+    non-empty assertion is the reachability control: `frozenset()` would satisfy
+    a subset check and guard nothing.
+    """
+    assert _READ_FIELD_NAMES == frozenset(_SEED_FIELDS.values())
+    assert len(_READ_FIELD_NAMES) == len(_SEED_FIELDS) >= 3
+
+
+def test_duplicates_in_one_indexer_do_not_conflict_with_another_indexers_fields():
+    """Grouping is per-indexer, as `_indexer_facts` calls it.
+
+    Two indexers legitimately disagree about their own seed ratios — that is the
+    normal case, not a malformed payload. Pinned because hoisting the grouping to
+    the payload level to "do it once" would break every multi-indexer stack while
+    leaving the rest of this file green.
+    """
+    indexers = [
+        _indexer("A", fields=[_field("seedCriteria.seedRatio", 1.0)]),
+        _indexer("B", fields=[_field("seedCriteria.seedRatio", 9.0)]),
+    ]
+    arr, _ = _collect(indexers)
+    assert [i.seed_ratio.value for i in arr.indexers] == [1.0, 9.0]
+
+
+def test_an_unreadable_name_is_reported_before_a_duplicate_conflict():
+    """Name validation still runs over every entry before any value is compared.
+
+    `_fields_as_mapping` drains its loop before the output comprehension, so a
+    nameless entry raises even when a duplicate conflict sits earlier in the
+    list. Pinned because folding the loop back into a comprehension would invert
+    that order silently, and the two errors send an operator to different places.
+    """
+    nameless = _field("seedCriteria.seedTime", 10)
+    del nameless["name"]
+    fields = [
+        _field("seedCriteria.seedRatio", 1.0),
+        _field("seedCriteria.seedRatio", 9.0),
+        nameless,
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("Both", fields=fields)])
+    assert "no 'name' string" in e.value.detail
