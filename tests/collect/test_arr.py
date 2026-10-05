@@ -329,3 +329,142 @@ def test_absent_fields_key_is_field_absent_not_bad_response():
     ratio = arr.indexers[0].seed_ratio
     assert not is_known(ratio)
     assert ratio.reason == "field-absent"
+
+
+# --- duplicate field names (#6's last P0a residual) ---
+
+
+def test_duplicate_field_names_with_conflicting_values_is_bad_response():
+    """Two values for one name is a payload nobody can read, so it must not be guessed.
+
+    Recorded on #6 as the reproduction `[{"name": "seedCriteria.seedRatio",
+    "value": 1.0}, {"name": "seedCriteria.seedRatio", "value": 9.0}]` yielding
+    `Known(9.0)` — last-win, silently. A ratio of 9.0 and a ratio of 1.0 are
+    different operator intents and the collector has no way to tell which was
+    configured, so admitting either is the fabrication this module's other
+    guards exist to refuse. It reads as *more* trustworthy than
+    `Unknown("field-absent")` precisely because it is `Known`.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", 1.0),
+        _field("seedCriteria.seedRatio", 9.0),
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("Dupe", fields=dupes)])
+    assert e.value.kind == "bad-response"
+    assert "seedCriteria.seedRatio" in e.value.detail
+
+
+def test_a_null_duplicate_conflicting_with_a_set_one_is_bad_response():
+    """The worst pair of the lot, because both readings are meaningful.
+
+    `Known(None)` is this collector's "configured but unset" and `Known(2.0)`
+    is "set to 2.0" — opposite answers to the question the seed-criteria axiom
+    asks. Last-win would decide it on list order.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", None),
+        _field("seedCriteria.seedRatio", 2.0),
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("Dupe", fields=dupes)])
+    assert e.value.kind == "bad-response"
+
+
+def test_duplicate_field_names_that_agree_are_read_not_rejected():
+    """A repeated name carrying one value is unambiguous, so it stays readable.
+
+    Deliberately narrower than "all duplicates are malformed": first-win and
+    last-win return the same answer here, so there is nothing for the collector
+    to be wrong about. Rejecting it would turn a readable payload into an ERROR
+    for a shape that costs nothing to read, and no measurement says a real arr
+    never repeats a field.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", 2.0),
+        _field("seedCriteria.seedRatio", 2.0),
+    ]
+    arr, _ = _collect([_indexer("Agree", fields=dupes)])
+    ratio = arr.indexers[0].seed_ratio
+    assert is_known(ratio)
+    assert ratio.value == 2.0
+
+
+def test_agreeing_null_duplicates_stay_known_none():
+    # The agreeing case at the value that is easiest to confuse with absence:
+    # `None` must still come back `Known(None)`, not `Unknown("field-absent")`.
+    dupes = [
+        _field("seedCriteria.seedRatio", None),
+        _field("seedCriteria.seedRatio", None),
+    ]
+    arr, _ = _collect([_indexer("AgreeNull", fields=dupes)])
+    ratio = arr.indexers[0].seed_ratio
+    assert is_known(ratio)
+    assert ratio.value is None
+
+
+@pytest.mark.parametrize("valued_first", [True, False])
+def test_an_entry_without_a_value_key_never_conflicts_with_one_that_has_it(valued_first):
+    """A missing `value` is "never configured", not a competing value.
+
+    Both orders, because the two are not symmetric under the old last-win rule
+    and a guard that only looked at adjacent pairs could pass one and fail the
+    other. The entry carrying a value is the only one that says anything about
+    what the operator set, so it wins without that being a guess.
+    """
+    valued = _field("seedCriteria.seedRatio", 2.0)
+    bare = _field("seedCriteria.seedRatio")
+    fields = [valued, bare] if valued_first else [bare, valued]
+    arr, _ = _collect([_indexer("Mixed", fields=fields)])
+    assert arr.indexers[0].seed_ratio.value == 2.0
+
+
+def test_names_differing_only_by_padding_are_the_same_field_for_conflict_purposes():
+    """The dedup key is the *stripped* name, as `_field_name` already returns.
+
+    `_field_name` strips so that a padded name does not become an unfindable
+    key. That makes `"  seedCriteria.seedRatio  "` and `"seedCriteria.seedRatio"`
+    one field, so two different values across them is the same unreadable
+    payload as any other duplicate — checking before stripping would let it
+    through.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", 1.0),
+        _field("  seedCriteria.seedRatio  ", 9.0),
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("Padded", fields=dupes)])
+    assert e.value.kind == "bad-response"
+
+
+def test_distinct_names_are_not_treated_as_duplicates():
+    # The reachability control for every assertion above: an ordinary
+    # multi-field payload must still collect. Without it, a guard that rejected
+    # *all* repeated reads would pass the six tests above and break every real
+    # indexer.
+    fields = [
+        _field("minimumSeeders", 3, type="number", advanced=False),
+        _field("seedCriteria.seedRatio", 1.5, type="number"),
+    ]
+    arr, _ = _collect([_indexer("Normal", fields=fields)])
+    assert arr.indexers[0].seed_ratio.value == 1.5
+
+
+def test_a_conflict_is_found_when_only_the_last_of_three_duplicates_disagrees():
+    """Three entries, two agreeing — the case that separates `any` from `all`.
+
+    With two entries a "do they all differ from the first?" check and a "does
+    any differ?" check give the same verdict, so the pairwise tests above cannot
+    tell a correct guard from one that only fires when *every* duplicate
+    disagrees. This payload is a conflict under the right rule and readable
+    under the wrong one, which would return 1.0 — silently, and by position
+    again.
+    """
+    dupes = [
+        _field("seedCriteria.seedRatio", 1.0),
+        _field("seedCriteria.seedRatio", 1.0),
+        _field("seedCriteria.seedRatio", 9.0),
+    ]
+    with pytest.raises(ServiceError) as e:
+        _collect([_indexer("Three", fields=dupes)])
+    assert e.value.kind == "bad-response"

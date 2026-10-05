@@ -103,9 +103,44 @@ def _fields_as_mapping(indexer: dict[str, Any]) -> dict[str, Any]:
     never-configured setting — the commonest live shape — so a name check
     evaluated only for entries that carry one would leave most of a real
     payload unvalidated.
+
+    A repeated name used to resolve last-win, silently (#6): two entries both
+    claiming ``seedCriteria.seedRatio`` returned the second one's value as
+    ``Known``, which reads as *more* trustworthy than ``Unknown`` while being a
+    coin toss on list order. Grouping instead hands the decision to
+    ``_single_value``.
     """
-    named = [(_field_name(f), f) for f in _field_entries(indexer)]
-    return {name: f["value"] for name, f in named if "value" in f}
+    grouped: dict[str, list[Any]] = {}
+    for name, entry in ((_field_name(f), f) for f in _field_entries(indexer)):
+        if "value" in entry:
+            grouped.setdefault(name, []).append(entry["value"])
+    return {name: _single_value(name, values) for name, values in grouped.items()}
+
+
+def _single_value(name: str, values: list[Any]) -> Any:
+    """The one value *name* carries, or a bad response if its duplicates disagree.
+
+    Conflicting duplicates only. An agreeing repeat is readable — first-win and
+    last-win give the same answer, so there is nothing to be wrong about — and
+    rejecting it would turn a payload that costs nothing to read into an ERROR
+    on a shape no measurement rules out. A *disagreeing* repeat is a payload
+    this collector genuinely cannot read: ``Known(1.0)`` and ``Known(9.0)`` are
+    different operator intents, and picking one by position is the same
+    fabrication ``_field_name`` and ``_field_entries`` already refuse.
+
+    Compared with ``!=`` rather than through a set, because a ``value`` is
+    whatever JSON put there and lists and dicts are unhashable. Entries with no
+    ``value`` key never reach here, so "absent" is not one of the readings in
+    play: a bare duplicate beside a valued one is not a conflict, since only
+    one of them says anything about what the operator set.
+    """
+    first, *rest = values
+    if any(value != first for value in rest):
+        raise ServiceError(
+            "bad-response",
+            f"{_INDEXER}: 'fields' gives '{name}' more than one value",
+        )
+    return first
 
 
 def _read_version(client: ReadOnlyClient) -> str:
