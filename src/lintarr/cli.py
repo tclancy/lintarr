@@ -207,6 +207,36 @@ _THEREFORE = {
         "  or negative but not -1 (the only value meaning unlimited). Share limits\n"
         "  are not involved, so turning them on will not help."
     ),
+    # The three override routes. Each one's remedy is on the *arr* side, which
+    # is what separates them from SEEDING: the sentence above sends an operator
+    # to qBittorrent's share limits, and here those are settings the torrent has
+    # already put out of reach. Measured in
+    # docs/measurements/2026-10-05-sonarr-seed-ratio-range.md.
+    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_BOTH): (
+        "an indexer sets both seed criteria to a negative value other\n"
+        "  than -2, which qBittorrent reads as 'no limit' and never redirects to\n"
+        "  your global or category setting. Seeders hold every active slot and no\n"
+        "  queued download can start. A global ratio or seeding-time limit will\n"
+        "  NOT help — the fix is that indexer's seed ratio and seed time in\n"
+        "  Sonarr/Radarr. (lintarr does not read\n"
+        "  max_inactive_seeding_time_enabled, which is a third limit that would\n"
+        "  release these torrents; if you have it on, this FAIL is wrong.)"
+    ),
+    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_RATIO): (
+        "an indexer sets a negative seed ratio other than -2, so\n"
+        "  qBittorrent never enforces a ratio for its torrents and never consults\n"
+        "  your global ratio limit. The seeding-time limit is the only thing left\n"
+        "  that could free the slot, and it is off everywhere. Either give that\n"
+        "  indexer a seed ratio of 0 or more, or turn on a global seeding-time\n"
+        "  limit."
+    ),
+    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_SEED_TIME): (
+        "an indexer sets a negative seed time other than -2, so\n"
+        "  qBittorrent never enforces a seeding time for its torrents and never\n"
+        "  consults your global one. The ratio limit is the only thing left that\n"
+        "  could free the slot, and it is off everywhere. Either give that indexer\n"
+        "  a seed time of 0 or more, or turn on a global ratio limit."
+    ),
 }
 
 
@@ -225,8 +255,23 @@ def _finding_to_dict(finding) -> dict[str, Any]:
     }
 
 
+def _premise_column_width(findings) -> int:
+    """How wide the premise-label column has to be to line up.
+
+    Derived from the labels actually being printed rather than pinned to a
+    constant. A hardcoded 36 fitted every label until lintarr#28 added three
+    that are 38-41 characters, at which point the column silently stopped
+    aligning on exactly the findings that needed reading most — and nothing
+    failed, because no test can see a width nobody declared. A measured width
+    cannot drift behind the labels again.
+    """
+    labels = [p.label for f in findings for p in f.premises]
+    return max((len(label) for label in labels), default=0)
+
+
 def _render_findings(findings) -> str:
     lines: list[str] = []
+    width = _premise_column_width(findings)
     for f in findings:
         lines.append(f"{f.outcome:<5} {f.invariant}  [{f.instance}]")
         if f.premises:
@@ -239,7 +284,7 @@ def _render_findings(findings) -> str:
             lines.append(header)
             for p in f.premises:
                 state = "holds" if p.state else "unknown" if p.state is None else "does not hold"
-                lines.append(f"    {p.label:<36} {state}")
+                lines.append(f"    {p.label:<{width}} {state}")
         if f.detail:
             lines.append(f"  {f.detail}")
         therefore = _THEREFORE.get((f.invariant, f.conflict))

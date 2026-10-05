@@ -201,11 +201,11 @@ from the table for an error.
 so `seedCriteria.seedTime` needs the same rule. That is why the code change
 applies to both criteria rather than to the ratio alone.
 
-## The consequence the table does not show, and it is filed as #28
+## The consequence the table does not show — settled by #28
 
-Worth separating from the rule above, because the rule is settled and this is
-not. The table's last column says "an indexer goal?" — it does **not** say "does
-the stack wedge?", and for one row those come apart.
+Worth separating from the rule above, because the rule is settled and this was
+not. The table's last column says "an indexer goal?" — it does **not** say
+"does the stack wedge?", and for some rows those come apart.
 
 `-2`, absent and null all mean *defer*: `effectiveRatioLimit()` redirects `-2` to
 `categoryRatioLimit(category())`, so a global or category ratio limit still
@@ -213,9 +213,12 @@ releases the slot. Every **other** negative means *override to unlimited*, and
 `categoryRatioLimit()` is the only route to `globalMaxRatio()` — so the global
 limit is never consulted and cannot save it.
 
-`queue-liveness` cannot express that difference today. `_seeding_conflict` is a
-conjunction that also requires `qbt.no_global_ratio` and `qbt.no_category_limits`,
-and `arr.indexer_without_seed_criteria` is a bool. Measured on this branch:
+`queue-liveness` could not express that difference, and
+[#28](https://github.com/tclancy/lintarr/issues/28) is where it learned to.
+
+### Correction: this section's original worked example was wrong
+
+The first version of this section read:
 
 ```
 qbt_with()   # global ratio limit ON: max_ratio_enabled=True, max_ratio=1.5
@@ -224,12 +227,102 @@ qbt_with()   # global ratio limit ON: max_ratio_enabled=True, max_ratio=1.5
   seed_ratio = -2   outcome=PASS     <-- right: defers to the global, which releases
 ```
 
-So the range rule turns an **unconditional** false PASS on `-1` into a
-**conditional** one, surviving exactly when the operator has configured a global
-limit. That is a real remaining hole and a slightly uncomfortable one, since the
-survivor is the better-configured stack. It is [#28](https://github.com/tclancy/lintarr/issues/28)
-rather than more of this change, because closing it means restructuring the
-conjunction into a disjunction, which is not a range rule.
+**The first row's PASS is correct**, and #28 inherited the error from here. A
+torrent is stopped when **either** of its limits is reached, and the example
+reasoned about the ratio axis alone. `qbt_with()` is the *repaired* fixture, so
+it also carries `max_seeding_time_enabled=True` with `max_seeding_time=20160`.
+An unset `seedCriteria.seedTime` reaches qBittorrent as `-2`,
+`effectiveSeedingTimeLimit()` redirects `-2` to `categorySeedingTimeLimit()`,
+and that returns `globalMaxSeedingMinutes()`. The slot is released after 14
+days. Nothing wedges, and a fix that FAILed this configuration would have been
+a false FAIL on a stack that recovers by itself.
+
+`tests/invariants/test_share_limit_override.py::test_an_overriding_ratio_is_released_by_the_seed_time_global`
+is that control, and it is the reason this correction is a test rather than a
+sentence.
+
+### The three shapes that really do wedge
+
+Each needs both limits unreachable. `seedCriteria` has two fields and each is a
+goal, deferring, or overriding, so the cases cross-product — and the deferring
+half is the only one a global setting reaches:
+
+| indexer `seedRatio` | indexer `seedTime` | global ratio | global seed time | releases? | verdict before #28 |
+|---|---|---|---|---|---|
+| defer | defer | off | off | **never** | FAIL — `SEEDING`, the #393 shape |
+| defer | defer | **on** | off | after ratio 1.5 | PASS, correct |
+| defer | defer | off | **on** | after 20160 min | PASS, correct |
+| **override** | defer | on | **off** | **never** | **PASS — wrong** |
+| defer | **override** | **off** | on | **never** | **PASS — wrong** |
+| **override** | **override** | on | on | **never** | **PASS — wrong** |
+| override | defer | on | **on** | after 20160 min | PASS, correct ← the row above |
+| override | goal `2880` | off | off | after 2880 min | PASS, correct |
+| goal `2.0` | override | off | off | at ratio 2.0 | PASS, correct |
+
+The three wrong rows are now `OVERRIDE_RATIO`, `OVERRIDE_SEED_TIME` and
+`OVERRIDE_BOTH`. They are separate conflicts rather than one because their
+remedies differ and only `OVERRIDE_BOTH`'s is "no global setting can help this".
+
+`inf` and `nan` override too, and that is not a curiosity: `inf != -2` so the
+redirect never fires, and `realRatio() >= inf` is never true. A `value < 0`
+spelling of the override rule reads both as deferring and PASSes a stack that
+never frees a slot, which is why `_overrides_the_share_limit` is written as
+"not a goal, and not `-2`".
+
+### What is still not expressed
+
+`OVERRIDE_RATIO` and `OVERRIDE_SEED_TIME` both ask for the existing combined
+`qbt.no_category_limits` premise, which reads each category's `ratio_limit`
+**and** `seeding_time_limit`. That is stricter than either route needs — a
+category that sets a ratio limit but no seeding-time limit suppresses
+`OVERRIDE_RATIO`, whose ratio is overridden and whose category ratio limit is
+therefore irrelevant. So those two conflicts can **miss**, and can never fire on
+a stack that recovers. Splitting that premise per criterion is the remaining
+slice.
+
+Five more gaps, all pre-existing and all found by #28's code review. They are
+listed together because they share one root: this file measures `seedCriteria`
+to the letter and then trusts the chain it defers to without measuring it.
+
+**False FAILs — lintarr says wedged and the stack recovers:**
+
+1. **`max_inactive_seeding_time_enabled` is not collected.**
+   `processTorrentShareLimits` has *three* arms, and
+   `effectiveInactiveSeedingTimeLimit()` redirects `-2` to
+   `globalMaxInactiveSeedingMinutes()` exactly as the other two do. Sonarr never
+   sets a per-torrent inactive limit, so that arm is always deferring and the
+   global does release stalled seeders. `OVERRIDE_BOTH` is the worst exposed:
+   it carries no share-limit premise, so it fires whatever the other globals
+   say. Its "Therefore" line now discloses this rather than asserting no
+   setting can help.
+2. **`max_ratio_act` is collected and never read.** `ShareLimitAction` `2` is
+   `EnableSuperSeeding`, which does not stop the torrent — so a *reached* goal
+   does not release the slot. That makes "a goal releases the slot" conditional
+   rather than measured. (Same defect class as parsons-pulse#138, found there
+   first.)
+
+**False PASSes — lintarr says fine and the stack wedges:**
+
+3. **An unreadable criterion disarms all three override routes, silently.**
+   `_overrides_the_share_limit` resolves "could not read" to *not overriding*.
+   Measured: `seedRatio` `Known(-1)` FAILs `OVERRIDE_RATIO`; `Known("-1")`,
+   `Known(True)` and `Known("unlimited")` all PASS with an **empty** detail,
+   because `_note_unreadable_seed_criteria` keys on the conflict and the
+   surviving finding is the starvation PASS. One unreadable byte turns a FAIL
+   into a silent green.
+4. **The global values get none of this document's rules.**
+   `max_ratio_enabled` / `max_seeding_time_enabled` are read as booleans and
+   `max_ratio` / `max_seeding_time` are never read, so `max_ratio_enabled=True`
+   with `max_ratio=-1` — or `inf` — PASSes a wedge. Reachable through
+   `setPreferences`.
+5. **A category limit that overrides to unreachable reads as "inherits".**
+   `_own_share_limit` returns False for anything not `>= 0`, so
+   `{"ratio_limit": -5}` is filed as *defers* when `categoryRatioLimit()`
+   returns `-5` verbatim and releases nothing.
+
+Gaps 1 and 2 are tracked together; 3, 4 and 5 are tracked together. Neither set
+is touched by this change, and none of them can turn a negative `seedCriteria`
+value back into a goal — which is the only thing the code change here rests on.
 
 ## The table
 

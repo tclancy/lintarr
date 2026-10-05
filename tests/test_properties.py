@@ -31,6 +31,12 @@ from lintarr.outcomes import Finding, Outcome
 from lintarr.run import run_checks
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
 from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
+from tests.invariants.test_share_limit_override import (
+    OVERRIDES_BOTH,
+    OVERRIDES_RATIO,
+    OVERRIDES_SEED_TIME,
+    SLOTS,
+)
 from tests.strategies import (
     ARR_INSTANCES,
     DECLARED,
@@ -355,6 +361,13 @@ _PREMISE_LABELS: frozenset[str] = frozenset(
         "qbt.no_global_seed_time",
         "qbt.no_category_limits",
         "arr.indexer_without_seed_criteria",
+        # The three override routes (lintarr#28). Each names its own arr
+        # premise rather than reusing the one above, because "sets no goal" and
+        # "sets a goal the global cannot override" are different facts with
+        # different remedies.
+        "arr.indexer_overrides_both_share_limits",
+        "arr.indexer_overrides_the_ratio_limit",
+        "arr.indexer_overrides_the_seed_time_limit",
     }
 )
 
@@ -389,6 +402,13 @@ def test_every_declared_premise_label_is_reachable():
         (wedged_qbt(), NO_GOALS),
         (qbt_with(categories=Unknown("field-absent", "categories")), NO_GOALS),
         (qbt_with(max_active_torrents=0), NO_GOALS),
+        # The three override routes. Each needs a stack SEEDING leaves at PASS,
+        # which is the whole point of them — with any global limit on, the
+        # deferring conjunction cannot fire, so these configurations are the
+        # only ones that can reach these labels at all.
+        (qbt_with(**SLOTS), OVERRIDES_BOTH),
+        (qbt_with(max_seeding_time_enabled=False, **SLOTS), OVERRIDES_RATIO),
+        (qbt_with(max_ratio_enabled=False, **SLOTS), OVERRIDES_SEED_TIME),
     ):
         seen |= {p.label for p in check(qbt, arrs).premises}
     assert seen == _PREMISE_LABELS, (
@@ -397,8 +417,11 @@ def test_every_declared_premise_label_is_reachable():
     )
 
 
-def test_the_conflict_names_are_the_two_the_cli_explains():
-    """A third conflict added without a "Therefore" line prints a bare FAIL.
+def test_every_conflict_name_is_one_the_cli_explains():
+    """A conflict added without a "Therefore" line prints a bare FAIL.
+
+    Renamed from ``..._the_two_the_cli_explains``: there are five of them, and
+    the name was the half of this test that still hardcoded the count.
 
     Not one of the spec's four, but the same class: the CLI keys its
     explanation on ``(invariant, conflict)``, so the set of conflicts a finding
@@ -407,7 +430,12 @@ def test_the_conflict_names_are_the_two_the_cli_explains():
     from lintarr.cli import _THEREFORE
 
     explained = {c for inv, c in _THEREFORE if inv == queue_liveness.INVARIANT_ID}
-    assert explained == {queue_liveness.STARVATION, queue_liveness.SEEDING}
+    # Compared against the invariant's own published set, not a second
+    # hand-written one. The hardcoded version of this assertion passed
+    # unchanged when lintarr#28 added three conflicts to the module and none to
+    # the table, which is precisely the failure it was written to catch.
+    assert explained == set(queue_liveness.CONFLICTS)
+    assert len(queue_liveness.CONFLICTS) == len(set(queue_liveness.CONFLICTS))
 
 
 @_SETTINGS
