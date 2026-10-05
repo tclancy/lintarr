@@ -30,6 +30,11 @@ _SEED_FIELDS = {
     "season_pack_seed_time": "seedCriteria.seasonPackSeedTime",
 }
 
+# Derived, not restated: the duplicate-conflict guard in ``_single_value`` is
+# scoped to the names ``_indexer_facts`` actually reads out of the mapping, so
+# adding a seed criterion above extends the guard with no second edit here.
+_READ_FIELD_NAMES = frozenset(_SEED_FIELDS.values())
+
 # These live at the indexer's top level, unlike the seed criteria above which
 # are nested inside its ``fields`` list.
 _ENABLE_FIELDS = {
@@ -103,9 +108,79 @@ def _fields_as_mapping(indexer: dict[str, Any]) -> dict[str, Any]:
     never-configured setting — the commonest live shape — so a name check
     evaluated only for entries that carry one would leave most of a real
     payload unvalidated.
+
+    A repeated name used to resolve last-win, silently (#6): two entries both
+    claiming ``seedCriteria.seedRatio`` returned the second one's value as
+    ``Known``, which reads as *more* trustworthy than ``Unknown`` while being a
+    coin toss on list order. Grouping instead hands the decision to
+    ``_single_value`` — but only for the names this collector reads. A name
+    outside ``_READ_FIELD_NAMES`` keeps resolving last-win, because erroring the
+    whole instance over ambiguity in data nobody consumes would discard every
+    fact we *can* read to protect against a misreading that cannot happen.
     """
-    named = [(_field_name(f), f) for f in _field_entries(indexer)]
-    return {name: f["value"] for name, f in named if "value" in f}
+    grouped: dict[str, list[Any]] = {}
+    for name, entry in ((_field_name(f), f) for f in _field_entries(indexer)):
+        if "value" in entry:
+            grouped.setdefault(name, []).append(entry["value"])
+    return {
+        name: _single_value(name, values) if name in _READ_FIELD_NAMES else values[-1]
+        for name, values in grouped.items()
+    }
+
+
+def _interchangeable(value: Any, other: Any) -> bool:
+    """Whether two duplicate values are the same *fact*, not merely ``==``.
+
+    ``False == 0`` and ``True == 1`` in Python, and the invariants layer draws
+    its line in exactly that gap: ``_is_a_seed_goal`` excludes ``bool``
+    explicitly — because ``isinstance(True, int)`` — while ``0`` reads as a goal
+    of zero. So ``[0, False]`` and ``[False, 0]`` would give one indexer
+    opposite verdicts on the flagship premise depending on list order, which is
+    the position-decided fact this guard exists to refuse, re-entered through
+    the guard itself.
+
+    Bool-ness rather than ``type()``: ``2`` and ``2.0`` *are* one fact here,
+    since ``_is_a_seed_goal`` admits ``int`` and ``float`` alike, and splitting
+    them would raise a conflict over a payload nobody could misread.
+
+    Two bare ``NaN`` entries — which ``json.loads`` does accept — report as a
+    conflict, because ``nan != nan``. Left alone: a ``NaN`` seed goal is already
+    unusable downstream, so the only cost is a slightly wrong error message on a
+    payload that errors either way.
+    """
+    return isinstance(value, bool) == isinstance(other, bool) and value == other
+
+
+def _single_value(name: str, values: list[Any]) -> Any:
+    """The one value *name* carries, or a bad response if its duplicates disagree.
+
+    Conflicting duplicates only. An agreeing repeat is readable — first-win and
+    last-win give the same answer, so there is nothing to be wrong about — and
+    rejecting it would turn a payload that costs nothing to read into an ERROR.
+    A *disagreeing* repeat is a payload this collector genuinely cannot read:
+    ``Known(1.0)`` and ``Known(9.0)`` are different operator intents, and
+    picking one by position is the fabrication ``_field_name`` and
+    ``_field_entries`` already refuse one line above.
+
+    ``bad-response`` rather than ``Unknown``, which looks like the humbler
+    answer and is not: ``_lacks_seed_criteria`` is deliberately total and reads
+    ``Unknown`` as *no seed goal*, so an unreadable duplicate would arrive at
+    the flagship check as a confident **FAIL**. That is last-win's fabrication
+    pointed the other way. Raising is the only reading that admits ignorance.
+
+    Compared value-by-value rather than through a set, because a ``value`` is
+    whatever JSON put there and lists and dicts are unhashable. Entries with no
+    ``value`` key never reach here, so "absent" is not one of the readings in
+    play: a bare duplicate beside a valued one is not a conflict, since only one
+    of them says anything about what the operator set.
+    """
+    first, *rest = values
+    if any(not _interchangeable(value, first) for value in rest):
+        raise ServiceError(
+            "bad-response",
+            f"{_INDEXER}: 'fields' gives {name!r} two different values",
+        )
+    return first
 
 
 def _read_version(client: ReadOnlyClient) -> str:
