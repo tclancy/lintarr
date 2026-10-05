@@ -48,6 +48,7 @@ against a live client:
   motivated it.
 """
 
+import math
 from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
@@ -272,19 +273,48 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
       assigns ``Ratio = seedCriteria.SeedRatio`` verbatim, and its validator
       ``AsWarning()``s a non-positive number rather than refusing it — so a
       negative goal saves, and arrives at the download client intact.
-    - qBittorrent enforces a ratio limit only ``if (shareLimits.ratioLimit >= 0)``
-      and skips the whole check when every limit ``< 0``. **Every** negative is
-      therefore "no limit", not just the ``-1`` sentinel — a ``-5`` seeds
-      forever exactly as ``-1`` does, which is the half the ticket had wrong.
-    - ``0`` stays a goal. ``ratio >= 0`` is satisfied the moment the torrent
-      finishes, so the slot is released immediately. That is an aggressive goal,
-      not an absent one.
+    - qBittorrent's ``processTorrentShareLimits`` enforces a ratio only under
+      ``(ratioLimit >= 0)``, and gates ``seedingTimeLimit`` on the identical
+      test in the same function. **Every** negative is therefore "no limit",
+      not just the ``-1`` sentinel — a ``-5`` seeds forever exactly as ``-1``
+      does, which is the half the ticket had wrong.
+    - ``0`` stays a goal, for BOTH criteria. ``ratio >= 0`` is satisfied the
+      moment the torrent finishes, and ``finishedTime() / 60 >= 0`` is
+      satisfied at that same instant, so the slot is released immediately.
+      That is an aggressive goal, not an absent one.
+    - ``inf`` is **not** a goal, and it is the one case the range test alone
+      gets wrong: ``inf >= 0`` is True, while a ratio limit of ``inf`` can
+      never be reached by ``realRatio()``. It is ``-1`` wearing a positive
+      sign, so it needs ``math.isfinite`` rather than the comparison.
+      Reachable rather than theoretical — ``json`` decodes both ``1e400``
+      and the non-standard ``Infinity`` token to ``inf``.
+
+    ``nan`` needs nothing added: every comparison against it is False, so it
+    already fails the range test and arms the check. Recorded here so that
+    stays a known property rather than a lucky one.
+
+    The ``isinstance(..., float)`` is load-bearing and not a tidy-up. Only a
+    ``float`` can be non-finite — a Python ``int`` always is — and
+    ``math.isfinite`` on a large enough ``int`` raises ``OverflowError``
+    instead of answering. ``json`` decodes a 401-digit integer literal to
+    exactly such an ``int``, so a bare ``math.isfinite(fact.value)`` here
+    turns a junk payload into a crash, which is the one outcome this file
+    ranks below a false PASS.
 
     So a negative criterion is an indexer whose torrents never stop seeding,
-    which is the homelab#393 wedge itself — and before this guard it disarmed
-    the check that exists to find it, byte-identically to a real ratio of 2.0.
+    and before this guard it disarmed the wedge check byte-identically to a
+    real ratio of 2.0. Deliberately a weaker claim than this docstring first
+    made: a negative goal is not *by itself* the homelab#393 wedge, because
+    ``_seeding_conflict`` is a conjunction that still wants the global and
+    category limits off — and a negative goal is precisely the case where
+    those conjuncts can be false while the torrents still never stop. See
+    lintarr#28.
     """
-    return _is_a_readable_seed_criterion(fact) and fact.value >= 0
+    if not _is_a_readable_seed_criterion(fact):
+        return False
+    if isinstance(fact.value, float) and not math.isfinite(fact.value):
+        return False
+    return fact.value >= 0
 
 
 def _is_an_unusable_seed_criterion(fact: Fact[Any]) -> bool:

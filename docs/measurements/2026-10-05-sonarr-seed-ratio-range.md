@@ -94,7 +94,9 @@ it needs a live stack rather than this chair.
 
 ### 1. Sonarr stores it as nullable and warns rather than refuses
 
-`src/NzbDrone.Core/Indexers/SeedCriteriaSettings.cs`:
+`src/NzbDrone.Core/Indexers/SeedCriteriaSettings.cs` — *abridged: the two
+properties and the rule that constrains them, which sit in separate classes in
+the file, with the parallel `SeedTime`/`SeasonPackSeedTime` rules elided*:
 
 ```csharp
 public double? SeedRatio { get; set; }      // nullable: a cleared field is null
@@ -172,13 +174,62 @@ if (const qreal ratio = torrent->realRatio();
 ```
 
 `ratioLimit >= 0` is the measurement. `-1` and `-5` are the same value to this
-code: both fail the test, both mean the torrent is never stopped. The WebUI API
-adds no validation of its own — `TorrentsController::setShareLimitsAction` does
-`params()[u"ratioLimit"_s].toDouble()` and hands it straight on.
+code: both fail the test, both mean the torrent is never stopped.
+
+One wrinkle, found in review and recorded because it is *not* an exception.
+`TorrentImpl::setRatioLimit` opens with a clamp:
+
+```cpp
+if (limit < DEFAULT_RATIO_LIMIT)    // i.e. < -2
+    limit = NO_RATIO_LIMIT;         // ... becomes exactly -1
+```
+
+So on the `setShareLimits` path a `-5` is rewritten to `-1` before it is
+stored, and the `→ -5` cell in the table below is the value Sonarr *sent*
+rather than the value qBittorrent kept. On the **add** path there is no clamp at
+all: `torrentscontroller.cpp` does
+`parseDouble(...).value_or(DEFAULT_RATIO_LIMIT)` straight into
+`AddTorrentParams.ratioLimit`, and the `TorrentImpl` constructor takes it as-is.
+`-0.5` is never clamped on either path, since `-0.5 > -2`.
+
+Both routes therefore end at "no limit", which is why the clamp changes no
+conclusion here — if anything it strengthens the rule, by making `-5` *become*
+the sentinel. It is written down so the next reader does not mistake its absence
+from the table for an error.
 
 `seedingTimeLimit` is gated by the identical `>= 0` test in the same function,
 so `seedCriteria.seedTime` needs the same rule. That is why the code change
 applies to both criteria rather than to the ratio alone.
+
+## The consequence the table does not show, and it is filed as #28
+
+Worth separating from the rule above, because the rule is settled and this is
+not. The table's last column says "an indexer goal?" — it does **not** say "does
+the stack wedge?", and for one row those come apart.
+
+`-2`, absent and null all mean *defer*: `effectiveRatioLimit()` redirects `-2` to
+`categoryRatioLimit(category())`, so a global or category ratio limit still
+releases the slot. Every **other** negative means *override to unlimited*, and
+`categoryRatioLimit()` is the only route to `globalMaxRatio()` — so the global
+limit is never consulted and cannot save it.
+
+`queue-liveness` cannot express that difference today. `_seeding_conflict` is a
+conjunction that also requires `qbt.no_global_ratio` and `qbt.no_category_limits`,
+and `arr.indexer_without_seed_criteria` is a bool. Measured on this branch:
+
+```
+qbt_with()   # global ratio limit ON: max_ratio_enabled=True, max_ratio=1.5
+
+  seed_ratio = -1   outcome=PASS     <-- wrong: overrides the global, seeds forever
+  seed_ratio = -2   outcome=PASS     <-- right: defers to the global, which releases
+```
+
+So the range rule turns an **unconditional** false PASS on `-1` into a
+**conditional** one, surviving exactly when the operator has configured a global
+limit. That is a real remaining hole and a slightly uncomfortable one, since the
+survivor is the better-configured stack. It is [#28](https://github.com/tclancy/lintarr/issues/28)
+rather than more of this change, because closing it means restructuring the
+conjunction into a disjunction, which is not a range rule.
 
 ## The table
 
