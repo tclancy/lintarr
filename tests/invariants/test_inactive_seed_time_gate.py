@@ -30,6 +30,7 @@ the gate".
 
 import pytest
 
+from lintarr.facts import Unknown
 from lintarr.invariants.queue_liveness import (
     OVERRIDE_BOTH,
     OVERRIDE_RATIO,
@@ -39,7 +40,7 @@ from lintarr.invariants.queue_liveness import (
 )
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with, wedged_qbt
-from tests.invariants.test_queue_liveness import NO_GOALS, _arrs, _fact, _indexer, _NO_RATIO
+from tests.invariants.test_queue_liveness import _NO_RATIO, NO_GOALS, _arrs, _fact, _indexer
 from tests.invariants.test_share_limit_override import SLOTS
 
 #: One (arrs, conflict) pair per seeder-absorption route, each on a stack whose
@@ -136,8 +137,6 @@ def test_an_unreadable_gate_does_not_silently_clear_a_route():
     premise goes unproved rather than false, so the route must not report a
     clean PASS as though the operator had a working release gate.
     """
-    from lintarr.facts import Unknown
-
     qbt = qbt_with(
         **(
             SLOTS
