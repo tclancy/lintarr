@@ -286,15 +286,23 @@ to the letter and then trusts the chain it defers to without measuring it.
 
 **False FAILs — lintarr says wedged and the stack recovers:**
 
-1. **`max_inactive_seeding_time_enabled` is not collected.**
-   `processTorrentShareLimits` has *three* arms, and
+1. ~~**`max_inactive_seeding_time_enabled` is not collected.**~~ **Closed by
+   lintarr#32.** `processTorrentShareLimits` has *three* arms, and
    `effectiveInactiveSeedingTimeLimit()` redirects `-2` to
    `globalMaxInactiveSeedingMinutes()` exactly as the other two do. Sonarr never
-   sets a per-torrent inactive limit, so that arm is always deferring and the
-   global does release stalled seeders. `OVERRIDE_BOTH` is the worst exposed:
-   it carries no share-limit premise, so it fires whatever the other globals
-   say. Its "Therefore" line now discloses this rather than asserting no
-   setting can help.
+   sets a per-torrent inactive limit, so that arm is always deferring to the
+   global. The preference is now collected and read as
+   `qbt.no_global_inactive_seed_time` in `_slot_premises`, which reaches all
+   four seeder-absorption routes.
+
+   **One sentence here was wrong and is worth keeping visible:** "the global
+   does release stalled seeders" assumed the global was *set*. Read off the live
+   homelab instance on 2026-10-06 (`GET /api/v2/app/preferences`, v5.2.3),
+   `max_inactive_seeding_time_enabled` is `False` — so on the one stack this
+   project has evidence for, the third arm never fires and the FAILs were
+   **correct**. The exposure was latent, not live. `OVERRIDE_BOTH` was still the
+   widest-exposed route for the reason given, but no recorded configuration
+   reached it.
 2. **`max_ratio_act` is collected and never read.** `ShareLimitAction` `2` is
    `EnableSuperSeeding`, which does not stop the torrent — so a *reached* goal
    does not release the slot. That makes "a goal releases the slot" conditional

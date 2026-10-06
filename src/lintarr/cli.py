@@ -228,9 +228,9 @@ _THEREFORE = {
         "  your global or category setting. Seeders hold every active slot and no\n"
         "  queued download can start. A global ratio or seeding-time limit will\n"
         "  NOT help — the fix is that indexer's seed ratio and seed time in\n"
-        "  Sonarr/Radarr. (lintarr does not read\n"
-        "  max_inactive_seeding_time_enabled, which is a third limit that would\n"
-        "  release these torrents; if you have it on, this FAIL is wrong.)"
+        "  Sonarr/Radarr, or a global inactive-seeding-time limit, which is the\n"
+        "  one release gate no indexer can override. This FAIL already checked\n"
+        "  that you have no such limit set."
     ),
     (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_RATIO): (
         "an indexer sets a negative seed ratio other than -2, so\n"

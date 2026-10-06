@@ -641,11 +641,38 @@ def _slot_premises(qbt: QbtInstance, queueing: Premise) -> tuple[Premise, ...]:
     the queue is managed, ``max_active_torrents`` can run out, and slow
     torrents are not exempt from it. What the routes disagree about is only
     whether anything ever releases a slot.
+
+    ``qbt.no_global_inactive_seed_time`` lives here rather than in any one route
+    because the third release gate is the one axis **no** indexer can override.
+    ``effectiveInactiveSeedingTimeLimit()`` redirects ``-2`` to
+    ``globalMaxInactiveSeedingMinutes()`` and Sonarr never sets a per-torrent
+    inactive limit, so that arm is always deferring to the global no matter
+    which *other* axis the indexer put out of reach. A route that omitted it
+    would FAIL a stack the global drains (lintarr#32).
+
+    The flag is the whole predicate, not a proxy for one: ``appcontroller.cpp``
+    derives ``max_inactive_seeding_time_enabled`` as
+    ``globalMaxInactiveSeedingMinutes() >= 0``, and the arm fires on
+    ``inactiveSeedingTimeLimit >= 0``. The *value* changes when a torrent is
+    released, never whether one can be.
+
+    Known imprecision, in the direction this file already chooses: the gate
+    releases a torrent that has been **inactive** for the limit, so a stack
+    whose seeders are actively uploading can still wedge with the global
+    inactive limit on, and this premise suppresses that FAIL. homelab#393 sat
+    at 0 kB/s, so its seeders were inactive and the gate would have drained
+    them — the recorded incident is on the side the premise gets right. Missing
+    a FAIL is the error this project prefers to a FAIL on a stack that recovers
+    (see ``_override_ratio_conflict``).
     """
     return (
         queueing,
         premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
+        premise(
+            "qbt.no_global_inactive_seed_time",
+            _not(qbt.max_inactive_seeding_time_enabled),
+        ),
     )
 
 
@@ -681,17 +708,14 @@ def _override_both_conflict(
     never fires, and listing ``qbt.no_global_ratio`` would be a false premise on
     a stack whose global ratio limit is on.
 
-    **It is therefore the route with the widest false-FAIL exposure to the one
-    release gate this file does not model at all.** A code review measured it:
-    ``processTorrentShareLimits`` has three arms, and
-    ``effectiveInactiveSeedingTimeLimit()`` redirects ``-2`` to
-    ``globalMaxInactiveSeedingMinutes()`` exactly as the other two do. Sonarr
-    never sets a per-torrent inactive limit, so that arm is *always* deferring
-    and a global inactive-seeding-time limit does release these torrents.
-    ``max_inactive_seeding_time_enabled`` is not collected, so no route can see
-    it — but ``SEEDING`` at least only reaches its FAIL with the other two
-    globals off, whereas this one fires whatever they say. Until the preference
-    is collected, say so rather than assert the operator has no setting left.
+    It *was* the route with the widest false-FAIL exposure to the third release
+    gate, because it names no share-limit premise and so fired whatever the
+    globals said. lintarr#32 closed that: ``_slot_premises`` now carries
+    ``qbt.no_global_inactive_seed_time``, so this route — like the other three —
+    reaches its FAIL only on a stack where that gate is off too. The share-limit
+    premises it still declines to name are the two an indexer *can* override;
+    the inactive gate is the one it cannot, which is why that premise is shared
+    rather than per-route.
     """
     premises = _slot_premises(qbt, queueing) + (
         premise(

@@ -359,6 +359,9 @@ _PREMISE_LABELS: frozenset[str] = frozenset(
         "qbt.slow_exempt_off",
         "qbt.no_global_ratio",
         "qbt.no_global_seed_time",
+        # The third release gate (lintarr#32). Sits beside the other two rather
+        # than under a route, because no indexer can override it.
+        "qbt.no_global_inactive_seed_time",
         "qbt.no_category_limits",
         "arr.indexer_without_seed_criteria",
         # The three override routes (lintarr#28). Each names its own arr

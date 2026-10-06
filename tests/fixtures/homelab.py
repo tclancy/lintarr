@@ -14,6 +14,15 @@ certain produced a silent total stall in production.
 `max_active_uploads` was not recorded in #393. Both builders use qBittorrent's
 default of 3; that guess was later verified against a live 5.2.3 instance on
 2026-08-26 rather than left as an unstated assumption.
+
+`max_inactive_seeding_time_enabled` was not recorded in #393 either, and is
+carried under the same precedent: read `False` off the live instance on
+2026-10-06 (`GET /api/v2/app/preferences`, qBittorrent v5.2.3, the same version
+recorded here), not guessed. Every other key in `_REPAIRED` was re-read in the
+same call and matched, which is what makes that instance the repaired stack
+rather than an unrelated one. It is also qBittorrent's own default. Both halves
+matter: the third release gate being OFF is why #393's seeders were never
+released by it, so the FAIL this fixture is evidence for stays a FAIL.
 """
 
 from datetime import UTC, datetime
@@ -36,6 +45,7 @@ _REPAIRED: dict[str, Any] = {
     "max_ratio_act": 3,
     "max_seeding_time_enabled": True,
     "max_seeding_time": 20160,
+    "max_inactive_seeding_time_enabled": False,
     "categories": {},
 }
 
