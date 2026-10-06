@@ -35,6 +35,7 @@ from lintarr.invariants.queue_liveness import (
     OVERRIDE_BOTH,
     OVERRIDE_RATIO,
     OVERRIDE_SEED_TIME,
+    SEED_CRITERIA_CONFLICTS,
     SEEDING,
     check,
 )
@@ -100,19 +101,31 @@ def test_a_global_inactive_seed_time_limit_clears_every_route(arrs, globals_, co
     """
     qbt = qbt_with(**(SLOTS | globals_ | {"max_inactive_seeding_time_enabled": True}))
     finding = check(qbt, arrs)
-    assert finding.outcome is not Outcome.FAIL, (
-        f"{conflict} still FAILs a stack whose global inactive-seeding-time "
-        f"limit releases the seeders: {[p.label for p in finding.premises]}"
+    assert finding.outcome is Outcome.PASS, (
+        f"{conflict} should PASS a stack whose global inactive-seeding-time "
+        f"limit releases the seeders, got {finding.outcome} with "
+        f"{[p.label for p in finding.premises]}"
     )
 
 
-def test_the_premise_is_reported_by_name_on_every_route():
+@pytest.mark.parametrize(("arrs", "globals_", "conflict"), _ROUTES)
+def test_the_premise_is_reported_by_name_on_every_route(arrs, globals_, conflict):
     """A premise that fires but is never published cannot be read by an operator."""
-    for param in _ROUTES:
-        arrs, globals_, conflict = param.values
-        qbt = qbt_with(**(SLOTS | globals_ | {"max_inactive_seeding_time_enabled": False}))
-        labels = {p.label for p in check(qbt, arrs).premises}
-        assert "qbt.no_global_inactive_seed_time" in labels, conflict
+    qbt = qbt_with(**(SLOTS | globals_ | {"max_inactive_seeding_time_enabled": False}))
+    labels = {p.label for p in check(qbt, arrs).premises}
+    assert "qbt.no_global_inactive_seed_time" in labels, conflict
+
+
+def test_routes_covers_every_conflict_that_shares_the_premise():
+    """A fifth seeder-absorption route must fail HERE, not escape silently.
+
+    `_ROUTES` is hand-written, so without this a route added to
+    `_deferring_slot_premises` would inherit the premise with nothing above
+    exercising it. `SEED_CRITERIA_CONFLICTS` is published and is exactly the four
+    routes that compose on it; ACTION is deliberately not among them, because it
+    takes `_slot_premises` and must not inherit this premise.
+    """
+    assert {p.values[2] for p in _ROUTES} == SEED_CRITERIA_CONFLICTS
 
 
 def test_homelab_393_is_unaffected_because_its_gate_was_off():
@@ -130,23 +143,47 @@ def test_homelab_393_is_unaffected_because_its_gate_was_off():
     assert "qbt.no_global_inactive_seed_time" in {p.label for p in finding.premises}
 
 
-def test_an_unreadable_gate_does_not_silently_clear_a_route():
-    """A fact that was never read must not be treated as "the gate is on".
+_WEDGE_GLOBALS = {"max_ratio_enabled": False, "max_seeding_time_enabled": False}
 
-    `Unknown` is the shape a permission error or a missing key arrives in. The
-    premise goes unproved rather than false, so the route must not report a
-    clean PASS as though the operator had a working release gate.
+
+def _gate(reason):
+    return Unknown(reason, "max_inactive_seeding_time_enabled")
+
+
+def test_a_permission_error_on_the_gate_skips_rather_than_deciding():
+    """`insufficient-permission` means the gate may well be armed and we cannot see it.
+
+    Undecidable, so the route must SKIP — not PASS (which would claim a release
+    path we never read) and not FAIL (which would claim there is none).
     """
     qbt = qbt_with(
         **(
             SLOTS
-            | {
-                "max_ratio_enabled": False,
-                "max_seeding_time_enabled": False,
-                "max_inactive_seeding_time_enabled": Unknown(
-                    "field-absent", "max_inactive_seeding_time_enabled"
-                ),
-            }
+            | _WEDGE_GLOBALS
+            | {"max_inactive_seeding_time_enabled": _gate("insufficient-permission")}
         )
     )
-    assert check(qbt, NO_GOALS).outcome is not Outcome.PASS
+    finding = check(qbt, NO_GOALS)
+    assert finding.outcome is Outcome.SKIP
+    assert "qbt.no_global_inactive_seed_time" in {p.label for p in finding.premises}
+
+
+def test_a_pre_4_6_client_still_reports_the_393_wedge():
+    """`field-absent` is resolved, not undecidable — and this is why it must be.
+
+    `max_inactive_seeding_time_enabled` landed in qBittorrent 4.6. On any older
+    client the key is simply absent, which the collector turns into
+    `Unknown(field-absent)`. Were that read as undecidable, all four
+    seeder-absorption routes would SKIP on every pre-4.6 client — Debian bookworm
+    ships 4.5.2 — and lintarr would go quiet on the exact configuration
+    homelab#393 recorded. A client with no third arm cannot be released by it, so
+    the gate is provably off and the FAIL stands.
+    """
+    qbt = qbt_with(
+        **(SLOTS | _WEDGE_GLOBALS | {"max_inactive_seeding_time_enabled": _gate("field-absent")})
+    )
+    finding = check(qbt, NO_GOALS)
+    assert finding.outcome is Outcome.FAIL, (
+        f"a pre-4.6 client went {finding.outcome} on the #393 wedge shape"
+    )
+    assert finding.conflict == SEEDING

@@ -148,6 +148,7 @@ _QBT_NEED_FIELDS: dict[str, str] = {
     "qbt.dont_count_slow_torrents": "dont_count_slow_torrents",
     "qbt.max_ratio_enabled": "max_ratio_enabled",
     "qbt.max_seeding_time_enabled": "max_seeding_time_enabled",
+    "qbt.max_ratio_act": "max_ratio_act",
     "qbt.categories": "categories",
 }
 
@@ -362,6 +363,8 @@ _PREMISE_LABELS: frozenset[str] = frozenset(
         # The third release gate (lintarr#32). Sits beside the other two rather
         # than under a route, because no indexer can override it.
         "qbt.no_global_inactive_seed_time",
+        # The release action, which defeats all three gates at once (#32).
+        "qbt.share_limit_action_frees_no_slot",
         "qbt.no_category_limits",
         "arr.indexer_without_seed_criteria",
         # The three override routes (lintarr#28). Each names its own arr
@@ -412,6 +415,9 @@ def test_every_declared_premise_label_is_reachable():
         (qbt_with(**SLOTS), OVERRIDES_BOTH),
         (qbt_with(max_seeding_time_enabled=False, **SLOTS), OVERRIDES_RATIO),
         (qbt_with(max_ratio_enabled=False, **SLOTS), OVERRIDES_SEED_TIME),
+        # ACTION. Needs a stack every other route leaves at PASS — share
+        # limits on and reachable — which is the inverse of all five above.
+        (qbt_with(max_ratio_act=2, **SLOTS), NO_GOALS),
     ):
         seen |= {p.label for p in check(qbt, arrs).premises}
     assert seen == _PREMISE_LABELS, (

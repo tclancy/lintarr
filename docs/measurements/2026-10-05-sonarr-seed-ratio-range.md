@@ -303,11 +303,28 @@ to the letter and then trusts the chain it defers to without measuring it.
    **correct**. The exposure was latent, not live. `OVERRIDE_BOTH` was still the
    widest-exposed route for the reason given, but no recorded configuration
    reached it.
-2. **`max_ratio_act` is collected and never read.** `ShareLimitAction` `2` is
-   `EnableSuperSeeding`, which does not stop the torrent — so a *reached* goal
-   does not release the slot. That makes "a goal releases the slot" conditional
-   rather than measured. (Same defect class as parsons-pulse#138, found there
-   first.)
+2. ~~**`max_ratio_act` is collected and never read.**~~ **Closed by lintarr#32**,
+   as the `ACTION` conflict. `ShareLimitAction` `2` is `EnableSuperSeeding`, which
+   does not stop the torrent — so a *reached* goal does not release the slot.
+   (Same defect class as parsons-pulse#138, found there first.)
+
+   **Two corrections to this entry, both found while closing it.** It is filed
+   under *False FAILs* and it is a false **PASS** — lintarr reported a clean bill
+   of health on a stack that wedges, which is the opposite direction and the worse
+   one. And `2` is not the only non-releasing value: the action dispatch is a
+   four-branch `if`/`else if`, so `Default = -1` matches **no branch at all** and
+   leaves the torrent running exactly as super seeding does. `Q_ASSERT(act !=
+   Default)` guards the setter and compiles out of release builds, and
+   `appcontroller.cpp` publishes the value through a bare `static_cast<int>`, so
+   `-1` is observable over the API. The fix is an allow-list of `{Stop, Remove,
+   RemoveWithContent}`; a `!= 2` check would have read `-1` as releasing.
+
+   It also could not be fixed as a premise on the existing routes, which is what
+   this entry implies. In all four seeder-absorption routes no goal is ever
+   reachable, so the action never executes and is irrelevant to them — it needed
+   a route of its own, and that route must *not* inherit
+   `qbt.no_global_inactive_seed_time`, because a non-releasing action defeats the
+   inactive arm too.
 
 **False PASSes — lintarr says fine and the stack wedges:**
 
@@ -328,9 +345,9 @@ to the letter and then trusts the chain it defers to without measuring it.
    `{"ratio_limit": -5}` is filed as *defers* when `categoryRatioLimit()`
    returns `-5` verbatim and releases nothing.
 
-Gaps 1 and 2 are tracked together; 3, 4 and 5 are tracked together. Neither set
-is touched by this change, and none of them can turn a negative `seedCriteria`
-value back into a goal — which is the only thing the code change here rests on.
+Gaps 1 and 2 are tracked together as lintarr#32 and are **both closed by it** — the third release gate is now collected and read, and `ACTION` reads the share-limit action. What #32 leaves open is the category-level `inactive_seeding_time_limit`, which `_category_sets_its_own_limit` still does not read. Gaps 3-5 below are untouched, and
+none of them can turn a negative `seedCriteria` value back into a goal — which is
+the only thing #14's code change rests on.
 
 ## The table
 
