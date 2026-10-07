@@ -36,6 +36,9 @@ consistency.
 - **Operate it:** `itguy deploy lintarr`, `itguy logs lintarr --level info`.
   `itguy restart lintarr` exits 1 by design, because nothing long-running
   exists.
+- **Alert path proven end to end** (2026-10-07). A drop-in pointed
+  SONARR_URL at a dead port. The run ERRORed with exit 2, OnFailure= fired,
+  and the ntfy arrived. Reverting returned it to PASS.
 - The former blockers are gone:
   - The qBittorrent password is vaulted (homelab#190).
   - The orphan-credential guard is a usage error (#3).
@@ -43,8 +46,6 @@ consistency.
 
 ## Open items
 
-- **Alert path not yet proven end to end.** Plan task 5: break one URL, see the
-  ntfy arrive, revert.
 - **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
   `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
   into it, so `state.json` sits beside the env file. It's harmless (0600 in a
