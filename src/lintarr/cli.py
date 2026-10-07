@@ -4,12 +4,22 @@ import dataclasses
 import json as jsonlib
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 import click
 
 from lintarr.collect.stack import collect_stack
 from lintarr.config import LintarrConfig, load_config
+from lintarr.edge import (
+    AlertKey,
+    StateError,
+    alert_keys,
+    edge_exit_code,
+    load_previous,
+    new_alerts,
+    save_current,
+)
 from lintarr.facts import Known, Unknown, is_known
 from lintarr.invariants import queue_liveness
 from lintarr.models import StackFacts
@@ -210,8 +220,8 @@ _THEREFORE = {
 }
 
 
-def _finding_to_dict(finding) -> dict[str, Any]:
-    return {
+def _finding_to_dict(finding, *, new: bool | None = None) -> dict[str, Any]:
+    out = {
         "invariant": finding.invariant,
         "instance": finding.instance,
         "outcome": str(finding.outcome),
@@ -223,6 +233,38 @@ def _finding_to_dict(finding) -> dict[str, Any]:
         "detail": finding.detail,
         "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
     }
+    # Only under --state-file. Without a previous run "new" has no meaning,
+    # and a field that is always true would read as information.
+    if new is not None:
+        out["new"] = new
+    return out
+
+
+def _previous_or_nothing(state_file: Path) -> frozenset[AlertKey]:
+    """The previous run's problems; an unreadable state warns and counts as none.
+
+    Counting as none means every current problem pages again: loud, never
+    silent, and the state is rewritten whole at the end of this run.
+    """
+    try:
+        return load_previous(state_file)
+    except StateError as exc:
+        click.echo(
+            f"lintarr: {state_file}: {exc}. Previous state ignored, so every current "
+            "problem is treated as new.",
+            err=True,
+        )
+        return frozenset()
+
+
+def _saved(state_file: Path, keys: frozenset[AlertKey]) -> bool:
+    """Persist this run's problems, reporting a failure rather than raising it."""
+    try:
+        save_current(state_file, keys)
+    except OSError as exc:
+        click.echo(f"lintarr: could not save state to {state_file}: {exc}", err=True)
+        return False
+    return True
 
 
 def _render_findings(findings) -> str:
@@ -264,8 +306,15 @@ def _render_findings(findings) -> str:
     default=True,
     help="Do not treat SKIP or N/A as a non-zero exit.",
 )
+@click.option(
+    "--state-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Edge-trigger: exit non-zero only for problems the previous run "
+    "recorded here did not have.",
+)
 @click.pass_context
-def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
+def check_command(ctx: click.Context, as_json: bool, strict: bool, state_file: Path | None) -> None:
     """Check whether this stack's settings can coexist.
 
     ``outcome`` and ``exit_code`` in the JSON payload rank findings on
@@ -281,11 +330,24 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
     — exits 2 having printed a usage error and no payload at all. Both mean
     "lintarr could not look", which is why they share a code; a run that
     emitted no JSON is the one that never got as far as checking.
+
+    With ``--state-file`` the exit code is edge-triggered (see ``lintarr.edge``):
+    the same codes, computed over only the problems the previous run did not
+    have. A problem that persists still prints and exits 0, and each JSON
+    finding gains ``new``. A state file that can't be written exits 2 after
+    printing, because the next run would otherwise re-page everything.
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
     findings = run_checks(facts, declared=cfg.declared)
-    code = exit_code((f.outcome for f in findings), strict=strict)
+    if state_file is None:
+        fresh = None
+        code = exit_code((f.outcome for f in findings), strict=strict)
+    else:
+        previous = _previous_or_nothing(state_file)
+        fresh = new_alerts(findings, previous, strict=strict)
+        code = edge_exit_code(findings, previous, strict=strict)
+        click.echo(f"lintarr: {len(fresh)} new problem(s) since the last run", err=True)
     if as_json:
         click.echo(
             jsonlib.dumps(
@@ -293,11 +355,16 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool) -> None:
                     "schema": 1,
                     "outcome": str(run_outcome(findings)),
                     "exit_code": code,
-                    "findings": [_finding_to_dict(f) for f in findings],
+                    "findings": [
+                        _finding_to_dict(f, new=None if fresh is None else f in fresh)
+                        for f in findings
+                    ],
                 },
                 indent=2,
             )
         )
     else:
         click.echo(_render_findings(findings))
+    if state_file is not None and not _saved(state_file, alert_keys(findings, strict=strict)):
+        ctx.exit(2)
     ctx.exit(code)
