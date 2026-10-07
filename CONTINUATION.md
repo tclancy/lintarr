@@ -1,7 +1,9 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-08-26
-**State:** P0a complete and merged to `main` (8c69dee). 91 tests, ruff clean.
+**Last updated:** 2026-10-07 (UTC)
+**State:** P0b's `queue-liveness` check is live on homelab. It runs hourly as an
+edge-triggered systemd timer, and the first run (2026-10-07 21:40 UTC) PASSed
+against the real stack. 853 tests, pre-commit clean.
 
 ## What lintarr is, and why
 
@@ -22,52 +24,35 @@ consistency.
 
 ## Where it stands
 
-**P0a — the collect layer — is done.** It reads and labels configuration. It
-does not check anything yet.
+- **Collect (P0a) and `queue-liveness` (P0b) are done.** `lintarr check` exits
+  0/1/2/3 (PASS / FAIL / ERROR / SKIP-or-N/A under `--strict`). See
+  `src/lintarr/outcomes.py`.
+- **Deployed** per `docs/superpowers/specs/2026-10-05-deploy-scope.md`:
+  - `lintarr.timer` fires `lintarr.service` at :17 each hour.
+  - `--state-file` (`src/lintarr/edge.py`) means a problem pages once through
+    homelab's `unit-failure-alert-user@`, not every hour.
+  - Units and env live in homelab `roles/native-apps` (homelab#542).
+  - Sonarr/Radarr keys are read from each app's `config.xml` at deploy time.
+- **Operate it:** `itguy deploy lintarr`, `itguy logs lintarr --level info`.
+  `itguy restart lintarr` exits 1 by design, because nothing long-running
+  exists.
+- The former blockers are gone:
+  - The qBittorrent password is vaulted (homelab#190).
+  - The orphan-credential guard is a usage error (#3).
+  - The homelab#393 fixture is in `tests/fixtures/homelab.py`.
 
-```
-src/lintarr/
-  facts.py            Known[T] | Unknown — absence lives in the type
-  models.py           multi-instance StackFacts
-  config.py           env-driven; API keys required, no auto-discovery
-  collect/http.py     GET-only; one allow-listed POST (qBittorrent login)
-  collect/qbittorrent.py   exactly one login attempt per run
-  collect/arr.py      per-indexer seed criteria
-  collect/stack.py    one failing service never aborts the run
-  cli.py              dump-facts (human + JSON)
-```
+## Open items
 
-Verified working against the real homelab Sonarr and Radarr.
-
-## Blockers to dogfooding, in order
-
-### 1. qBittorrent credentials — REAL BLOCKER
-
-`lintarr dump-facts` currently reports `ERROR qbittorrent[main]: banned` against
-homelab. Half the tool is therefore unexercised against real data.
-
-The LAN login is refused with HTTP 403. An earlier on-box success was almost
-certainly qBittorrent's **localhost auth bypass**, meaning `admin/adminadmin`
-was never actually validated. See the existing memory note: the WebUI password
-is not in Ansible and drifts across rebuilds.
-
-To resolve: set a known WebUI password in qBittorrent, and — because this is the
-same class of problem as homelab#393 — put it in the Ansible vault so it
-survives the next rebuild.
-
-### 2. One parked bug (first work of P0b)
-
-- The orphan-credential guard raises a raw `ValueError` traceback out of the
-  CLI; should be a `click.UsageError`. Tracked as #3.
-
-The `_fields_as_mapping` bug listed here is fixed — the `fields` list and
-every entry's name are now shape-checked and a malformed payload is recorded
-as `bad-response` rather than aborting the run (#2).
-
-### 3. There are no checks yet
-
-P0a only gathers facts. Nothing can pass or fail. Real dogfooding starts with
-P0b's `queue-liveness`.
+- **Alert path not yet proven end to end.** Plan task 5: break one URL, see the
+  ntfy arrive, revert.
+- **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
+  `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
+  into it, so `state.json` sits beside the env file. It's harmless (0600 in a
+  0700 dir), but it isn't what the unit's comments say. Fix it by renaming one
+  of the two directories.
+- **Known limits of edge-triggering:** a config/usage error exits 2 before
+  state is read, so it pages every run. There's also no periodic re-page for a
+  long-lived problem.
 
 ## The dogfooding asset nobody should lose
 
@@ -81,17 +66,21 @@ That makes it the acceptance fixture for `queue-liveness`:
 - the **repaired** live stack must report PASS
 - the values recorded in homelab#393 must report FAIL
 
-A check that cannot do both is not finished. Do not let #393 be closed without
-first copying its before/after table into a test fixture.
+Done: the table is in `tests/fixtures/homelab.py` (wedged and repaired), and
+`tests/test_check_cli.py` pins exit 1 / exit 0 against it. On 2026-10-07 the
+repaired live stack also PASSed for real.
 
-## Next phase: P0b
+## P0b: done
 
-Per `docs/superpowers/specs/2026-08-26-lintarr-design.md`:
+Per `docs/superpowers/specs/2026-08-26-lintarr-design.md`, all present:
 
-- the premise combinator (tracked premises, minimal by construction)
-- `queue-liveness` over the full three-limit queue model
-- the exhaustive state-machine simulator in `tests/model/queue.py`
-- the five-outcome lattice (PASS / FAIL / SKIP / ERROR / N-A) and exit codes
+- the premise combinator (`invariants/combinator.py`)
+- `queue-liveness` over the three-limit queue model (`invariants/queue_liveness.py`)
+- the state-machine simulator (`tests/model/queue.py`)
+- the five-outcome lattice and exit codes (`outcomes.py`)
+
+Next: pick the next spec phase. The design doc's Runtime section (webhook,
+HTTP API, SQLite history) and the P3 invariants remain.
 
 **Known gap carried forward:** the simulator validates that the closed form was
 *derived* correctly. It cannot catch a *wrong model* — a sweep over the
@@ -115,11 +104,19 @@ Recorded because they cost real review cycles:
    carrying the read-only safety claim. Mutation-test every guard: reintroduce
    the defect, watch the test fail, restore.
 
+5. **Probe that an estate-wide guard actually sees the new thing.** The
+   homelab deploy relied on generic guards (syslog identifier, OnFailure,
+   OnCalendar). Each one was confirmed by breaking the property in lintarr's
+   templates and watching it go red. "The suite passes" alone would have
+   proved nothing about lintarr.
+6. **Read the box after a deploy, not just the recap.** `failed=0` hid the
+   systemd state-dir symlink. Only the journal showed it.
+
 ## Repo notes
 
-- Remote `origin` is `git@github.com:tclancy/lintarr`, but `origin/main`
-  (`d850a3f`) is an **unrelated history** — the repo was created with an
-  initial commit. Local `main` has never been pushed. Reconcile before pushing.
+- Remote `origin` is `git@github.com:tclancy/lintarr` (public). Work lands
+  through PRs; run `uv run pre-commit install` once per clone. A clone without
+  the hook let an E501 reach `main` (#36).
 - MIT licensed. Python 3.13, uv, hatchling, src layout, click, httpx, pytest.
 - Hypothesis is a declared dev dependency and is now used: `tests/strategies.py`
   holds the fact/snapshot strategies and `tests/test_properties.py` the spec's
