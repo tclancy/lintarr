@@ -26,7 +26,9 @@ NOTHING: frozenset = frozenset()
 
 
 def _finding(outcome: Outcome, instance: str = "qbittorrent[main]", conflict: str = "") -> Finding:
-    return Finding(invariant="queue-liveness", instance=instance, outcome=outcome, conflict=conflict)
+    return Finding(
+        invariant="queue-liveness", instance=instance, outcome=outcome, conflict=conflict
+    )
 
 
 FAIL = _finding(Outcome.FAIL, conflict="seeding")
