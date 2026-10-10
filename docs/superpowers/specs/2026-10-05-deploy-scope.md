@@ -1,11 +1,9 @@
 # Scope — deploying lintarr to homelab
 
 **Date:** 2026-10-05 (UTC)
-**Status:** Decided 2026-10-05: shape A (systemd timer on the host). Task 1 in
-review (lintarr#30). Decided 2026-10-05: alert noise → option (b), in review
-as lintarr#31. Credentials → read from `config.xml`; the vaulted copies are
-reverted in homelab#534. Task 3 in review as homelab#542 (2026-10-07).
-BLOCKED ON: lintarr#30 and #31 merging; then task 4 (first deploy).
+**Status:** DONE 2026-10-07. Shape A deployed (lintarr#30, #31; homelab#534,
+#542). First live check PASSed, and the alert path was proven end to end.
+Follow-up: the systemd state-dir symlink quirk (see CONTINUATION.md).
 
 ## Goal
 
@@ -157,9 +155,9 @@ Must be settled before task 4 (first deploy).
 | 2 | Arr API keys | homelab | **superseded**: read from `config.xml` in task 3; vault copies reverted (homelab#534) |
 | 2b | Edge-triggered `check --state-file` (option b) | lintarr | lintarr#31 merged; ExecStart passes `--state-file %S/lintarr/state.json` |
 | 3 | Service, timer and env templates + tasks + tests | homelab | homelab#542 open; merged, and `itguy list` shows `lintarr` after `git pull` on the box |
-| 4 | (after 2b) `itguy deploy lintarr`, then `systemctl --user start lintarr.service` once by hand | homelab | `itguy logs lintarr --level info` shows a full `check` run |
-| 5 | Prove the alert path: point one URL at a dead port, see the ntfy, revert | homelab | ntfy received, then green again |
-| 6 | Refresh `CONTINUATION.md` | lintarr | merged |
+| 4 | **done** 2026-10-07. (after 2b) `itguy deploy lintarr`, then `systemctl --user start lintarr.service` once by hand | homelab | `itguy logs lintarr --level info` shows a full `check` run |
+| 5 | Prove the alert path: point one URL at a dead port, see the ntfy, revert | homelab | **done** 2026-10-07 |
+| 6 | Refresh `CONTINUATION.md` | lintarr | **done** (#37) |
 
 Tasks 1, 2b and 3 are separate PRs. Task 3 needs #30 and #31 merged first, so
 the unit runs a `restart.sh` and `--state-file` that exist on `main`.
