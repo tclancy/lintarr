@@ -84,7 +84,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import Any
 
-from lintarr.facts import Fact, is_known
+from lintarr.facts import Fact, Unknown, is_known
 from lintarr.invariants.combinator import conflict_if, premise
 from lintarr.models import ArrInstance, IndexerFacts, QbtInstance
 from lintarr.outcomes import Finding, Outcome, Premise
@@ -98,6 +98,23 @@ NEEDS: tuple[str, ...] = (
     "qbt.dont_count_slow_torrents",
     "qbt.max_ratio_enabled",
     "qbt.max_seeding_time_enabled",
+    # The action applied when any gate fires. Declared because an unread value
+    # is genuinely undecidable — `conflict_if` lets an unknown premise dominate,
+    # so `ACTION` SKIPs — and an undeclared fact the predicate reads escapes
+    # tests/test_needs_are_load_bearing.py entirely.
+    "qbt.max_ratio_act",
+    #
+    # `qbt.max_inactive_seeding_time_enabled` is read by every seeder-absorption
+    # route and is deliberately NOT declared here. A need asserts "this cannot be
+    # decided without the fact", and `_not_inactive_gate` resolves the
+    # `field-absent` case on purpose: the preference postdates qBittorrent 4.6,
+    # so a client that omits it has no third arm and the gate is provably off.
+    # Declaring it would make that resolution a lie — and
+    # tests/test_properties.py's never-read property, whose sentinel is
+    # `Unknown("field-absent")`, would fail against exactly the behaviour
+    # lintarr#32 wanted. The `insufficient-permission` case does still SKIP, and
+    # is pinned by tests/invariants/test_inactive_seed_time_gate.py rather than
+    # by the NEEDS table.
     "qbt.categories",
     # Three separate reads, not one. An indexer's protocol, its enable toggles
     # and its seed criteria each independently flip the verdict, so declaring
@@ -156,6 +173,58 @@ def _not(fact: Fact[bool]) -> bool | None:
     """Negate a boolean fact, preserving unknown-ness."""
     state = _truth(fact)
     return None if state is None else not state
+
+
+def _not_inactive_gate(qbt: QbtInstance) -> bool | None:
+    """True when no global inactive-seeding-time limit is armed.
+
+    ``field-absent`` reads as "not armed" rather than undecidable, and that
+    distinction is load-bearing: the preference landed in qBittorrent **4.6**, so
+    a client that does not report the key has no third arm to arm. Treating the
+    absence as unknown would turn all four seeder-absorption routes into SKIP on
+    every pre-4.6 client — Debian bookworm ships 4.5.2 — including on the exact
+    configuration homelab#393 recorded, which is the one incident this invariant
+    exists to catch.
+
+    ``insufficient-permission`` stays undecidable, because there the gate may
+    well be armed and we simply cannot see it. ``facts.UnknownReason`` exists to
+    tell those two apart and nothing else in this file had needed it;
+    ``_own_share_limit`` already resolves absence-as-information the same way for
+    categories, so this is the second instance of one rule rather than a one-off.
+    """
+    fact = qbt.max_inactive_seeding_time_enabled
+    if isinstance(fact, Unknown) and fact.reason == "field-absent":
+        return True
+    return _not(fact)
+
+
+#: ``ShareLimitAction`` values that actually free an active slot, read from
+#: ``src/base/bittorrent/sharelimits.h`` on ``release-5.2.4``:
+#: ``Default = -1``, ``Stop = 0``, ``Remove = 1``, ``EnableSuperSeeding = 2``,
+#: ``RemoveWithContent = 3``.
+#:
+#: An **allow-list**, not ``!= 2``. Two values free nothing and only one of them
+#: is ``EnableSuperSeeding``: ``processTorrentShareLimits``' action dispatch is a
+#: four-branch ``if``/``else if`` over Stop, Remove, RemoveWithContent and
+#: EnableSuperSeeding, so ``Default`` — and any value a future release adds —
+#: matches **no branch at all** and the torrent is left running. ``Default`` is
+#: guarded at the setter by ``Q_ASSERT(act != ShareLimitAction::Default)``, which
+#: is compiled out of release builds, and ``appcontroller.cpp`` publishes the
+#: value through a bare ``static_cast<int>`` — so ``-1`` is observable over the
+#: API. A denylist would read ``-1`` as releasing and clear the conflict.
+_RELEASING_ACTIONS: frozenset[int] = frozenset({0, 1, 3})
+
+
+def _action_frees_no_slot(qbt: QbtInstance) -> bool | None:
+    """True when the configured share-limit action leaves the torrent running.
+
+    ``max_ratio_act`` is misleadingly named: it is the **global** action for all
+    three arms, not the ratio arm's. ``effectiveShareLimitAction()`` redirects
+    ``Default`` through ``categoryShareLimitAction()`` to it, and Sonarr sets no
+    per-torrent action, so this one value decides what reaching *any* limit does.
+    """
+    act = _as_limit(qbt.max_ratio_act)
+    return None if act is None else act not in _RELEASING_ACTIONS
 
 
 def _as_limit(fact: Fact[int]) -> int | None:
@@ -602,6 +671,14 @@ OVERRIDE_BOTH = "indexer-overrides-both-share-limits"
 OVERRIDE_RATIO = "indexer-overrides-the-ratio-limit"
 OVERRIDE_SEED_TIME = "indexer-overrides-the-seed-time-limit"
 
+#: The release *action*, as opposed to the release *limits* above. Reaching a
+#: limit only frees a slot if the configured action stops or removes the
+#: torrent; `EnableSuperSeeding` (and `Default`, which matches no branch at
+#: all) leave it running. That makes every limit on the stack decorative, so
+#: this route names no limit premise — it is the one case where a *better*
+#: configured stack wedges. lintarr#32.
+ACTION = "share-limit-action-frees-no-slot"
+
 #: Every conflict this invariant can report, in no particular order. Published
 #: so the CLI's explanation table can be checked against it instead of against
 #: a second hand-written list — a conflict added without a "Therefore" line
@@ -612,6 +689,7 @@ CONFLICTS: tuple[str, ...] = (
     OVERRIDE_BOTH,
     OVERRIDE_RATIO,
     OVERRIDE_SEED_TIME,
+    ACTION,
 )
 
 #: The conflicts that rest on an indexer's seed criteria, and so the ones whose
@@ -635,17 +713,70 @@ def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
 
 
 def _slot_premises(qbt: QbtInstance, queueing: Premise) -> tuple[Premise, ...]:
-    """What every seeder-absorption route needs before share limits matter at all.
+    """What every route past starvation needs before share limits matter at all.
 
-    Shared by all four of them because it is the same physical claim each time:
-    the queue is managed, ``max_active_torrents`` can run out, and slow
-    torrents are not exempt from it. What the routes disagree about is only
-    whether anything ever releases a slot.
+    The same physical claim each time: the queue is managed,
+    ``max_active_torrents`` can run out, and slow torrents are not exempt from
+    it. What the routes disagree about is only whether anything ever releases a
+    slot.
+
+    Deliberately *excludes* every release-gate premise, including the inactive
+    one. ``ACTION`` composes on this tuple and must not inherit
+    ``qbt.no_global_inactive_seed_time``: when the share-limit action frees no
+    slot, the inactive arm firing releases nothing either, so requiring the gate
+    to be off would make ``ACTION`` miss the stacks where it is on. The four
+    seeder-absorption routes take ``_deferring_slot_premises`` instead.
     """
     return (
         queueing,
         premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
+    )
+
+
+def _deferring_slot_premises(qbt: QbtInstance, queueing: Premise) -> tuple[Premise, ...]:
+    """``_slot_premises`` plus the one release gate no indexer can override.
+
+    ``qbt.no_global_inactive_seed_time`` is shared by all four seeder-absorption
+    routes rather than living in any one of them, because
+    ``effectiveInactiveSeedingTimeLimit()`` redirects ``-2`` to
+    ``globalMaxInactiveSeedingMinutes()`` and Sonarr never sets a per-torrent
+    inactive limit — so that arm is always deferring to the global no matter
+    which *other* axis the indexer put out of reach. A route that omitted it
+    would FAIL a stack the global drains (lintarr#32).
+
+    Reachability is why it belongs with the slot premises and not beside
+    ``qbt.no_global_ratio``: ``processTorrentShareLimits`` is an ``else if``
+    chain whose arms each test ``(limit >= 0) && (count >= limit)``, so the
+    third arm is reachable with the other two globals *on* and not yet reached.
+
+    **Two things the global flag does not settle, both of which can still wedge
+    a stack this premise reports as drainable:**
+
+    - A **category** may set its own ``inactive_seeding_time_limit``, which
+      ``categoryInactiveSeedingTimeLimit()`` honours ahead of the global. This
+      file does not read it — ``_category_sets_its_own_limit`` iterates
+      ``ratio_limit`` and ``seeding_time_limit`` only — so a category
+      overriding the gate to never-release is invisible here. The data is
+      already in ``qbt.categories``; closing it is the remaining slice of
+      lintarr#32.
+    - The gate releases a torrent that has been **inactive** for the limit
+      (``timeSinceActivity()``), so actively-uploading seeders never reach it.
+      homelab#393 sat at 0 kB/s, so the recorded incident is on the side this
+      premise gets right, and lintarr reads no torrent list so it could not do
+      better without a new collection surface.
+
+    Both are the missing-a-FAIL direction, which is the error this project
+    prefers to a FAIL on a stack that recovers (see
+    ``_override_ratio_conflict``). What the flag *does* settle exactly is
+    whether the global gate is armed: ``appcontroller.cpp`` derives
+    ``max_inactive_seeding_time_enabled`` as
+    ``globalMaxInactiveSeedingMinutes() >= 0``, which is the arm's own firing
+    condition, so the paired minutes value changes *when* a torrent is released
+    and never *whether* one can be.
+    """
+    return _slot_premises(qbt, queueing) + (
+        premise("qbt.no_global_inactive_seed_time", _not_inactive_gate(qbt)),
     )
 
 
@@ -661,7 +792,7 @@ def _seeding_conflict(
     because a criterion that overrides its limit makes these global premises
     statements about a setting that never runs.
     """
-    premises = _slot_premises(qbt, queueing) + (
+    premises = _deferring_slot_premises(qbt, queueing) + (
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
@@ -681,19 +812,16 @@ def _override_both_conflict(
     never fires, and listing ``qbt.no_global_ratio`` would be a false premise on
     a stack whose global ratio limit is on.
 
-    **It is therefore the route with the widest false-FAIL exposure to the one
-    release gate this file does not model at all.** A code review measured it:
-    ``processTorrentShareLimits`` has three arms, and
-    ``effectiveInactiveSeedingTimeLimit()`` redirects ``-2`` to
-    ``globalMaxInactiveSeedingMinutes()`` exactly as the other two do. Sonarr
-    never sets a per-torrent inactive limit, so that arm is *always* deferring
-    and a global inactive-seeding-time limit does release these torrents.
-    ``max_inactive_seeding_time_enabled`` is not collected, so no route can see
-    it — but ``SEEDING`` at least only reaches its FAIL with the other two
-    globals off, whereas this one fires whatever they say. Until the preference
-    is collected, say so rather than assert the operator has no setting left.
+    It *was* the route with the widest false-FAIL exposure to the third release
+    gate, because it names no share-limit premise and so fired whatever the
+    globals said. lintarr#32 closed that: ``_slot_premises`` now carries
+    ``qbt.no_global_inactive_seed_time``, so this route — like the other three —
+    reaches its FAIL only on a stack where that gate is off too. The share-limit
+    premises it still declines to name are the two an indexer *can* override;
+    the inactive gate is the one it cannot, which is why that premise is shared
+    rather than per-route.
     """
-    premises = _slot_premises(qbt, queueing) + (
+    premises = _deferring_slot_premises(qbt, queueing) + (
         premise(
             "arr.indexer_overrides_both_share_limits",
             _any_torrent_indexer(arrs, _overrides_both_share_limits),
@@ -720,7 +848,7 @@ def _override_ratio_conflict(
     recovers. Of the two directions to be imprecise in, that is the one this
     project chooses; splitting the premise per criterion is the remaining slice.
     """
-    premises = _slot_premises(qbt, queueing) + (
+    premises = _deferring_slot_premises(qbt, queueing) + (
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise(
@@ -735,7 +863,7 @@ def _override_seed_time_conflict(
     qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
 ) -> Finding:
     """The mirror: seeding time overridden, so the global ratio limit is all there is."""
-    premises = _slot_premises(qbt, queueing) + (
+    premises = _deferring_slot_premises(qbt, queueing) + (
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise(
@@ -745,6 +873,39 @@ def _override_seed_time_conflict(
     )
     return conflict_if(
         INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=OVERRIDE_SEED_TIME
+    )
+
+
+def _action_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
+    """Every limit on the stack is decorative, because reaching one frees nothing.
+
+    The inverse of the four routes above, and the one route here that can FAIL a
+    stack whose share limits are all correctly configured. Those four say *no
+    limit will ever be reached*; this one says a limit **is** reached and the
+    torrent keeps its slot anyway — ``processTorrentShareLimits`` sets super
+    seeding, or matches no action branch at all, and returns.
+
+    Names no limit premise deliberately, and that is the finding rather than an
+    omission: ``effectiveShareLimitAction()`` is consulted inside ``if
+    (reached)``, *after* whichever arm fired, so the action defeats all three
+    arms at once. Listing ``qbt.no_global_ratio`` would be a false premise on a
+    stack whose global ratio limit is on and reached — which is exactly this
+    route's case.
+
+    It takes no ``arrs`` and reads no seed criteria for the same reason, which is
+    why ``ACTION`` is absent from ``SEED_CRITERIA_CONFLICTS``: an indexer's goals
+    cannot rescue a stack where reaching a goal is what fails.
+
+    Ordered **last** in ``check``, so no stack that already FAILed changes which
+    conflict it reports; the only new verdicts are on stacks every other route
+    left at PASS.
+    """
+    return conflict_if(
+        INVARIANT_ID,
+        f"qbittorrent[{qbt.name}]",
+        *_slot_premises(qbt, queueing),
+        premise("qbt.share_limit_action_frees_no_slot", _action_frees_no_slot(qbt)),
+        conflict=ACTION,
     )
 
 
@@ -908,5 +1069,6 @@ def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
         _override_both_conflict(qbt, arrs, queueing),
         _override_ratio_conflict(qbt, arrs, queueing),
         _override_seed_time_conflict(qbt, arrs, queueing),
+        _action_conflict(qbt, queueing),
     )
     return _note_unreadable_seed_criteria(_worst_of(routes, arrs), arrs)

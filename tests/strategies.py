@@ -123,6 +123,7 @@ def qbt_instances(names: st.SearchStrategy | None = None) -> st.SearchStrategy:
         max_ratio_act=LIMIT_FACTS,
         max_seeding_time_enabled=BOOL_FACTS,
         max_seeding_time=LIMIT_FACTS,
+        max_inactive_seeding_time_enabled=BOOL_FACTS,
         categories=facts(CATEGORY_MAPS),
     )
 

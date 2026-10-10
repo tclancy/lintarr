@@ -9,6 +9,7 @@ from the implementation.
 import pytest
 
 from lintarr.invariants.queue_liveness import NEEDS, check
+from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import (
     DISABLED_NO_GOALS,
@@ -68,6 +69,12 @@ _WEDGE = {
 _TESTED_ELSEWHERE: frozenset[str] = frozenset(
     {
         "qbt.max_active_downloads",
+        # `qbt.max_ratio_act` is read only by ACTION, which is the one route that
+        # needs the share limits ON and reachable. On the _WEDGE base both globals
+        # are off, so SEEDING FAILs whatever the action says and both halves of any
+        # pair come out FAIL — the same shape as max_active_downloads above. It
+        # needs a healthy base, so it gets its own test.
+        "qbt.max_ratio_act",
         "arr.indexer_protocol",
         "arr.indexer_enabled",
         "arr.indexer_seed_criteria",
@@ -138,3 +145,17 @@ def test_max_active_downloads_changes_the_verdict():
     a = check(qbt_with(max_active_downloads=0), NO_GOALS).outcome
     b = check(qbt_with(max_active_downloads=6), NO_GOALS).outcome
     assert a != b, "qbt.max_active_downloads is declared in NEEDS but changes no verdict"
+
+
+def test_the_share_limit_action_need_changes_the_verdict():
+    """A reached limit frees a slot only if the action stops or removes the torrent.
+
+    Measured against `_SLOTS` rather than `_WEDGE`: this is the route that fires
+    on a stack whose share limits are all correctly set, so the base has to be
+    one every other route leaves at PASS.
+    """
+    base = {"max_active_torrents": 5, "dont_count_slow_torrents": False}
+    stops = check(qbt_with(**base, max_ratio_act=0), NO_GOALS).outcome
+    super_seeds = check(qbt_with(**base, max_ratio_act=2), NO_GOALS).outcome
+    assert stops is Outcome.PASS, f"Stop should free the slot, got {stops}"
+    assert super_seeds is Outcome.FAIL, f"EnableSuperSeeding frees nothing, got {super_seeds}"

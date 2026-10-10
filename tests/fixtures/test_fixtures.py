@@ -39,7 +39,7 @@ def test_repaired_matches_the_documented_values():
 def test_fact_field_names_covers_every_fact_field():
     """A filter bug that silently returns nothing must not make the integrity test vacuous."""
     names = _fact_field_names()
-    assert len(names) == 11
+    assert len(names) == 12
     assert names  # non-empty, spelled out for clarity alongside the count above
 
 

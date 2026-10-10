@@ -188,6 +188,12 @@ _PREF_KEYS = (
     "max_ratio_act",
     "max_seeding_time_enabled",
     "max_seeding_time",
+    # The third release gate. `appcontroller.cpp` derives it as
+    # `globalMaxInactiveSeedingMinutes() >= 0`, which is exactly the condition
+    # `processTorrentShareLimits`' third arm fires on, so the flag alone is the
+    # whole predicate and the paired `max_inactive_seeding_time` value would be
+    # a fact nothing reads — the defect lintarr#32 was filed about.
+    "max_inactive_seeding_time_enabled",
 )
 
 

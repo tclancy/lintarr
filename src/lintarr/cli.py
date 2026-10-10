@@ -228,9 +228,19 @@ _THEREFORE = {
         "  your global or category setting. Seeders hold every active slot and no\n"
         "  queued download can start. A global ratio or seeding-time limit will\n"
         "  NOT help — the fix is that indexer's seed ratio and seed time in\n"
-        "  Sonarr/Radarr. (lintarr does not read\n"
-        "  max_inactive_seeding_time_enabled, which is a third limit that would\n"
-        "  release these torrents; if you have it on, this FAIL is wrong.)"
+        "  Sonarr/Radarr, or a global inactive-seeding-time limit, which is the\n"
+        "  one release gate no indexer can override and which this FAIL has\n"
+        "  already checked you have unset. A category may override that gate\n"
+        "  per-category, which lintarr does not yet read."
+    ),
+    (queue_liveness.INVARIANT_ID, queue_liveness.ACTION): (
+        "your share-limit action is set to something that does not free\n"
+        "  the slot. qBittorrent consults the action only AFTER a limit is\n"
+        "  reached, so this defeats the ratio, seeding-time and\n"
+        "  inactive-seeding-time limits at once and every limit you have set is\n"
+        "  decorative. Super seeding keeps the torrent running; so does any\n"
+        "  value matching no action branch. Set qBittorrent's share-limit\n"
+        "  action to Stop, Remove, or Remove-with-content."
     ),
     (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_RATIO): (
         "an indexer sets a negative seed ratio other than -2, so\n"

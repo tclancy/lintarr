@@ -28,6 +28,7 @@ class QbtInstance:
     max_ratio_act: Fact[int]
     max_seeding_time_enabled: Fact[bool]
     max_seeding_time: Fact[int]
+    max_inactive_seeding_time_enabled: Fact[bool]
     categories: Fact[dict[str, Any]]
 
 
