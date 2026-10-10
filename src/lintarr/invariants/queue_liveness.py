@@ -20,14 +20,45 @@ different shapes:
    allowed to excuse it.
 2. **Seeders absorb every slot.** ``max_active_torrents`` binds, seeding
    torrents count against it, and nothing ever makes a seeder stop. This is
-   #393, and it is a conjunction.
+   #393.
 
 They are reported as one invariant because they answer the same operator
 question. A conjunction cannot express "or", so each is decided separately and
-the two are combined as a three-valued disjunction: FAIL if either proves the
-wedge, SKIP only if neither proves it and something could not be read, PASS
-otherwise. Anything cruder loses verdicts it had already proved — a single
-unreadable preference must not silence a wedge established without it.
+they are combined as a three-valued disjunction: FAIL if any proves the wedge,
+SKIP only if none proves it and something could not be read, PASS otherwise.
+Anything cruder loses verdicts it had already proved — a single unreadable
+preference must not silence a wedge established without it.
+
+**(2) is four conjunctions, not one** (lintarr#28). "Nothing ever makes a
+seeder stop" is not a single claim, because a torrent carries its own ratio and
+seeding-time limits and is released as soon as *either* is reached. Each limit
+is in one of three states, measured on qBittorrent ``release-5.2.4``:
+
+- a **goal** (``>= 0`` and finite) — the slot is released, no wedge;
+- **deferring** (``-2``, absent, or null) — ``effectiveRatioLimit()`` redirects
+  it to ``categoryRatioLimit(category())``, which is the only route to
+  ``globalMaxRatio()``, so the global or category setting decides;
+- **overriding** (any other negative, and ``inf``/``nan``) — returned verbatim
+  into a ``>= 0`` gate it can never pass. The redirect never happens, so the
+  global is never consulted and **cannot** release the slot.
+
+A criterion nobody can read is a **fourth** state, not one of these, and the
+distinction matters because the two sides want opposite defaults for it.
+``_lacks_seed_criteria`` reads it as "no goal", which *arms* ``SEEDING``;
+``_overrides_the_share_limit`` reads it as "not an override", which *disarms*
+the three routes below. So an indexer reporting ``-1`` as the string ``"-1"`` —
+the shape ``_is_a_readable_seed_criterion`` exists for — is a silent PASS on a
+stack a readable ``-1`` FAILs, and no note explains it. Pre-existing rather
+than introduced here, measured during #28's review, and its own ticket.
+
+The deferring and overriding cases therefore need *different premises about
+qBittorrent*, and the two limits can be in different states at once. Hence
+``SEEDING`` plus three ``OVERRIDE_``… conflicts. Folding them into one
+conjunction is what left three wedging configurations at PASS until #28 — and
+collapsing them into one premise instead would cost the explanation, since in
+this project the premise set that fired *is* the remedy. A finding that listed
+``qbt.no_global_ratio`` on an overridden ratio would be naming a setting that
+never runs.
 
 Two things this file assumes and cannot yet prove, both P2 conformance work
 against a live client:
@@ -49,7 +80,7 @@ against a live client:
 """
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import Any
 
@@ -359,30 +390,115 @@ def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
     return not any(_is_a_seed_goal(fact) for fact in _seed_criteria(indexer))
 
 
-def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None:
-    """Any ONE enabled torrent indexer lacking goals is enough to wedge.
+def _overrides_the_share_limit(fact: Fact[Any]) -> bool:
+    """True when this criterion is a limit qBittorrent can neither reach nor redirect.
 
-    Torrents grabbed from it seed forever and accumulate in the slots.
-    Requiring every indexer to lack them would miss the mixed case.
+    Two conditions, and the second is the whole of lintarr#28. The value has to
+    be unreachable — ``_is_a_seed_goal`` says it is not a goal — *and* it has to
+    not be the one value that hands the question back to the global setting.
+
+    Measured on ``release-5.2.4``
+    (``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``)::
+
+        qreal TorrentImpl::effectiveRatioLimit() const
+        {
+            if (m_ratioLimit == DEFAULT_RATIO_LIMIT)   // -2, and only -2
+                return m_session->categoryRatioLimit(category());
+            return m_ratioLimit;
+        }
+
+    ``categoryRatioLimit()`` is the only route to ``globalMaxRatio()``, and
+    ``effectiveSeedingTimeLimit()`` redirects ``DEFAULT_SEEDING_TIME_LIMIT`` —
+    also ``-2`` — in exactly the same shape. So for every negative *except*
+    ``-2`` the redirect never happens, the global is never consulted, and
+    ``qbt.no_global_ratio`` is a premise about a setting this torrent has put
+    out of reach.
+
+    Written as "not a goal" rather than ``value < 0`` deliberately, and it is
+    not a tidy-up: ``inf`` is not a goal either (``realRatio()`` never reaches
+    it) and ``inf != -2``, so a positive infinity overrides exactly as ``-1``
+    does. ``nan`` lands here for the same two reasons. A ``< 0`` spelling would
+    read both as deferring and PASS a stack that cannot recover.
+    """
+    if not _is_a_readable_seed_criterion(fact):
+        return False
+    if fact.value == USE_GLOBAL:
+        return False
+    return not _is_a_seed_goal(fact)
+
+
+def _overrides_both_share_limits(indexer: IndexerFacts) -> bool:
+    """Both criteria overridden, so no global or category setting is consulted at all.
+
+    Quantified over ``_seed_criteria`` rather than naming the two fields, so a
+    third criterion added there cannot leave this predicate claiming more than
+    it checked. That protection stops here and does not reach its two
+    single-axis siblings, which name ``seed_ratio`` and ``seed_time`` directly
+    because the axis *is* what they are about — a third criterion would narrow
+    this predicate correctly and leave those two firing without consulting it.
+    ``all()`` over an empty ``_seed_criteria`` would also be vacuously True;
+    unreachable today, since the tuple is a literal pair.
+    """
+    return all(_overrides_the_share_limit(fact) for fact in _seed_criteria(indexer))
+
+
+def _overrides_the_ratio_limit(indexer: IndexerFacts) -> bool:
+    """Ratio overridden, and the seed time cannot release the slot on its own.
+
+    "Sets no goal" is the weaker half on purpose. The seed time may be
+    overridden too, or absent, or junk — in every one of those the *indexer*
+    has not asked for a release, so whether the slot is ever freed comes down
+    to the global seeding-time limit, which is the premise the conflict adds.
+    A real ``seedTime`` goal beside an overridden ratio is not a wedge and must
+    not match here.
+    """
+    return _overrides_the_share_limit(indexer.seed_ratio) and not _is_a_seed_goal(indexer.seed_time)
+
+
+def _overrides_the_seed_time_limit(indexer: IndexerFacts) -> bool:
+    """The mirror of ``_overrides_the_ratio_limit``, and not symmetrical by assumption.
+
+    Its own predicate because the two criteria share a loop by convention and
+    nothing else in this file trusts that convention — a ``> 0`` rule applied
+    to ``seed_time`` alone survived the whole suite once already (#14). The
+    redirect is measured on both fields: ``DEFAULT_SEEDING_TIME_LIMIT`` is
+    ``-2`` and ``effectiveSeedingTimeLimit()`` treats it exactly as the ratio's.
+    """
+    return _overrides_the_share_limit(indexer.seed_time) and not _is_a_seed_goal(indexer.seed_ratio)
+
+
+def _any_torrent_indexer(
+    arrs: tuple[ArrInstance, ...], matches: Callable[[IndexerFacts], bool]
+) -> bool | None:
+    """Any ONE enabled torrent indexer satisfying *matches* is enough to wedge.
+
+    Torrents grabbed from it never release their slot and accumulate in them.
+    Requiring every indexer to match would miss the mixed case.
 
     An indexer that could not be classified only makes the answer unknown when
-    it also lacks goals — with goals set it could not have contributed either
-    way, so it is not allowed to force a SKIP.
+    it *also* matches — one that does not match could not have contributed
+    either way, so it is not allowed to force a SKIP.
 
     No arr instances at all is unknown, never False. "We looked at every arr
-    and found no goal-less torrent indexer" and "there was no arr to look at"
-    are different claims, and only the first of them can support a PASS. An arr
+    and found no such torrent indexer" and "there was no arr to look at" are
+    different claims, and only the first of them can support a PASS. An arr
     that answered with an empty indexer list *is* the first claim: that read
     happened and it grabs nothing, so it stays False. Which of the ways there
     can be no arr this is — none configured, one declared but never collected —
     is decided in ``run.py``, which is the layer that knows what was declared.
+
+    Lifted out of ``_indexer_without_seed_criteria`` by #28 rather than copied:
+    every seeder-absorption route quantifies over indexers the same way, and
+    four near-identical loops would be four places for the three-valued rule
+    above to drift. The *shape* each route looks for is the parameter; the
+    quantifier is not.
     """
     if not arrs:
         return None
     undecidable = False
     for arr in arrs:
         for indexer in arr.indexers:
-            if not _lacks_seed_criteria(indexer):
+            if not matches(indexer):
                 continue
             match _is_a_torrent_source(indexer):
                 case True:
@@ -390,6 +506,11 @@ def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None
                 case None:
                     undecidable = True
     return None if undecidable else False
+
+
+def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None:
+    """Any enabled torrent indexer that sets no usable seed goal at all."""
+    return _any_torrent_indexer(arrs, _lacks_seed_criteria)
 
 
 def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
@@ -471,6 +592,36 @@ def _no_category_sets_its_own_limit(qbt: QbtInstance) -> bool | None:
 STARVATION = "no-slot-for-a-first-download"
 SEEDING = "seeders-absorb-every-slot"
 
+#: Three more routes to "seeders absorb every slot", split out from ``SEEDING``
+#: rather than folded into it because each has a different remedy and ``SEEDING``
+#: cannot state any of them. ``SEEDING`` says "both global share limits are
+#: off"; these are the cases where one or both are ON and the indexer has put
+#: them out of reach, so pointing an operator at a global setting is pointing
+#: them at a setting that will not run. lintarr#28.
+OVERRIDE_BOTH = "indexer-overrides-both-share-limits"
+OVERRIDE_RATIO = "indexer-overrides-the-ratio-limit"
+OVERRIDE_SEED_TIME = "indexer-overrides-the-seed-time-limit"
+
+#: Every conflict this invariant can report, in no particular order. Published
+#: so the CLI's explanation table can be checked against it instead of against
+#: a second hand-written list — a conflict added without a "Therefore" line
+#: prints a bare FAIL, and a hand-copied set cannot see that happen.
+CONFLICTS: tuple[str, ...] = (
+    STARVATION,
+    SEEDING,
+    OVERRIDE_BOTH,
+    OVERRIDE_RATIO,
+    OVERRIDE_SEED_TIME,
+)
+
+#: The conflicts that rest on an indexer's seed criteria, and so the ones whose
+#: findings may need ``_note_unreadable_seed_criteria``'s sentence. ``STARVATION``
+#: is deliberately absent: it never reads a seed criterion, and its "Therefore"
+#: line ends "Share limits are not involved".
+SEED_CRITERIA_CONFLICTS: frozenset[str] = frozenset(
+    {SEEDING, OVERRIDE_BOTH, OVERRIDE_RATIO, OVERRIDE_SEED_TIME}
+)
+
 
 def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
     """A client that cannot start even a first download, seeders or not."""
@@ -483,20 +634,118 @@ def _starvation_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
     )
 
 
-def _seeding_conflict(
-    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
-) -> Finding:
-    """homelab#393: seeders absorb every slot and nothing ever releases one."""
-    premises: tuple[Premise, ...] = (
+def _slot_premises(qbt: QbtInstance, queueing: Premise) -> tuple[Premise, ...]:
+    """What every seeder-absorption route needs before share limits matter at all.
+
+    Shared by all four of them because it is the same physical claim each time:
+    the queue is managed, ``max_active_torrents`` can run out, and slow
+    torrents are not exempt from it. What the routes disagree about is only
+    whether anything ever releases a slot.
+    """
+    return (
         queueing,
         premise("qbt.max_active_torrents_binds", _max_active_torrents_binds(qbt)),
         premise("qbt.slow_exempt_off", _not(qbt.dont_count_slow_torrents)),
+    )
+
+
+def _seeding_conflict(
+    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
+) -> Finding:
+    """homelab#393: seeders absorb every slot and nothing ever releases one.
+
+    The *deferring* route, and the flagship. Every criterion hands its limit
+    back to the global/category chain — by being absent, null, unreadable or
+    ``-2`` — and that chain releases nothing either. The three
+    ``OVERRIDE_``… conflicts below are the cases this one cannot express,
+    because a criterion that overrides its limit makes these global premises
+    statements about a setting that never runs.
+    """
+    premises = _slot_premises(qbt, queueing) + (
         premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise("arr.indexer_without_seed_criteria", _indexer_without_seed_criteria(arrs)),
     )
     return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=SEEDING)
+
+
+def _override_both_conflict(
+    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
+) -> Finding:
+    """Both limits overridden to unreachable, so no global setting is consulted.
+
+    The only route here that names no share-limit premise at all. For the two
+    limits this file models that is the finding rather than an omission: the
+    torrent carries its own unreachable limit on both axes, the ``-2`` redirect
+    never fires, and listing ``qbt.no_global_ratio`` would be a false premise on
+    a stack whose global ratio limit is on.
+
+    **It is therefore the route with the widest false-FAIL exposure to the one
+    release gate this file does not model at all.** A code review measured it:
+    ``processTorrentShareLimits`` has three arms, and
+    ``effectiveInactiveSeedingTimeLimit()`` redirects ``-2`` to
+    ``globalMaxInactiveSeedingMinutes()`` exactly as the other two do. Sonarr
+    never sets a per-torrent inactive limit, so that arm is *always* deferring
+    and a global inactive-seeding-time limit does release these torrents.
+    ``max_inactive_seeding_time_enabled`` is not collected, so no route can see
+    it — but ``SEEDING`` at least only reaches its FAIL with the other two
+    globals off, whereas this one fires whatever they say. Until the preference
+    is collected, say so rather than assert the operator has no setting left.
+    """
+    premises = _slot_premises(qbt, queueing) + (
+        premise(
+            "arr.indexer_overrides_both_share_limits",
+            _any_torrent_indexer(arrs, _overrides_both_share_limits),
+        ),
+    )
+    return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=OVERRIDE_BOTH)
+
+
+def _override_ratio_conflict(
+    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
+) -> Finding:
+    """The ratio is overridden; the seeding-time limit is the only route left, and it is off.
+
+    Deliberately asks for ``qbt.no_global_seed_time`` and **not**
+    ``qbt.no_global_ratio``. The global ratio limit is irrelevant here by
+    measurement, not by taste: the torrent's own ``ratioLimit`` is not ``-2``,
+    so ``effectiveRatioLimit()`` never calls ``categoryRatioLimit()`` and
+    ``globalMaxRatio()`` is unreachable.
+
+    ``qbt.no_category_limits`` is the existing combined premise, which also
+    reads each category's ``ratio_limit``. That is stricter than this route
+    needs — a category with a ratio limit but no seeding-time limit suppresses
+    this FAIL — so the conflict can miss, and can never fire on a stack that
+    recovers. Of the two directions to be imprecise in, that is the one this
+    project chooses; splitting the premise per criterion is the remaining slice.
+    """
+    premises = _slot_premises(qbt, queueing) + (
+        premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
+        premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
+        premise(
+            "arr.indexer_overrides_the_ratio_limit",
+            _any_torrent_indexer(arrs, _overrides_the_ratio_limit),
+        ),
+    )
+    return conflict_if(INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=OVERRIDE_RATIO)
+
+
+def _override_seed_time_conflict(
+    qbt: QbtInstance, arrs: tuple[ArrInstance, ...], queueing: Premise
+) -> Finding:
+    """The mirror: seeding time overridden, so the global ratio limit is all there is."""
+    premises = _slot_premises(qbt, queueing) + (
+        premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
+        premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
+        premise(
+            "arr.indexer_overrides_the_seed_time_limit",
+            _any_torrent_indexer(arrs, _overrides_the_seed_time_limit),
+        ),
+    )
+    return conflict_if(
+        INVARIANT_ID, f"qbittorrent[{qbt.name}]", *premises, conflict=OVERRIDE_SEED_TIME
+    )
 
 
 def _note_arrs_that_reported_no_indexers(
@@ -570,7 +819,7 @@ def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ..
     ``cli.py`` were written to prevent. A PASS reaches an operator through
     ``_worst_of``'s starvation fall-through, so this excludes the clean runs too.
     """
-    if finding.conflict != SEEDING:
+    if finding.conflict not in SEED_CRITERIA_CONFLICTS:
         return finding
     unreadable = _indexers_with_unreadable_seed_criteria(arrs)
     if not unreadable:
@@ -582,33 +831,82 @@ def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ..
     return replace(finding, detail=f"{finding.detail}; {note}" if finding.detail else note)
 
 
-def _worst_of(starved: Finding, seeding: Finding, arrs: tuple[ArrInstance, ...]) -> Finding:
-    """Whichever of the two conflicts decides the invariant, annotated.
+def _worst_of(findings: tuple[Finding, ...], arrs: tuple[ArrInstance, ...]) -> Finding:
+    """Whichever conflict decides the invariant, annotated.
 
-    Starvation is reported ahead of seeding when both fire: a client that cannot
-    start a first download is the more fundamental fact and the more actionable
-    one, since turning the share limits back on would not help it.
+    Outcome-major: the worst outcome any route reached wins, and among routes
+    that reached it, the earliest in *findings* wins. So the caller's order is
+    the tie-break and it is load-bearing twice over.
 
-    When neither fires the result is a PASS, which is the one outcome that needs
-    to say whether there was anything to examine — hence the
-    ``_note_arrs_that_reported_no_indexers`` call on that branch alone.
+    Starvation leads because a client that cannot start a first download is the
+    more fundamental fact and the more actionable one — turning the share
+    limits back on would not help it.
+
+    The deferring seeding route comes before the three override routes, which
+    makes this change a no-op for every verdict that already existed: a stack
+    ``SEEDING`` already FAILs on keeps reporting ``SEEDING``, and the only new
+    verdicts are on stacks it left at PASS.
+
+    Two tempting stronger claims are **false**, and a code review measured both.
+    Recorded because each reads as *the* reason for the ordering and neither is:
+
+    - *"Any stack the override routes FAIL on is one ``SEEDING`` leaves at
+      PASS."* No. The #393 preferences plus one indexer at ``seedRatio=-1``
+      FAIL ``SEEDING`` **and** ``OVERRIDE_RATIO`` at once. Nothing currently
+      failing changes only because ``SEEDING`` is earlier in the tuple — the
+      tie-break is load-bearing, not incidental. It also costs a half-wrong
+      remedy on that overlap, which is pre-existing and its own ticket.
+    - *"Whenever an override route SKIPs, ``SEEDING`` has SKIPped too."* No.
+      Two indexers are enough: a classifiable one with both criteria absent
+      settles ``arr.indexer_without_seed_criteria`` to True, so with a global
+      ratio limit on ``SEEDING`` PASSes, while an unclassifiable second indexer
+      at ``seedRatio=seedTime=-1`` leaves ``OVERRIDE_BOTH`` unknown. The
+      surfaced SKIP then carries ``arr.indexer_overrides_both_share_limits``
+      alone.
+
+    ``run.py::_resolve_missing_arrs`` survives that second case for a different
+    reason than the label: it also requires ``facts.arrs`` to be empty, and with
+    no arrs *every* route's existential returns ``None``, so ``SEEDING`` always
+    SKIPs and — being first — is always the one that surfaces. The relabel is
+    fenced by the no-arrs precondition, not by this ordering. Reordering these
+    routes still breaks it, because the first SKIP would then carry an override
+    label; ``tests/test_run.py`` holds that line.
+
+    When nothing fires the result is a PASS, which is the one outcome that
+    needs to say whether there was anything to examine — hence the
+    ``_note_arrs_that_reported_no_indexers`` call on that branch alone. It is
+    applied to the first finding because every route reports the same instance
+    and a PASS carries no premises to choose between.
     """
     for outcome in (Outcome.FAIL, Outcome.SKIP):
-        for finding in (starved, seeding):
+        for finding in findings:
             if finding.outcome is outcome:
                 return finding
-    return _note_arrs_that_reported_no_indexers(starved, arrs)
+    return _note_arrs_that_reported_no_indexers(findings[0], arrs)
 
 
 def check(qbt: QbtInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     """FAIL when this configuration can reach a state with no startable download.
 
-    The two conflicts are combined as a three-valued disjunction. Both are
-    always evaluated: neither is a precondition of the other, and stopping at
-    the first non-PASS would let an unreadable preference in one hide a wedge
-    the other had already proved.
+    The routes are combined as a three-valued disjunction. All of them are
+    always evaluated: none is a precondition of another, and stopping at the
+    first non-PASS would let an unreadable preference in one hide a wedge
+    another had already proved.
+
+    Four seeder-absorption routes rather than one, because "nothing ever
+    releases a seeder" is not one claim. A criterion either defers its limit to
+    the global/category chain or overrides it, the two cannot be rescued by the
+    same setting, and a torrent is released as soon as *either* of its limits
+    is reached — so the cases cross-product. See ``SEEDING`` and the
+    ``OVERRIDE_``… conflicts for which is which, and lintarr#28 for the
+    three shapes the single conjunction left at PASS.
     """
     queueing = premise("qbt.queueing_enabled", qbt.queueing_enabled)
-    starved = _starvation_conflict(qbt, queueing)
-    seeding = _seeding_conflict(qbt, arrs, queueing)
-    return _note_unreadable_seed_criteria(_worst_of(starved, seeding, arrs), arrs)
+    routes = (
+        _starvation_conflict(qbt, queueing),
+        _seeding_conflict(qbt, arrs, queueing),
+        _override_both_conflict(qbt, arrs, queueing),
+        _override_ratio_conflict(qbt, arrs, queueing),
+        _override_seed_time_conflict(qbt, arrs, queueing),
+    )
+    return _note_unreadable_seed_criteria(_worst_of(routes, arrs), arrs)
