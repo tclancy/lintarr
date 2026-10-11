@@ -23,6 +23,17 @@ same call and matched, which is what makes that instance the repaired stack
 rather than an unrelated one. It is also qBittorrent's own default. Both halves
 matter: the third release gate being OFF is why #393's seeders were never
 released by it, so the FAIL this fixture is evidence for stays a FAIL.
+
+`max_ratio` and `max_seeding_time` are carried in `_WEDGED` as the *repaired*
+values (1.5 and 20160) beside their own flags set to False, and that pair
+cannot come off a live client: `appcontroller.cpp` derives each flag as
+`value >= 0`, so a flag reading False means the value is the `-1` sentinel.
+Noted rather than corrected, under the same rule as the paragraphs above — the
+wedged values were not recorded in #393, and 1.5/20160 are no more the recorded
+ones than -1 is. Harmless while the flag is off, because `_no_global_ratio`
+does not read the value then; recorded because lintarr#33 made `max_ratio`
+load-bearing when the flag is ON, so a future test that flips only the flag on
+this base would be asserting against an unreachable configuration.
 """
 
 from datetime import UTC, datetime

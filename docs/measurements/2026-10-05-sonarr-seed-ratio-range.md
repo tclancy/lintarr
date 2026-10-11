@@ -336,6 +336,18 @@ to the letter and then trusts the chain it defers to without measuring it.
    on the conflict and the surviving finding was the starvation PASS. It is
    three-valued now: that one state returns `None`, the routes SKIP, and the
    note reaches the finding. Absent and null still defer.
+
+   **One slice survives, in the companion position.**
+   `_overrides_the_ratio_limit` is `_all_of` over a three-valued
+   `_overrides_the_share_limit(seed_ratio)` and a **total**
+   `not _is_a_seed_goal(seed_time)`, so an unreadable *seed time* beside an
+   overriding ratio still resolves to "sets no goal" and the route reaches
+   FAIL — where the honest answer, if that payload meant five minutes, is
+   PASS. Left as it is: it leans FAIL rather than PASS, the note still names
+   the indexer, and making the companion three-valued needs a second predicate
+   because `_lacks_seed_criteria` depends on `_is_a_seed_goal` staying total.
+   Pinned by
+   `test_an_unreadable_companion_criterion_still_settles_the_route`.
 4. **The global ratio value gets none of this document's rules.** **Half closed
    by lintarr#33, and the ticket's own example was the unreachable half.**
    Measured on `release-5.2.4`:
@@ -349,8 +361,31 @@ to the letter and then trusts the chain it defers to without measuring it.
    - What *is* reachable is `inf`. `Torrent::MAX_RATIO` **is**
      `std::numeric_limits<qreal>::infinity()`, `setGlobalMaxRatio` applies no
      upper clamp, and `inf >= 0.` is True — so the flag reads "a limit is set"
-     on a limit `realRatio()` can never reach. `qbt.no_global_ratio` now reads
-     the value through `_can_be_reached` when the flag is on.
+     on a limit no finished arr-grabbed torrent's ratio reaches.
+     `qbt.no_global_ratio` now reads the value through `_can_be_reached` when
+     the flag is on.
+
+     **The absolute "`realRatio()` can never reach `inf`" is false, and an
+     earlier draft of this section asserted it.** `torrentimpl.cpp:1516-1531`:
+
+     ```cpp
+     qreal TorrentImpl::realRatio() const
+     {
+         const int64_t upload = m_nativeStatus.all_time_upload;
+         const int64_t download = (m_nativeStatus.all_time_download < (m_nativeStatus.total_done * 0.01))
+             ? m_nativeStatus.total_done
+             : m_nativeStatus.all_time_download;
+
+         if (download == 0)
+             return (upload == 0) ? 0 : MAX_RATIO;
+     ```
+
+     So `inf >= inf` holds and the arm does fire. What makes `inf` unreachable
+     for lintarr is the *population*: `processTorrentShareLimits` runs only on
+     a finished torrent, whose `total_done` is its size, and `download` falls
+     back to `total_done` precisely when `all_time_download` is implausibly
+     small — so an arr-grabbed torrent that finished has a finite ratio. The
+     verdict is unchanged; the justification needed its condition.
    - **`max_seeding_time` provably needs nothing**, which is why only one need
      was added. `globalMaxSeedingMinutes()` is an `int`, so it can hold no
      non-finite value, and `setGlobalMaxSeedingMinutes` is
@@ -386,10 +421,21 @@ to the letter and then trusts the chain it defers to without measuring it.
    Measured verdict on `release-5.2.4` semantics, global ratio ON at 2.0 and
    global seeding time off, indexer deferring both criteria:
    `{"ratio_limit": -5, "seeding_time_limit": -2}` → **PASS**, and so do `-inf`
-   and `inf`. Closing it needs a premise the current one cannot express — an
-   overriding category makes `qbt.no_global_ratio` a statement about a setting
-   that never runs, which is the same shape as the indexer `OVERRIDE_` routes
-   and wants its own conflict rather than a widened boolean.
+   and `inf`. Closing *that* needs a premise the current one cannot express —
+   an overriding category makes `qbt.no_global_ratio` a statement about a
+   setting that never runs, which is the same shape as the indexer `OVERRIDE_`
+   routes and wants its own conflict rather than a widened boolean.
+
+   **The `inf` sub-slice did not need any of that and is closed by
+   lintarr#33.** `_own_share_limit` was the one caller still carrying its own
+   `value >= 0`, and `inf` passed it — so with **both globals off**, where the
+   category is the only thing that could clear the stack,
+   `{"ratio_limit": inf}` read as "this category releases its own torrents"
+   and reported PASS. Pointing that return at `_can_be_reached` makes it FAIL.
+   `nan` was already FAIL for the accidental reason that every comparison
+   against it is False, and is on the rule now. Pinned by
+   `test_an_infinite_category_ratio_limit_is_not_the_categorys_own_limit`.
+   What remains open is the `-1`/`-5`/globals-ON slice above.
 
    A **second** gap falls out of the same source read and is not in any ticket:
    `categoryRatioLimit()` recurses to `parentCategoryName()`, so a nested
@@ -397,7 +443,7 @@ to the letter and then trusts the chain it defers to without measuring it.
    chain reaches the global. `_no_category_sets_its_own_limit` iterates a flat
    map and walks no parent chain.
 
-Gaps 1 and 2 are tracked together as lintarr#32 and are **both closed by it** — the third release gate is now collected and read, and `ACTION` reads the share-limit action. What #32 leaves open is the category-level `inactive_seeding_time_limit`, which `_category_sets_its_own_limit` still does not read. Gap 3 and the ratio half of gap 4 are closed by lintarr#33; gap 5 and the parent-chain finding under it are open. None of
+Gaps 1 and 2 are tracked together as lintarr#32 and are **both closed by it** — the third release gate is now collected and read, and `ACTION` reads the share-limit action. What #32 leaves open is the category-level `inactive_seeding_time_limit`, which `_category_sets_its_own_limit` still does not read. Gap 3 is closed by lintarr#33 in the `seed_ratio` position and survives in the companion one; the ratio half of gap 4 is closed, as is gap 5's `inf` sub-slice; gap 5's `-1`/`-5`/globals-ON slice and the parent-chain finding under it are open. None of
 them can turn a negative `seedCriteria` value back into a goal — which is
 the only thing #14's code change rests on.
 

@@ -111,8 +111,8 @@ NEEDS: tuple[str, ...] = (
     # The paired VALUE, declared because the flag is derived from it and the two
     # disagree on one reachable input. `appcontroller.cpp` computes
     # `max_ratio_enabled` as `globalMaxRatio() >= 0.`, and `inf >= 0.` is True —
-    # so the flag reads "a limit is set" on a limit `realRatio()` can never
-    # reach. Read only when the flag is on; see `_no_global_ratio` for why
+    # so the flag reads "a limit is set" on a limit no finished torrent's ratio
+    # reaches. Read only when the flag is on; see `_no_global_ratio` for why
     # `max_seeding_time` gets no such entry (lintarr#33).
     "qbt.max_ratio",
     "qbt.max_seeding_time_enabled",
@@ -183,6 +183,17 @@ def _all_of(states: Iterable[bool | None]) -> bool | None:
     other inputs were unreadable.
 
     An empty iterable is vacuously True, matching the ``all()`` it replaces.
+
+    **This dominates the opposite way from ``conflict_if``, and the two are not
+    in conflict.** ``conflict_if`` lets an *unknown* premise dominate a False
+    one, so a route with an unreadable input SKIPs rather than certifying a
+    stack. That is a policy about what we are willing to publish. This is
+    arithmetic about what a premise's value *is*, one layer below: a conjunct
+    read as False means the shape genuinely does not match, so the premise is
+    False and ``conflict_if`` then applies its own rule to it. Reordering
+    ``conflict_if`` to match this function turns 143 tests red, and
+    ``tests/test_properties.py::test_a_qbt_preference_read_as_null_never_passes``
+    is the one that says why.
     """
     seen = tuple(states)
     if any(state is False for state in seen):
@@ -203,9 +214,25 @@ def _can_be_reached(limit: float) -> bool:
 
     ``inf`` is the case a bare ``>= 0`` gets wrong, and it is not theoretical:
     ``Torrent::MAX_RATIO`` **is** ``std::numeric_limits<qreal>::infinity()``, so
-    qBittorrent's own "maximum ratio" is the one value ``realRatio()`` can never
-    reach. ``json`` also decodes both ``1e400`` and the non-standard
+    qBittorrent's own "maximum ratio" is a limit no torrent this project lints
+    can reach. ``json`` also decodes both ``1e400`` and the non-standard
     ``Infinity`` token to ``inf``.
+
+    **Stated with its condition, because the absolute is false.**
+    ``realRatio()`` *can* return ``MAX_RATIO`` — ``torrentimpl.cpp:1516-1531``
+    returns it when effective download is ``0`` and upload is not::
+
+        if (download == 0)
+            return (upload == 0) ? 0 : MAX_RATIO;
+
+    so ``inf >= inf`` holds and the ratio arm fires. What makes ``inf``
+    unreachable *here* is the population rather than the arithmetic:
+    ``processTorrentShareLimits`` only runs on a finished torrent, whose
+    ``total_done`` is its size, and ``download`` is derived from
+    ``total_done`` when ``all_time_download`` is implausibly small — so an
+    arr-grabbed torrent that finished has a finite ratio. An earlier draft of
+    this docstring asserted the absolute in eight places; a reviewer read
+    ``realRatio()``'s body and it says otherwise.
 
     ``nan`` needs nothing added: every comparison against it is False, so it
     fails the range test already. Recorded so that stays a known property
@@ -277,8 +304,10 @@ def _no_global_ratio(qbt: QbtInstance) -> bool | None:
     the arm's own firing condition, and differs from it on one reachable value.
     ``Torrent::MAX_RATIO`` is ``std::numeric_limits<qreal>::infinity()``,
     ``setGlobalMaxRatio`` applies no upper clamp, and ``inf >= 0.`` is True. So
-    the flag reads True on a global limit ``realRatio()`` can never reach, and
-    ``qbt.no_global_ratio`` read it as a setting that drains the queue.
+    the flag reads True on a global limit no finished arr-grabbed torrent's
+    ratio reaches — see ``_can_be_reached`` for why that is a claim about the
+    population and not about ``inf`` arithmetic — and ``qbt.no_global_ratio``
+    read it as a setting that drains the queue.
 
     **The reads are ordered, and that is load-bearing rather than tidy.** The
     value is only needed when the flag is on, so a flag that is off settles the
@@ -712,9 +741,11 @@ def _any_torrent_indexer(
     read. An indexer contributes a wedge when it matches *and* grabs torrents,
     so either conjunct being False means it could not have contributed and must
     not force a SKIP — which is the old loop's ``if not matches(indexer):
-    continue`` generalised, not weakened. A ``matches`` of ``None`` beside a
-    usenet indexer is still False here, and that is the case the hand-rolled
-    short-circuit would have got wrong.
+    continue`` generalised, not weakened. The case that short-circuit got
+    wrong is a **torrent** indexer whose shape is ``None``: ``not None`` is
+    True, so it ``continue``d and the quantifier answered False where the
+    honest answer is "undecided". A usenet indexer it already got right, and
+    ``_all_of((None, False))`` keeps that right.
     """
     if not arrs:
         return None
@@ -753,9 +784,11 @@ def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
     **A category that overrides its limit to unreachable still reads as
     "inherits" here, and that is lintarr#33's remaining slice.** Only ``-2``
     defers: ``categoryRatioLimit()`` returns any other value verbatim, so a
-    ``ratio_limit`` of ``-1`` — the value qBittorrent writes for an unlimited
-    category — never reaches ``globalMaxRatio()`` and releases nothing, exactly
-    as ``-5`` does. Both are filed as False below. Fixing it wants a premise
+    ``ratio_limit`` of ``-1`` never reaches ``globalMaxRatio()`` and releases
+    nothing, exactly as ``-5`` does. Both are filed as False below. ``-1``
+    matters more than ``-5`` because it is qBittorrent's own named sentinel for
+    "no limit" (``NO_RATIO_LIMIT``, ``sharelimits.h``) rather than an
+    arbitrary negative, so it is the one a stack is likely to carry. Fixing it wants a premise
     this one cannot express, because an overriding category makes
     ``qbt.no_global_ratio`` a statement about a setting that never runs — the
     same shape as the indexer ``OVERRIDE_`` routes, and so its own conflict
@@ -770,10 +803,15 @@ def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     # -2 inherits the global setting and -1 is unlimited; neither is a limit of
-    # the category's own, and anything from 0 up is.
+    # the category's own.
     if value in (USE_GLOBAL, UNLIMITED):
         return False
-    return value >= 0
+    # The shared range rule, not a third hand-written sign test (lintarr#33).
+    # `>= 0` alone read `inf` as this category's own releasing limit, which
+    # suppressed the SEEDING FAIL on a stack where nothing releases anything —
+    # a false PASS, measured, with both globals off. `nan` landed on the right
+    # answer here by accident before and does so by rule now.
+    return _can_be_reached(value)
 
 
 def _category_sets_its_own_limit(category: Any) -> bool | None:

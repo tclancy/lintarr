@@ -26,7 +26,12 @@ read the ``max_ratio_enabled`` flag alone. Measured on ``release-5.2.4``:
   ``enabled=True`` means exactly ``max_ratio >= 0``.
 - ``Torrent::MAX_RATIO`` **is** ``infinity``, ``inf >= 0.`` is True, and
   ``setGlobalMaxRatio`` applies no upper clamp. So ``enabled=True`` with
-  ``max_ratio=inf`` is reachable, and ``realRatio() >= inf`` is never true.
+  ``max_ratio=inf`` is reachable, and no finished arr-grabbed torrent's ratio
+  reaches it. Stated with its condition on purpose: ``realRatio()`` *can*
+  return ``MAX_RATIO`` — ``torrentimpl.cpp:1516-1531`` does so when effective
+  download is ``0`` and upload is not — but ``processTorrentShareLimits`` runs
+  only on a finished torrent, whose ``total_done`` is its size, so ``download``
+  is non-zero and the ratio is finite.
 
 That is the whole of the gap, and the ticket's own headline example is outside
 it: ``enabled=True, max_ratio=-1`` **cannot be read from a live client**,
@@ -42,8 +47,6 @@ can be stored, and ``setGlobalMaxSeedingMinutes`` is
 ``_deferring_slot_premises`` already makes for the inactive gate; it holds for
 the seeding-time preference and fails for the ratio alone.
 """
-
-import math
 
 import pytest
 
@@ -153,19 +156,65 @@ def test_a_usenet_indexer_with_an_unreadable_criterion_does_not_skip():
     """
     qbt, _ = _stack(_NO_RATIO)
     arrs = _arrs(_indexer(seed_ratio=_fact("-1"), protocol="usenet"))
-    assert check(qbt, arrs).outcome is Outcome.PASS
+    finding = check(qbt, arrs)
+    assert finding.outcome is Outcome.PASS
+    # The half `test_a_clean_run_carries_no_note` can no longer reach: this is
+    # now the only shape where a PASS coexists with an unreadable criterion, so
+    # it is where "a PASS has nothing to explain" has to be pinned.
+    assert finding.detail == "", f"a PASS carried a seed-criterion note: {finding.detail!r}"
+
+
+# ------------------------------------------------- claim 1, surviving slice
+
+
+def test_an_unreadable_companion_criterion_still_settles_the_route():
+    """Recorded rather than fixed: the *other* position is still total.
+
+    ``_overrides_the_ratio_limit`` is ``_all_of`` over a three-valued
+    ``_overrides_the_share_limit(seed_ratio)`` and a **total**
+    ``not _is_a_seed_goal(seed_time)``. So an unreadable *seed time* beside an
+    overriding ratio resolves to "sets no goal" and the route reaches FAIL —
+    where the honest answer, if that payload meant five minutes, is PASS.
+
+    Left as it is for two reasons. It leans FAIL rather than PASS, which is the
+    direction this project prefers, and the note still names the indexer so the
+    operator is not told a value was read that was not. Making the companion
+    three-valued is not a one-liner either: ``_lacks_seed_criteria`` depends on
+    ``_is_a_seed_goal`` staying total, so it needs a second predicate rather
+    than a widened one.
+
+    This test exists so the behaviour is pinned and the claim in
+    ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md`` gap 3 — closed
+    in the ``seed_ratio`` position, surviving in the companion — is checkable
+    rather than prose.
+    """
+    finding = check(*_stack(_fact(-1), seed_time=_fact("5")))
+    assert finding.outcome is Outcome.FAIL
+    assert finding.conflict in SEED_CRITERIA_CONFLICTS
+    assert "not a number" in finding.detail
+    # The control: read as a number, the same value is a goal and clears it.
+    assert check(*_stack(_fact(-1), seed_time=_fact(5))).outcome is Outcome.PASS
 
 
 # ---------------------------------------------------------------- claim 2
 
 
 def test_an_infinite_global_ratio_limit_releases_nothing():
-    """``inf`` is ``-1`` wearing a positive sign, and the flag reads True on it."""
+    """``inf`` is ``-1`` wearing a positive sign, and the flag reads True on it.
+
+    ``Torrent::MAX_RATIO`` is ``std::numeric_limits<qreal>::infinity()``
+    (``torrent.cpp:47``), so this is a real configured value in qBittorrent's
+    own vocabulary rather than a junk payload — which is the whole
+    justification for reading the paired value at all. A test cannot see a C++
+    constant, so that citation lives here rather than in an assertion; an
+    earlier draft asserted ``math.isinf(float("inf"))``, which is a property of
+    Python's float and pins nothing about qBittorrent.
+    """
     qbt, arrs = _stack(_NO_RATIO, max_ratio=float("inf"))
     finding = check(qbt, arrs)
     assert finding.outcome is Outcome.FAIL, (
         f"max_ratio=inf with the flag on gave {finding.outcome.name}; "
-        "realRatio() can never reach it"
+        "no finished torrent's ratio reaches it"
     )
     assert finding.conflict in SEED_CRITERIA_CONFLICTS
 
@@ -199,7 +248,9 @@ def test_the_global_ratio_value_is_not_read_when_the_flag_is_off():
             }
         )
     )
-    assert check(qbt, _arrs(_indexer(seed_ratio=_NO_RATIO))).outcome is Outcome.FAIL
+    finding = check(qbt, _arrs(_indexer(seed_ratio=_NO_RATIO)))
+    assert finding.outcome is Outcome.FAIL
+    assert finding.conflict in SEED_CRITERIA_CONFLICTS
 
 
 def test_a_negative_global_ratio_is_handled_though_it_is_unreachable():
@@ -211,8 +262,9 @@ def test_a_negative_global_ratio_is_handled_though_it_is_unreachable():
     other negative can be stored either. The range rule covers it for free;
     this pins the direction as "no limit" rather than leaving it to chance.
     """
-    qbt, arrs = _stack(_NO_RATIO, max_ratio=-1)
-    assert check(qbt, arrs).outcome is Outcome.FAIL
+    finding = check(*_stack(_NO_RATIO, max_ratio=-1))
+    assert finding.outcome is Outcome.FAIL
+    assert finding.conflict in SEED_CRITERIA_CONFLICTS
 
 
 def test_a_boolean_global_ratio_is_not_a_number():
@@ -245,13 +297,44 @@ def test_the_starvation_route_is_untouched_by_the_global_ratio_rule():
     assert finding.conflict == STARVATION
 
 
-def test_qbittorrents_own_max_ratio_constant_is_not_a_reachable_limit():
-    """``Torrent::MAX_RATIO`` is ``std::numeric_limits<qreal>::infinity()``.
+# ------------------------------------------------- claim 3, the inf sub-slice
 
-    So "the maximum ratio" in qBittorrent's own vocabulary is the one value a
-    ratio can never reach. Pinned here because the rule's whole justification
-    is that this is a real configured value and not a junk payload.
+
+def test_an_infinite_category_ratio_limit_is_not_the_categorys_own_limit():
+    """``_own_share_limit`` used its own sign test, and ``inf`` passed it.
+
+    lintarr#33's third claim is about the category leg of the defer chain, and
+    most of it is still open — see the module's ``_own_share_limit`` docstring
+    and gap 5 in the measurement doc. This slice is not, because it is exactly
+    what the hoisted range rule fixes: ``value >= 0`` read ``inf`` as "this
+    category releases its own torrents", which suppressed the ``SEEDING`` FAIL
+    on a stack where nothing releases anything.
+
+    Measured on this fixture with **both globals off**, so the only thing that
+    could clear the stack is the category: before the hoist,
+    ``ratio_limit: inf`` reported PASS. ``nan`` landed on FAIL already, for the
+    accidental reason that every comparison against it is False; it is on the
+    rule now rather than on luck.
     """
-    assert math.isinf(float("inf"))
-    qbt, arrs = _stack(_NO_RATIO, max_ratio=float("inf"))
-    assert check(qbt, arrs).outcome is Outcome.FAIL
+    both_globals_off = {"max_ratio_enabled": False, "max_seeding_time_enabled": False}
+
+    def verdict(ratio_limit):
+        qbt = qbt_with(
+            **(
+                SLOTS
+                | both_globals_off
+                | {
+                    "categories": {
+                        "tv-sonarr": {"ratio_limit": ratio_limit, "seeding_time_limit": -2}
+                    }
+                }
+            )
+        )
+        return check(qbt, _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_NO_RATIO))).outcome
+
+    assert verdict(float("inf")) is Outcome.FAIL, "an infinite category limit releases nothing"
+    assert verdict(float("nan")) is Outcome.FAIL
+    # The control, and the reason this cannot just be `not value >= 0`: a real
+    # category limit still breaks the wedge for everything filed under it.
+    assert verdict(2.0) is Outcome.PASS
+    assert verdict(0) is Outcome.PASS
