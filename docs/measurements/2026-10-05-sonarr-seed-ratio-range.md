@@ -328,25 +328,77 @@ to the letter and then trusts the chain it defers to without measuring it.
 
 **False PASSes — lintarr says fine and the stack wedges:**
 
-3. **An unreadable criterion disarms all three override routes, silently.**
-   `_overrides_the_share_limit` resolves "could not read" to *not overriding*.
-   Measured: `seedRatio` `Known(-1)` FAILs `OVERRIDE_RATIO`; `Known("-1")`,
-   `Known(True)` and `Known("unlimited")` all PASS with an **empty** detail,
-   because `_note_unreadable_seed_criteria` keys on the conflict and the
-   surviving finding is the starvation PASS. One unreadable byte turns a FAIL
-   into a silent green.
-4. **The global values get none of this document's rules.**
-   `max_ratio_enabled` / `max_seeding_time_enabled` are read as booleans and
-   `max_ratio` / `max_seeding_time` are never read, so `max_ratio_enabled=True`
-   with `max_ratio=-1` — or `inf` — PASSes a wedge. Reachable through
-   `setPreferences`.
+3. ~~**An unreadable criterion disarms all three override routes, silently.**~~
+   **Closed by lintarr#33.** `_overrides_the_share_limit` was total and resolved
+   "could not read" to *not overriding*. Measured: `seedRatio` `Known(-1)` FAILs
+   `OVERRIDE_RATIO`; `Known("-1")`, `Known(True)` and `Known("unlimited")` all
+   PASSed with an **empty** detail, because `_note_unreadable_seed_criteria` keys
+   on the conflict and the surviving finding was the starvation PASS. It is
+   three-valued now: that one state returns `None`, the routes SKIP, and the
+   note reaches the finding. Absent and null still defer.
+4. **The global ratio value gets none of this document's rules.** **Half closed
+   by lintarr#33, and the ticket's own example was the unreachable half.**
+   Measured on `release-5.2.4`:
+   - `appcontroller.cpp:316` **derives** the flag —
+     `data["max_ratio_enabled"] = (session->globalMaxRatio() >= 0.)` — so it is
+     not stored separately, and `enabled=True` means exactly `max_ratio >= 0`.
+     The pair `enabled=True, max_ratio=-1` therefore **cannot be read from a
+     live client**, and `setGlobalMaxRatio` clamps `ratio < 0` to
+     `NO_RATIO_LIMIT` so no other negative can be stored either. The original
+     claim that this is "reachable through `setPreferences`" does not hold.
+   - What *is* reachable is `inf`. `Torrent::MAX_RATIO` **is**
+     `std::numeric_limits<qreal>::infinity()`, `setGlobalMaxRatio` applies no
+     upper clamp, and `inf >= 0.` is True — so the flag reads "a limit is set"
+     on a limit `realRatio()` can never reach. `qbt.no_global_ratio` now reads
+     the value through `_can_be_reached` when the flag is on.
+   - **`max_seeding_time` provably needs nothing**, which is why only one need
+     was added. `globalMaxSeedingMinutes()` is an `int`, so it can hold no
+     non-finite value, and `setGlobalMaxSeedingMinutes` is
+     `std::max(minutes, NO_SEEDING_TIME_LIMIT)` — the only reachable negative is
+     `-1`, which makes the derived flag read False. The derivation argument
+     `_deferring_slot_premises` already makes for the inactive gate holds for
+     this preference and fails for the ratio alone.
 5. **A category limit that overrides to unreachable reads as "inherits".**
-   `_own_share_limit` returns False for anything not `>= 0`, so
-   `{"ratio_limit": -5}` is filed as *defers* when `categoryRatioLimit()`
-   returns `-5` verbatim and releases nothing.
+   **Still open, and wider than first recorded.** `_own_share_limit` returns
+   False for both `USE_GLOBAL` (`-2`) and `UNLIMITED` (`-1`), filing each as
+   *defers*. Read from `release-5.2.4`, only `-2` defers:
 
-Gaps 1 and 2 are tracked together as lintarr#32 and are **both closed by it** — the third release gate is now collected and read, and `ACTION` reads the share-limit action. What #32 leaves open is the category-level `inactive_seeding_time_limit`, which `_category_sets_its_own_limit` still does not read. Gaps 3-5 below are untouched, and
-none of them can turn a negative `seedCriteria` value back into a goal — which is
+   ```cpp
+   qreal SessionImpl::categoryRatioLimit(const QString &categoryName) const
+   {
+       if (categoryName.isEmpty())
+           return globalMaxRatio();
+       if (const auto ratioLimit = categoryOptions(categoryName).ratioLimit;
+               ratioLimit != DEFAULT_RATIO_LIMIT)      // -2, and only -2
+           return ratioLimit;
+       return categoryRatioLimit(parentCategoryName(categoryName));
+   }
+   ```
+
+   `sharelimits.h` gives `DEFAULT_RATIO_LIMIT = -2` and `NO_RATIO_LIMIT = -1`.
+   So a category `ratio_limit` of **`-1`** is returned verbatim into the
+   `>= 0` gate exactly as `-5` is, `globalMaxRatio()` is never reached, and
+   nothing releases the slot. `-1` matters more than the `-5` first recorded
+   here: it is the value qBittorrent writes for a category whose share limit is
+   "unlimited", where `-5` needs hand-editing. `CategoryOptions::fromJSON`
+   applies no clamp, so `-0.5` and `inf` are storable too.
+
+   Measured verdict on `release-5.2.4` semantics, global ratio ON at 2.0 and
+   global seeding time off, indexer deferring both criteria:
+   `{"ratio_limit": -5, "seeding_time_limit": -2}` → **PASS**, and so do `-inf`
+   and `inf`. Closing it needs a premise the current one cannot express — an
+   overriding category makes `qbt.no_global_ratio` a statement about a setting
+   that never runs, which is the same shape as the indexer `OVERRIDE_` routes
+   and wants its own conflict rather than a widened boolean.
+
+   A **second** gap falls out of the same source read and is not in any ticket:
+   `categoryRatioLimit()` recurses to `parentCategoryName()`, so a nested
+   category at `-2` defers to its *parent category* and only an empty parent
+   chain reaches the global. `_no_category_sets_its_own_limit` iterates a flat
+   map and walks no parent chain.
+
+Gaps 1 and 2 are tracked together as lintarr#32 and are **both closed by it** — the third release gate is now collected and read, and `ACTION` reads the share-limit action. What #32 leaves open is the category-level `inactive_seeding_time_limit`, which `_category_sets_its_own_limit` still does not read. Gap 3 and the ratio half of gap 4 are closed by lintarr#33; gap 5 and the parent-chain finding under it are open. None of
+them can turn a negative `seedCriteria` value back into a goal — which is
 the only thing #14's code change rests on.
 
 ## The table

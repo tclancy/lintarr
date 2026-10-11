@@ -75,6 +75,11 @@ _TESTED_ELSEWHERE: frozenset[str] = frozenset(
         # pair come out FAIL — the same shape as max_active_downloads above. It
         # needs a healthy base, so it gets its own test.
         "qbt.max_ratio_act",
+        # `qbt.max_ratio` is read only when `max_ratio_enabled` is True, and
+        # _WEDGE turns that flag off — so on this base the value is never read
+        # and both halves of any pair come out FAIL. Same shape as the two
+        # above: it needs a base with the flag on, so it gets its own test.
+        "qbt.max_ratio",
         "arr.indexer_protocol",
         "arr.indexer_enabled",
         "arr.indexer_seed_criteria",
@@ -145,6 +150,30 @@ def test_max_active_downloads_changes_the_verdict():
     a = check(qbt_with(max_active_downloads=0), NO_GOALS).outcome
     b = check(qbt_with(max_active_downloads=6), NO_GOALS).outcome
     assert a != b, "qbt.max_active_downloads is declared in NEEDS but changes no verdict"
+
+
+def test_the_global_ratio_value_need_changes_the_verdict():
+    """``inf`` is a limit `realRatio()` can never reach; 2.0 is one it does.
+
+    Measured against a base with ``max_ratio_enabled`` ON, because that flag is
+    what makes the value load-bearing at all — ``_no_global_ratio`` does not
+    read ``max_ratio`` when the flag is off, so a pair merged onto ``_WEDGE``
+    (where it is off) would be FAIL on both sides and prove nothing.
+
+    Reachable rather than theoretical: ``appcontroller.cpp`` derives
+    ``max_ratio_enabled`` as ``globalMaxRatio() >= 0.``, and ``inf >= 0.`` is
+    True, so a real client reports exactly this pair (lintarr#33).
+    """
+    base = {
+        "max_active_torrents": 5,
+        "dont_count_slow_torrents": False,
+        "max_ratio_enabled": True,
+        "max_seeding_time_enabled": False,
+    }
+    wedged = check(qbt_with(**base, max_ratio=float("inf")), NO_GOALS).outcome
+    drained = check(qbt_with(**base, max_ratio=2.0), NO_GOALS).outcome
+    assert wedged is Outcome.FAIL, f"an infinite global ratio limit frees nothing, got {wedged}"
+    assert drained is Outcome.PASS, f"a finite global ratio limit drains, got {drained}"
 
 
 def test_the_share_limit_action_need_changes_the_verdict():

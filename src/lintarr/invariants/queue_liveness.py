@@ -47,9 +47,20 @@ distinction matters because the two sides want opposite defaults for it.
 ``_lacks_seed_criteria`` reads it as "no goal", which *arms* ``SEEDING``;
 ``_overrides_the_share_limit`` reads it as "not an override", which *disarms*
 the three routes below. So an indexer reporting ``-1`` as the string ``"-1"`` —
-the shape ``_is_a_readable_seed_criterion`` exists for — is a silent PASS on a
-stack a readable ``-1`` FAILs, and no note explains it. Pre-existing rather
-than introduced here, measured during #28's review, and its own ticket.
+the shape ``_is_a_readable_seed_criterion`` exists for — was a silent PASS on a
+stack a readable ``-1`` FAILs, with no note to explain it.
+
+**Closed by lintarr#33.** ``_overrides_the_share_limit`` is three-valued now:
+present-but-unreadable returns ``None``, so the override routes SKIP instead of
+PASSing, and the SKIP carries an ``OVERRIDE_``… conflict — which is in
+``SEED_CRITERIA_CONFLICTS``, so the note reaches it and names the indexer. The
+``None`` is scoped to that one state; absent and null still read as *defer*,
+because they are. The cost is stated rather than hidden: a stack that is
+otherwise healthy now SKIPs when an indexer reports a criterion nobody can
+read, where it used to PASS. That is this project's standing rule for an unread
+input applied to seed criteria at last — see
+``tests/test_properties.py::test_a_qbt_preference_that_was_never_read_never_passes``,
+which states it on the same healthy base — and not a new policy.
 
 The deferring and overriding cases therefore need *different premises about
 qBittorrent*, and the two limits can be in different states at once. Hence
@@ -97,6 +108,13 @@ NEEDS: tuple[str, ...] = (
     "qbt.max_active_torrents",
     "qbt.dont_count_slow_torrents",
     "qbt.max_ratio_enabled",
+    # The paired VALUE, declared because the flag is derived from it and the two
+    # disagree on one reachable input. `appcontroller.cpp` computes
+    # `max_ratio_enabled` as `globalMaxRatio() >= 0.`, and `inf >= 0.` is True —
+    # so the flag reads "a limit is set" on a limit `realRatio()` can never
+    # reach. Read only when the flag is on; see `_no_global_ratio` for why
+    # `max_seeding_time` gets no such entry (lintarr#33).
+    "qbt.max_ratio",
     "qbt.max_seeding_time_enabled",
     # The action applied when any gate fires. Declared because an unread value
     # is genuinely undecidable — `conflict_if` lets an unknown premise dominate,
@@ -155,6 +173,54 @@ def _any_of(states: Iterable[bool | None]) -> bool | None:
     return None if any(state is None for state in seen) else False
 
 
+def _all_of(states: Iterable[bool | None]) -> bool | None:
+    """Three-valued AND: one False settles it however much else is unknown.
+
+    The mirror of ``_any_of``, and needed for the same reason: a conjunct we
+    could not read must not be silently resolved to the value that clears the
+    check. Where ``_any_of`` lets one True settle a disjunction, one False
+    settles a conjunction — a route that cannot fire does not care which of its
+    other inputs were unreadable.
+
+    An empty iterable is vacuously True, matching the ``all()`` it replaces.
+    """
+    seen = tuple(states)
+    if any(state is False for state in seen):
+        return False
+    return None if any(state is None for state in seen) else True
+
+
+def _can_be_reached(limit: float) -> bool:
+    """True when a count can ever satisfy qBittorrent's ``(limit >= 0)`` gate.
+
+    The range rule, hoisted out of ``_is_a_seed_goal`` so that the three places
+    a limit arrives all apply the same one (lintarr#33). Every arm of
+    ``processTorrentShareLimits`` is ``(limit >= 0) && (count >= limit)``, and
+    whichever value reaches it decides — whether it came from the torrent's own
+    ``seedCriteria``, from ``categoryRatioLimit()``, or from
+    ``globalMaxRatio()``. Three hand-written sign tests were three places for
+    one rule to drift, and that drift is what lintarr#33 reported.
+
+    ``inf`` is the case a bare ``>= 0`` gets wrong, and it is not theoretical:
+    ``Torrent::MAX_RATIO`` **is** ``std::numeric_limits<qreal>::infinity()``, so
+    qBittorrent's own "maximum ratio" is the one value ``realRatio()`` can never
+    reach. ``json`` also decodes both ``1e400`` and the non-standard
+    ``Infinity`` token to ``inf``.
+
+    ``nan`` needs nothing added: every comparison against it is False, so it
+    fails the range test already. Recorded so that stays a known property
+    rather than a lucky one.
+
+    The ``isinstance(..., float)`` guard is load-bearing. Only a ``float`` can
+    be non-finite — a Python ``int`` always is — and ``math.isfinite`` on a
+    large enough ``int`` raises ``OverflowError`` instead of answering, which a
+    401-digit JSON integer literal is enough to produce.
+    """
+    if isinstance(limit, float) and not math.isfinite(limit):
+        return False
+    return limit >= 0
+
+
 def _truth(fact: Fact[bool]) -> bool | None:
     """A boolean fact as a three-valued state, or ``None`` if it has no value.
 
@@ -196,6 +262,62 @@ def _not_inactive_gate(qbt: QbtInstance) -> bool | None:
     if isinstance(fact, Unknown) and fact.reason == "field-absent":
         return True
     return _not(fact)
+
+
+def _no_global_ratio(qbt: QbtInstance) -> bool | None:
+    """True when the global ratio limit can never release a slot.
+
+    The flag alone was not enough, and lintarr#33 is where that was measured.
+    ``appcontroller.cpp`` **derives** the flag rather than storing it::
+
+        data[u"max_ratio_enabled"_s] = (session->globalMaxRatio() >= 0.);
+        data[u"max_ratio"_s] = session->globalMaxRatio();
+
+    So ``max_ratio_enabled`` means exactly ``max_ratio >= 0`` — which is almost
+    the arm's own firing condition, and differs from it on one reachable value.
+    ``Torrent::MAX_RATIO`` is ``std::numeric_limits<qreal>::infinity()``,
+    ``setGlobalMaxRatio`` applies no upper clamp, and ``inf >= 0.`` is True. So
+    the flag reads True on a global limit ``realRatio()`` can never reach, and
+    ``qbt.no_global_ratio`` read it as a setting that drains the queue.
+
+    **The reads are ordered, and that is load-bearing rather than tidy.** The
+    value is only needed when the flag is on, so a flag that is off settles the
+    premise without it. Reading ``max_ratio`` unconditionally would make every
+    client that omits the key SKIP the flagship route — the same false-SKIP this
+    file refuses for ``_not_inactive_gate``'s ``field-absent`` case.
+
+    **No sibling for ``max_seeding_time``, and that is measured too.**
+    ``globalMaxSeedingMinutes()`` is an ``int``, so it can hold no non-finite
+    value, and ``setGlobalMaxSeedingMinutes`` is
+    ``std::max(minutes, NO_SEEDING_TIME_LIMIT)`` — the only reachable negative
+    is ``-1``, and ``-1`` makes the derived flag read False. The derivation
+    argument ``_deferring_slot_premises`` already makes for the inactive gate
+    therefore holds exactly for the seeding-time preference and fails for the
+    ratio alone. Adding a second rule would declare a need nothing can drive.
+
+    A negative ``max_ratio`` beside an on flag is **unreachable** in both
+    directions — the flag is derived from the value, and ``setGlobalMaxRatio``
+    clamps ``ratio < 0`` to ``NO_RATIO_LIMIT``. ``_can_be_reached`` covers it
+    for free; no premise is built on its reachability.
+    """
+    armed = _truth(qbt.max_ratio_enabled)
+    if armed is not True:
+        return None if armed is None else True
+    limit = _as_number(qbt.max_ratio)
+    return None if limit is None else not _can_be_reached(limit)
+
+
+def _as_number(fact: Fact[Any]) -> float | None:
+    """The number a limit was read as, or ``None`` if it was not read as one.
+
+    ``_as_limit``'s float-tolerant sibling. The two are kept apart rather than
+    widened into one because what counts as readable differs by field:
+    ``max_ratio`` is a ``qreal`` and ``max_ratio_act`` is an enum, so accepting
+    a float there would let ``1.5`` be compared against an action.
+    """
+    if not is_known(fact) or isinstance(fact.value, bool):
+        return None
+    return fact.value if isinstance(fact.value, (int, float)) else None
 
 
 #: ``ShareLimitAction`` values that actually free an active slot, read from
@@ -412,9 +534,7 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
     """
     if not _is_a_readable_seed_criterion(fact):
         return False
-    if isinstance(fact.value, float) and not math.isfinite(fact.value):
-        return False
-    return fact.value >= 0
+    return _can_be_reached(fact.value)
 
 
 def _is_an_unusable_seed_criterion(fact: Fact[Any]) -> bool:
@@ -459,7 +579,7 @@ def _lacks_seed_criteria(indexer: IndexerFacts) -> bool:
     return not any(_is_a_seed_goal(fact) for fact in _seed_criteria(indexer))
 
 
-def _overrides_the_share_limit(fact: Fact[Any]) -> bool:
+def _overrides_the_share_limit(fact: Fact[Any]) -> bool | None:
     """True when this criterion is a limit qBittorrent can neither reach nor redirect.
 
     Two conditions, and the second is the whole of lintarr#28. The value has to
@@ -488,15 +608,35 @@ def _overrides_the_share_limit(fact: Fact[Any]) -> bool:
     it) and ``inf != -2``, so a positive infinity overrides exactly as ``-1``
     does. ``nan`` lands here for the same two reasons. A ``< 0`` spelling would
     read both as deferring and PASS a stack that cannot recover.
+
+    **Three-valued, and the ``None`` is lintarr#33.** A criterion nobody can
+    read is a *fourth* state — neither goal, deferring, nor overriding — and the
+    two sides of this file want opposite defaults for it. ``_lacks_seed_criteria``
+    reads it as "no goal", which *arms* ``SEEDING``; this predicate used to read
+    it as "not an override", which *disarmed* all three override routes. So an
+    indexer reporting ``-1`` as the string ``"-1"`` — the exact shape
+    ``_is_a_readable_seed_criterion`` exists for — was a silent PASS on a stack
+    a readable ``-1`` FAILs, and no note explained it, because the surviving
+    finding was the starvation fall-through and ``_note_unreadable_seed_criteria``
+    keys on ``SEED_CRITERIA_CONFLICTS``. Returning ``None`` SKIPs those routes
+    instead, which also lets the note reach the finding.
+
+    The ``None`` is scoped to ``_is_an_unusable_seed_criterion`` — present,
+    non-null and not a number — and deliberately **not** to absent or null.
+    Those two mean *defer*, exactly as ``-2`` does, and resolving them to
+    unknown would turn every ordinary stack into a SKIP: Sonarr reports an unset
+    goal by omitting it.
     """
+    if _is_an_unusable_seed_criterion(fact):
+        return None
     if not _is_a_readable_seed_criterion(fact):
         return False
     if fact.value == USE_GLOBAL:
         return False
-    return not _is_a_seed_goal(fact)
+    return not _can_be_reached(fact.value)
 
 
-def _overrides_both_share_limits(indexer: IndexerFacts) -> bool:
+def _overrides_both_share_limits(indexer: IndexerFacts) -> bool | None:
     """Both criteria overridden, so no global or category setting is consulted at all.
 
     Quantified over ``_seed_criteria`` rather than naming the two fields, so a
@@ -508,10 +648,10 @@ def _overrides_both_share_limits(indexer: IndexerFacts) -> bool:
     ``all()`` over an empty ``_seed_criteria`` would also be vacuously True;
     unreachable today, since the tuple is a literal pair.
     """
-    return all(_overrides_the_share_limit(fact) for fact in _seed_criteria(indexer))
+    return _all_of(_overrides_the_share_limit(fact) for fact in _seed_criteria(indexer))
 
 
-def _overrides_the_ratio_limit(indexer: IndexerFacts) -> bool:
+def _overrides_the_ratio_limit(indexer: IndexerFacts) -> bool | None:
     """Ratio overridden, and the seed time cannot release the slot on its own.
 
     "Sets no goal" is the weaker half on purpose. The seed time may be
@@ -521,10 +661,12 @@ def _overrides_the_ratio_limit(indexer: IndexerFacts) -> bool:
     A real ``seedTime`` goal beside an overridden ratio is not a wedge and must
     not match here.
     """
-    return _overrides_the_share_limit(indexer.seed_ratio) and not _is_a_seed_goal(indexer.seed_time)
+    return _all_of(
+        (_overrides_the_share_limit(indexer.seed_ratio), not _is_a_seed_goal(indexer.seed_time))
+    )
 
 
-def _overrides_the_seed_time_limit(indexer: IndexerFacts) -> bool:
+def _overrides_the_seed_time_limit(indexer: IndexerFacts) -> bool | None:
     """The mirror of ``_overrides_the_ratio_limit``, and not symmetrical by assumption.
 
     Its own predicate because the two criteria share a loop by convention and
@@ -533,11 +675,13 @@ def _overrides_the_seed_time_limit(indexer: IndexerFacts) -> bool:
     redirect is measured on both fields: ``DEFAULT_SEEDING_TIME_LIMIT`` is
     ``-2`` and ``effectiveSeedingTimeLimit()`` treats it exactly as the ratio's.
     """
-    return _overrides_the_share_limit(indexer.seed_time) and not _is_a_seed_goal(indexer.seed_ratio)
+    return _all_of(
+        (_overrides_the_share_limit(indexer.seed_time), not _is_a_seed_goal(indexer.seed_ratio))
+    )
 
 
 def _any_torrent_indexer(
-    arrs: tuple[ArrInstance, ...], matches: Callable[[IndexerFacts], bool]
+    arrs: tuple[ArrInstance, ...], matches: Callable[[IndexerFacts], bool | None]
 ) -> bool | None:
     """Any ONE enabled torrent indexer satisfying *matches* is enough to wedge.
 
@@ -561,20 +705,24 @@ def _any_torrent_indexer(
     four near-identical loops would be four places for the three-valued rule
     above to drift. The *shape* each route looks for is the parameter; the
     quantifier is not.
+
+    *matches* is three-valued as of lintarr#33, and expressing this as
+    ``_any_of`` over a per-indexer ``_all_of`` is what keeps the rule in the
+    docstring above true of **both** inputs rather than only of the protocol
+    read. An indexer contributes a wedge when it matches *and* grabs torrents,
+    so either conjunct being False means it could not have contributed and must
+    not force a SKIP — which is the old loop's ``if not matches(indexer):
+    continue`` generalised, not weakened. A ``matches`` of ``None`` beside a
+    usenet indexer is still False here, and that is the case the hand-rolled
+    short-circuit would have got wrong.
     """
     if not arrs:
         return None
-    undecidable = False
-    for arr in arrs:
-        for indexer in arr.indexers:
-            if not matches(indexer):
-                continue
-            match _is_a_torrent_source(indexer):
-                case True:
-                    return True
-                case None:
-                    undecidable = True
-    return None if undecidable else False
+    return _any_of(
+        _all_of((matches(indexer), _is_a_torrent_source(indexer)))
+        for arr in arrs
+        for indexer in arr.indexers
+    )
 
 
 def _indexer_without_seed_criteria(arrs: tuple[ArrInstance, ...]) -> bool | None:
@@ -601,6 +749,20 @@ def _own_share_limit(category: dict[str, Any], key: str) -> bool | None:
     A value that is present but not a number — a string, a null, a bool — is a
     different thing entirely: the key IS there and we cannot read what it says,
     so that stays unknown.
+
+    **A category that overrides its limit to unreachable still reads as
+    "inherits" here, and that is lintarr#33's remaining slice.** Only ``-2``
+    defers: ``categoryRatioLimit()`` returns any other value verbatim, so a
+    ``ratio_limit`` of ``-1`` — the value qBittorrent writes for an unlimited
+    category — never reaches ``globalMaxRatio()`` and releases nothing, exactly
+    as ``-5`` does. Both are filed as False below. Fixing it wants a premise
+    this one cannot express, because an overriding category makes
+    ``qbt.no_global_ratio`` a statement about a setting that never runs — the
+    same shape as the indexer ``OVERRIDE_`` routes, and so its own conflict
+    rather than a widened boolean. See
+    ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md`` gap 5, which
+    also records that this reads a flat map while
+    ``categoryRatioLimit()`` recurses through ``parentCategoryName()``.
     """
     if key not in category:
         return False
@@ -793,7 +955,7 @@ def _seeding_conflict(
     statements about a setting that never runs.
     """
     premises = _deferring_slot_premises(qbt, queueing) + (
-        premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
+        premise("qbt.no_global_ratio", _no_global_ratio(qbt)),
         premise("qbt.no_global_seed_time", _not(qbt.max_seeding_time_enabled)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise("arr.indexer_without_seed_criteria", _indexer_without_seed_criteria(arrs)),
@@ -864,7 +1026,7 @@ def _override_seed_time_conflict(
 ) -> Finding:
     """The mirror: seeding time overridden, so the global ratio limit is all there is."""
     premises = _deferring_slot_premises(qbt, queueing) + (
-        premise("qbt.no_global_ratio", _not(qbt.max_ratio_enabled)),
+        premise("qbt.no_global_ratio", _no_global_ratio(qbt)),
         premise("qbt.no_category_limits", _no_category_sets_its_own_limit(qbt)),
         premise(
             "arr.indexer_overrides_the_seed_time_limit",
