@@ -91,8 +91,21 @@ def lintarr_state(fact: Fact[object]) -> CriterionState:
     The three predicates are the public face of the classification even though
     they are underscore-private: ``_lacks_seed_criteria``,
     ``_overrides_both_share_limits`` and the two single-axis override routes are
-    all built from exactly these, so a value misfiled here is misfiled in every
-    conflict at once.
+    all built from exactly these.
+
+    **What this adapter alone cannot see, because the review measured it.** An
+    earlier version of this docstring claimed "a value misfiled here is
+    misfiled in every conflict at once". That is false for one pair, and the
+    short-circuit below is why: a value that is unusable resolves to
+    ``UNREADABLE`` on the first question and ``_is_a_seed_goal`` is never
+    consulted about it — so a regression confined to ``_is_a_seed_goal``, which
+    is the predicate ``_lacks_seed_criteria`` actually consumes, leaves this
+    function's answer unchanged. Reintroducing lintarr#10 as a numeric-string
+    coercion inside ``_is_a_seed_goal`` alone makes
+    ``_is_a_seed_goal(Known("2.0"))`` return True — a live false PASS on the
+    homelab#393 wedge — with every test in this file green.
+    ``test_the_goal_predicate_agrees_with_the_model_directly`` is that hole
+    closed: it asks ``_is_a_seed_goal`` on its own, bypassing the order below.
 
     **The question order is load-bearing and is why this adapter exists at all.**
     ``_is_an_unusable_seed_criterion`` is asked first, before
@@ -109,7 +122,19 @@ def lintarr_state(fact: Fact[object]) -> CriterionState:
         return CriterionState.UNREADABLE
     if _is_a_seed_goal(fact):
         return CriterionState.GOAL
-    if _overrides_the_share_limit(fact):
+    overrides = _overrides_the_share_limit(fact)
+    # Asserted rather than relied on. ``_overrides_the_share_limit`` is
+    # two-valued on `main` and three-valued after lintarr#33, where the ``None``
+    # is scoped to exactly the unusable case already resolved above — so it is
+    # unreachable here *today*. Were that scope ever widened to absent or null,
+    # a bare truthiness test would fold ``None`` into ``DEFERRING`` silently,
+    # and since the model also answers ``DEFERRING`` for those two the property
+    # would stay green over a weakened meaning.
+    assert overrides is not None, (
+        f"{fact!r} left the override question undecided, and it is not the "
+        "unusable criterion that is allowed to. See lintarr#33."
+    )
+    if overrides:
         return CriterionState.OVERRIDING
     return CriterionState.DEFERRING
 
@@ -140,19 +165,58 @@ def test_a_read_criterion_is_filed_in_the_state_qbittorrent_resolves_it_to(value
     )
 
 
+@_SETTINGS
+@given(CRITERION_VALUES)
+def test_the_goal_predicate_agrees_with_the_model_directly(value):
+    """``_is_a_seed_goal`` on its own, bypassing the adapter's question order.
+
+    Not a second spelling of the property above, and the review proved it: the
+    adapter resolves an unusable value to ``UNREADABLE`` on its first question,
+    so it never asks ``_is_a_seed_goal`` about one — and ``_is_a_seed_goal`` is
+    the predicate ``_lacks_seed_criteria`` consumes to decide whether an
+    indexer clears the flagship wedge check. A coercion bug reintroduced in
+    that one function is therefore a live false PASS that the adapter's answer
+    cannot register.
+
+    Measured on the mutant: ``_is_a_seed_goal(Known("2.0")) is True`` with all
+    eight of this file's other tests green. This assertion is what goes red.
+    """
+    fact = _known(value)
+    assert _is_a_seed_goal(fact) is (_expected(fact) is CriterionState.GOAL), (
+        f"{value!r} ({type(value).__name__}): _is_a_seed_goal="
+        f"{_is_a_seed_goal(fact)} but qBittorrent resolves it to {_expected(fact).value}"
+    )
+
+
 @pytest.mark.parametrize(
     "fact",
-    [_NEVER_READ, _known(None)],
-    ids=["never-read", "read-as-null"],
+    [
+        Unknown(reason="field-absent", detail="seedCriteria.seedRatio absent"),
+        Unknown(reason="service-absent", detail="sonarr unreachable"),
+        Unknown(reason="insufficient-permission", detail="403 on /api/v3/indexer"),
+        _known(None),
+    ],
+    ids=["field-absent", "service-absent", "insufficient-permission", "read-as-null"],
 )
 def test_an_unset_criterion_defers_however_it_was_reported(fact):
     """Absent and null are one state, and it is ``DEFERRING``, not ``GOAL``.
 
-    Kept out of the generative property because the two are the *same* answer
+    Kept out of the generative property because these are the *same* answer
     reached by different routes — ``QBittorrentProxyV2.cs`` substitutes ``-2``
     for an unset ``Ratio``, and lintarr reads a null the same way — and because
     ``facts.py`` keeps "never read" and "read back as null" apart on purpose, so
     each has to be named to be pinned.
+
+    **All three ``UnknownReason``s, not just ``field-absent``.** ``_expected``
+    collapses every ``Unknown`` to ``classify(None, was_read=False)``, and that
+    collapse is an assumption rather than a measurement: ``queue_liveness``'s
+    own module docstring flags "absent seed criteria are read as unset" as one
+    of two things it assumes and cannot prove, and ``insufficient-permission``
+    is the reason least like "the operator set no goal". The assumption is
+    inherited from ``_is_a_readable_seed_criterion``, which tests ``is_known``
+    and so cannot distinguish the reasons at all — but an assumption three
+    parametrize cases exercise is at least visible, where one case leaves two
+    of the three untouched by anything in the suite.
     """
     assert lintarr_state(fact) is CriterionState.DEFERRING
     assert _expected(fact) is CriterionState.DEFERRING
@@ -185,14 +249,24 @@ def test_the_criterion_strategy_reaches_every_state():
     assert drawn == set(CriterionState), f"never drawn: {set(CriterionState) - drawn}"
 
 
-def test_the_model_partitions_every_value_it_is_given():
-    """The model is total and its states are mutually exclusive.
+def test_the_model_answers_every_value_without_crashing():
+    """The model is total: no value makes it raise rather than answer.
 
-    ``classify`` is a chain of early returns so this is true by construction —
-    which is the point: it is asserted here so that rewriting it as independent
-    predicates, the shape ``queue_liveness`` actually uses, cannot introduce a
-    value belonging to two states or none. A value in two states is how #28's
-    ``OVERRIDING`` and ``DEFERRING`` overlapped.
+    **Renamed down to what it actually does.** It was
+    ``test_the_model_partitions_every_value_it_is_given`` and its docstring
+    claimed to pin mutual exclusivity. It does not and cannot: ``classify`` is a
+    chain of early returns, so one state per value is true by construction and
+    the assertion below cannot fail on any single-return function. The review
+    measured the consequence — collapsing ``classify`` to ``return
+    CriterionState.GOAL`` fails six of this file's tests and leaves **this one
+    green**. A near-tautology wearing a stronger name is worse than no test,
+    because a reader counts it as coverage.
+
+    Kept, because the totality half is live and not a tautology:
+    ``classify(2**1400)`` must not raise ``OverflowError``, which is exactly
+    what ``math.isfinite`` does on a large enough ``int`` and what
+    ``gate_can_fire`` narrows to ``float`` to avoid. A mutant of the reviewer's
+    died here rather than on an assertion about state.
     """
     for value in (*MEASURED_EDGE_VALUES, -5, -2, -1, 0, 1, 2.5, "x", True, [1], {"a": 1}, None):
         assert isinstance(classify(value), CriterionState), f"{value!r} resolved to nothing"
@@ -203,8 +277,16 @@ def test_the_measurement_docs_table_still_reads_as_written():
 
     Every row of the ``seedCriteria.seedRatio`` table in
     ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``, plus the two
-    rows its prose adds and the table omits (``inf`` and ``nan``, which the
-    "What is still not expressed" section measures as overriding).
+    rows its prose adds and the table omits — ``inf`` and ``nan``, measured as
+    overriding in the **"The three shapes that really do wedge"** section.
+
+    That section name was wrong in the first version of this docstring, and in
+    a control whose entire payload is a citation the wrong section *is* the
+    defect. It cited "What is still not expressed", which does mention ``inf``
+    — about the global ``max_ratio``, a different value with a different
+    verdict, and one this file does not model. A citation that lands on a
+    same-word sentence in the wrong section is the failure mode a reader is
+    least likely to re-check.
 
     This is the control on the *model*, where the property above is the control
     on the *code*. Without it a wrong model and a wrong implementation could

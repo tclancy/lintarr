@@ -30,13 +30,48 @@ C++ is quoted in that document; this file is that document executable.
 
 ## Where this model is NOT independent, stated rather than implied
 
-The GOAL/DEFERRING/OVERRIDING split is derived from the two quoted C++ hops and
-owes nothing to ``queue_liveness``. ``UNREADABLE`` is different: deciding that a
-Python ``str`` is not a number is necessarily the same one-line test on both
-sides, so for that state this model is a restatement rather than a second
-opinion. It is included anyway because the *partition* is what the property
-checks — a value misfiled between UNREADABLE and any other state is exactly
-lintarr#10 — but a reader should not credit this file with having re-derived it.
+Two clauses, not one. The first draft of this section named only the first and
+the review found the second.
+
+1. **``UNREADABLE``.** Deciding that a Python ``str`` is not a number is
+   necessarily the same one-line test on both sides, so for that state this
+   model is a restatement rather than a second opinion. It is included anyway
+   because the *partition* is what the property checks — a value misfiled
+   between UNREADABLE and any other state is exactly lintarr#10 — but a reader
+   should not credit this file with having re-derived it.
+2. **The ``float`` narrowing inside ``gate_can_fire``.** The ``>= 0`` gate and
+   the ``== -2`` redirect are both re-derived from quoted C++ and owe nothing to
+   ``queue_liveness``. ``isinstance(value, float)`` is different: it is a Python
+   artifact, its justification is an ``OverflowError`` in ``math.isfinite`` that
+   appears nowhere in the measurement document, and it is character-for-character
+   the implementation's own guard. So "independent" does not cover it.
+
+### The open question that borrowing leaves pinned
+
+Both sides file a **huge but finite** limit — ``1e308``, ``3.4e38`` — as
+``GOAL``, and ``st.floats(width=32)`` really draws that range, so the property
+now *pins* that agreement. Under the document's own reasoning for ``inf`` ("a
+limit ``realRatio()`` never reaches") a ratio limit of ``1e308`` is unreachable
+in the same way, which would make it ``OVERRIDING`` — the lintarr#14 defect
+wearing a finite sign.
+
+**This is recorded, not fixed, and deliberately so.** The behaviour is on
+``main``, the measurement document is silent on it, and the threshold a fix
+would need — the largest ratio ``realRatio()`` can return — has not been
+measured by anyone here. Inventing one would be the thing this project calls
+its cardinal sin. What the record buys: when someone does measure it and
+corrects production, the assertion that goes red is this open question
+resolving, not a regression — which is the only way a pinned-but-unsettled
+value stops being a trap for the next reader.
+
+## Where the controls for this file live
+
+Not beside it. ``queue.py`` has ``tests/model/test_queue_model.py`` next to it;
+this model's controls are in ``tests/invariants/test_seed_criteria_states.py``,
+because they are the same tests that compare it against ``queue_liveness`` and
+splitting them would put two halves of one argument in two files. Noted here
+because someone editing this module would otherwise run ``tests/model/`` and
+see nothing.
 """
 
 import math
@@ -121,14 +156,20 @@ def gate_can_fire(value: float) -> bool:
                 (ratioLimit >= 0) && (ratio >= ratioLimit))
             reached = true;
 
-    Two things the bare comparison gets wrong, both from the measurement doc:
+    Two things the bare comparison gets wrong. Only the first comes from the
+    measurement doc, and the difference is the subject of the module docstring's
+    independence section — read it before trusting this clause:
 
     * ``inf`` passes ``>= 0`` and is still unreachable — ``realRatio()`` never
       reaches it — so finiteness is a separate test rather than a consequence.
+      This half is the document's.
     * ``math.isfinite`` raises ``OverflowError`` on a large enough ``int``, and
       ``json`` decodes a 401-digit literal to exactly that. A Python ``int`` is
-      always finite, so asking only about ``float`` both answers correctly and
-      avoids the crash.
+      always finite, so asking only about ``float`` avoids the crash. **This
+      half is borrowed from the implementation and is not a second opinion** —
+      and note it answers only about the crash, not about correctness: it files
+      every finite value as reachable, including the huge ones the module
+      docstring records as an open question.
 
     ``nan`` needs no special case: every comparison against it is False, so it
     fails ``>= 0`` on its own and lands in ``OVERRIDING`` where it belongs.
