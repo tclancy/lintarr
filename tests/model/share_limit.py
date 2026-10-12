@@ -46,23 +46,31 @@ the review found the second.
    appears nowhere in the measurement document, and it is character-for-character
    the implementation's own guard. So "independent" does not cover it.
 
-### The open question that borrowing leaves pinned
+### The question that borrowing left pinned — now settled, and the pin stands
 
 Both sides file a **huge but finite** limit — ``1e308``, ``3.4e38`` — as
 ``GOAL``, and ``st.floats(width=32)`` really draws that range, so the property
-now *pins* that agreement. Under the document's own reasoning for ``inf`` ("a
-limit ``realRatio()`` never reaches") a ratio limit of ``1e308`` is unreachable
-in the same way, which would make it ``OVERRIDING`` — the lintarr#14 defect
-wearing a finite sign.
+*pins* that agreement. This section used to call that an open question, on the
+grounds that under the document's own reasoning for ``inf`` ("a limit
+``realRatio()`` never reaches") a ratio limit of ``1e308`` is unreachable in the
+same way, which would make it ``OVERRIDING`` — lintarr#14 wearing a finite sign.
 
-**This is recorded, not fixed, and deliberately so.** The behaviour is on
-``main``, the measurement document is silent on it, and the threshold a fix
-would need — the largest ratio ``realRatio()`` can return — has not been
-measured by anyone here. Inventing one would be the thing this project calls
-its cardinal sin. What the record buys: when someone does measure it and
-corrects production, the assertion that goes red is this open question
-resolving, not a regression — which is the only way a pinned-but-unsettled
-value stops being a trap for the next reader.
+**lintarr#43 measured it, and the pin was right.** See
+``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
+``realRatio()`` has no finite ceiling: ``Torrent::MAX_RATIO`` is
+``std::numeric_limits<qreal>::infinity()`` and is returned whenever
+``download == 0 && upload != 0``. So there is nothing for a bound to be *below*,
+and ``GOAL`` is the right state for every finite limit.
+
+**What the measurement moved instead was the premise.** The reasoning quoted
+above is false where it says ``realRatio()`` never reaches ``inf`` — it does, by
+name, and ``inf >= inf`` is True. ``1e308`` and ``inf`` turn out to be
+*reachability-equivalent*: each is satisfied by the ``MAX_RATIO`` branch and by
+nothing else. The ``inf`` exclusion survives on a different ground — that branch
+needs a finished torrent holding no wanted data, which is not the wedge lintarr
+looks for — and the residual asymmetry between the two is recorded in the
+measurement document rather than invented away. ``gate_can_fire`` below says the
+same thing where it is enforced.
 
 ## Where the controls for this file live
 
@@ -107,6 +115,11 @@ class CriterionState(Enum):
     #: Any other negative, plus ``inf`` and ``nan``. Returned verbatim into a
     #: gate it can never pass, and the redirect never happens — so the global is
     #: never consulted and *cannot* release the slot.
+    #:
+    #: "Can never pass" is exact for the negatives and for ``nan``, and is a
+    #: claim about the torrents this check is about for ``inf``: see the module
+    #: docstring, since ``realRatio()`` does return ``inf`` for a finished
+    #: torrent holding no wanted data (lintarr#43).
     OVERRIDING = "overriding"
     #: Present, not null, and not a number. Sonarr's field is a ``double?`` /
     #: ``int?``, so no such value can be a limit the operator set; what the
@@ -160,9 +173,16 @@ def gate_can_fire(value: float) -> bool:
     measurement doc, and the difference is the subject of the module docstring's
     independence section — read it before trusting this clause:
 
-    * ``inf`` passes ``>= 0`` and is still unreachable — ``realRatio()`` never
-      reaches it — so finiteness is a separate test rather than a consequence.
-      This half is the document's.
+    * ``inf`` passes ``>= 0`` and is still filed as ``OVERRIDING``, so
+      finiteness is a separate test rather than a consequence. This half is the
+      document's — but **not for the reason the first draft gave**, which was
+      "``realRatio()`` never reaches it". lintarr#43 measured that claim false:
+      ``Torrent::MAX_RATIO`` is infinity and ``realRatio()`` returns it when
+      ``download == 0 && upload != 0``. The test stays because the branch that
+      reaches ``inf`` needs a finished torrent holding no wanted data, which is
+      not a torrent that can wedge a queue — so over the torrents the check is
+      about, the reachable range is the finite branch's ``[0, 2**63]``. See
+      ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
     * ``math.isfinite`` raises ``OverflowError`` on a large enough ``int``, and
       ``json`` decodes a 401-digit literal to exactly that. A Python ``int`` is
       always finite, so asking only about ``float`` avoids the crash. **This

@@ -528,10 +528,21 @@ _NO_LIMIT_SEED_VALUES = (-1, -1.0, -5, -0.5, float("inf"))
 
 #: ``inf`` is in the set above rather than in a test of its own because it is
 #: the same defect wearing the opposite sign: ``inf >= 0`` is True, so the
-#: range test alone admits it, while a ratio limit of ``inf`` is never reached
-#: by ``realRatio()``. A code review found it as a live PASS after the range
-#: rule had already landed. ``json`` decodes both ``1e400`` and the
+#: range test alone admits it. A code review found it as a live PASS after the
+#: range rule had already landed. ``json`` decodes both ``1e400`` and the
 #: non-standard ``Infinity`` token to it, so it is reachable through collect.
+#:
+#: **Its stated reason used to be wrong.** This comment said a ratio limit of
+#: ``inf`` "is never reached by ``realRatio()``"; lintarr#43 measured that
+#: ``Torrent::MAX_RATIO`` *is* infinity and ``realRatio()`` returns it when
+#: ``download == 0 && upload != 0``, so ``inf >= inf`` releases the slot. It
+#: stays in this set because that branch needs a finished torrent holding no
+#: wanted data, which is not a torrent that can wedge a queue — over the
+#: torrents the check is about, the reachable range is the finite branch's
+#: ``[0, 2**63]``. See
+#: ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``, and note
+#: the deliberate asymmetry against
+#: ``test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal``.
 #:
 #: ``-inf`` is deliberately NOT here: it fails ``>= 0`` on its own and would
 #: pass this test against an implementation with no finiteness guard at all.
@@ -625,12 +636,79 @@ def test_an_integer_too_large_for_a_float_does_not_crash_the_check():
     into a traceback, which this project ranks below even a false PASS.
 
     The value is enormous and positive, so it reads as a goal and the stack
-    PASSes. That verdict is not the point and is not very defensible; not
-    crashing is. A threshold above which a finite ratio is "forever" has no
-    measurable boundary, so none is invented here.
+    PASSes. That verdict is not the point here; not crashing is. It *is* the
+    point of ``test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal`` below,
+    which lintarr#43 added once the boundary question had an answer — this
+    docstring used to say such a threshold "has no measurable boundary", and
+    the measurement is that the boundary is ``inf``, so there is none to
+    invent rather than none to find.
     """
     absurd = _arrs(_indexer(seed_ratio=_fact(10**400)))
     assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+
+
+#: Three finite limits above ``(double)INT64_MAX``, the supremum of the finite
+#: branch of ``realRatio()``. ``3.4e38`` is here because ``tests/strategies.py``
+#: draws ``st.floats(..., width=32)``, whose maximum is float32's; ``1e308`` is
+#: near the double ceiling; ``10**400`` is the ``int`` ``json`` decodes from a
+#: 401-digit literal and is above every float.
+_HUGE_FINITE_SEED_VALUES = (1e308, 3.4e38, 10**400)
+
+#: Spelled out rather than ``ids=repr``, which renders the 401-digit ``int`` as
+#: 401 digits in every failure line and in the mutation round's output.
+_HUGE_FINITE_IDS = ("1e308", "float32-max", "401-digit-int")
+
+
+@pytest.mark.parametrize("value", _HUGE_FINITE_SEED_VALUES, ids=_HUGE_FINITE_IDS)
+def test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal(value):
+    """No upper bound, and that is measured rather than left alone.
+
+    lintarr#43 suspected this was lintarr#14 wearing a finite sign: if ``inf``
+    is excluded because ``realRatio()`` cannot reach it, a limit of ``1e308``
+    looks unreachable in the same way. It asked for the one number that would
+    settle it — the largest value ``realRatio()`` can return — and refused to
+    prescribe a bound without it.
+
+    Measured in ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``:
+    the answer is ``inf``. ``Torrent::MAX_RATIO`` is
+    ``std::numeric_limits<qreal>::infinity()`` and ``realRatio()`` returns it
+    whenever ``download == 0 && upload != 0``. There is no finite ceiling, so
+    there is nothing for a bound to be below, and ``>= 0`` with no upper limit
+    is the whole rule.
+
+    This test exists because the decision was previously unpinned on ``main``:
+    the behaviour was reachable only through a ``st.floats`` draw in the
+    oracle's property, so a future "tidy-up" adding a plausible-looking ceiling
+    would have gone green here and red only in a probabilistic test. The
+    paired ``..._seed_time`` case is separate for the usual reason — a rule can
+    be got wrong one field at a time.
+    """
+    absurd = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+
+
+@pytest.mark.parametrize("value", _HUGE_FINITE_SEED_VALUES, ids=_HUGE_FINITE_IDS)
+def test_a_huge_but_finite_seed_time_is_still_a_seed_goal(value):
+    """The seed-time twin, and its reason is stronger than the ratio's.
+
+    The ratio has no *finite* ceiling. The seeding time has no ceiling at all:
+    ``processTorrentShareLimits`` compares ``finishedTime() / 60``, which grows
+    with the wall clock, against an ``int`` limit — and ``INT32_MAX`` minutes is
+    4085 years, some eleven orders of magnitude below where the ``qlonglong``
+    on the other side of the comparison caps. So *every* representable
+    seed-time limit is eventually satisfied.
+
+    That is why a magnitude rule cannot be added to ``_is_a_seed_goal`` even if
+    one were wanted for the ratio: the predicate is shared between both
+    criteria, and a ceiling correct for one would be wrong for the other.
+    Pinned here so that argument has an executable half.
+    """
+    absurd = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
+    assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+    # The co-located restatement this file uses throughout: with ``seed_ratio``
+    # absent the stack PASSes only if ``seed_time`` was read as the goal, so the
+    # assertion above cannot pass against an implementation that ignores it.
+    assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
 
 
 @pytest.mark.parametrize("value", [0, 0.0])

@@ -383,11 +383,37 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
       satisfied at that same instant, so the slot is released immediately.
       That is an aggressive goal, not an absent one.
     - ``inf`` is **not** a goal, and it is the one case the range test alone
-      gets wrong: ``inf >= 0`` is True, while a ratio limit of ``inf`` can
-      never be reached by ``realRatio()``. It is ``-1`` wearing a positive
-      sign, so it needs ``math.isfinite`` rather than the comparison.
-      Reachable rather than theoretical — ``json`` decodes both ``1e400``
-      and the non-standard ``Infinity`` token to ``inf``.
+      gets wrong: ``inf >= 0`` is True, so it needs ``math.isfinite`` rather
+      than the comparison. Reachable rather than theoretical — ``json``
+      decodes both ``1e400`` and the non-standard ``Infinity`` token to
+      ``inf``.
+
+      **The reason is not the one this docstring gave until lintarr#43.** It
+      said "a ratio limit of ``inf`` can never be reached by ``realRatio()``",
+      and that is false: ``Torrent::MAX_RATIO`` *is*
+      ``std::numeric_limits<qreal>::infinity()``, ``realRatio()`` returns it
+      whenever ``download == 0 && upload != 0``, and ``inf >= inf`` is True.
+      The exclusion survives on a different ground — the ``MAX_RATIO`` branch
+      needs a finished torrent holding **no wanted data**, and such a torrent
+      is not the homelab#393 wedge, so for every torrent that can wedge a
+      queue the reachable range is the finite branch's ``[0, 2**63]`` and
+      ``inf`` is outside it. Excluding it therefore *arms* the check, which is
+      the direction this file takes under doubt. See
+      ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
+
+    - A **huge but finite** limit — ``1e308``, ``3.4e38``, a 401-digit ``int``
+      — **is** a goal, and there is deliberately no upper bound here.
+      lintarr#43 asked for the largest value ``realRatio()`` can return so a
+      bound could be measured rather than guessed; the measured answer is
+      ``inf``, so there is no finite ceiling to bound against. ``1e308`` and
+      ``inf`` are in fact *reachability-equivalent* — each is satisfied by the
+      ``MAX_RATIO`` branch and by nothing else — so no bound can separate
+      them, and the asymmetry between the two bullets is recorded in the
+      measurement rather than invented away. Independently: this predicate is
+      shared with ``seed_time``, whose limit has no ceiling at all
+      (``finishedTime() / 60`` grows with the wall clock, and an ``int`` limit
+      caps 4085 years below where the ``qlonglong`` comparison does), so a
+      magnitude rule here would be wrong for half its callers.
 
     ``nan`` needs nothing added: every comparison against it is False, so it
     already fails the range test and arms the check. Recorded here so that
