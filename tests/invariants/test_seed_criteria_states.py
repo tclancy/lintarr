@@ -368,7 +368,11 @@ def test_the_ceiling_measurements_table_still_reads_as_written():
     # restated, so a bound edited on one side cannot leave this table agreeing
     # with a sentence the document no longer supports.
     assert all(v > MAX_REACHABLE_RATIO for v in (1e308, 3.4e38, 10**400, math.inf))
-    assert 2.0**63 == MAX_REACHABLE_RATIO
+    # The model's constant pinned to the division it models rather than to a
+    # repeated literal. This is the ONLY pin on it — the cross-check properties
+    # compare the two sides to each other, so a re-measurement that moved both
+    # constants together would pass every one of them.
+    assert MAX_REACHABLE_RATIO == (2**63 - 1) / 1.0
 
 
 def test_a_criterion_that_is_not_a_number_is_unreadable_whatever_python_thinks():

@@ -721,9 +721,18 @@ def test_the_ratio_ceiling_is_the_int64_division_it_models():
     """
     int64_max = 2**63 - 1
     assert MAX_REACHABLE_SEED_RATIO == int64_max / 1.0
-    assert MAX_REACHABLE_SEED_RATIO == 2.0**63
-    # And it really is above every value the unreachable-set tests use, which is
-    # what makes those tests about the bound rather than about an arbitrary line.
+    # The rounding property itself, stated without naming the constant — so this
+    # line records what the docstring claims rather than restating a literal a
+    # future edit would move in both places at once.
+    assert int64_max / 1.0 == 2.0**63
+    # The unreachable set's BREADTH, not just its contents. An aggregate over a
+    # collection is vacuously true of an empty one, and an empty ``parametrize``
+    # is a *skip* rather than a failure: narrowing both tuples to ``()`` reads
+    # ``1323 passed, 2 skipped`` and the six assertions that pin lintarr#43's
+    # false PASS stop running with nothing going red. Measured, not supposed.
+    assert len(_UNREACHABLE_SEED_VALUES) == len(_UNREACHABLE_IDS) == 3
+    # And every member really is above the bound, which is what makes those
+    # tests about the ceiling rather than about an arbitrary line.
     assert all(v > MAX_REACHABLE_SEED_RATIO for v in _UNREACHABLE_SEED_VALUES)
 
 

@@ -28,11 +28,12 @@ the rule was a *range* rule covering every negative.
 - **The bound is inclusive, and that is measured too.** `(double)INT64_MAX` is
   *attained*, not approached: `INT64_MAX / 1.0` **is** that double. A `<` would
   file the one attainable extreme as unreachable.
-- **The premise everything rested on was false.** Four docstrings and a prior
-  measurement document said a ratio limit of `inf` is excluded because
+- **The premise everything rested on was false.** Five docstrings and a prior
+  measurement document — six sites, tabulated at the bottom — said a ratio
+  limit of `inf` is excluded because
   "`realRatio()` never reaches it". `Torrent::MAX_RATIO` **is**
   `std::numeric_limits<qreal>::infinity()`, `realRatio()` returns it on its
-  other branch, and `inf >= inf` is True. All five are corrected; `inf` is still
+  other branch, and `inf >= inf` is True. All six are corrected; `inf` is still
   an override, now for the same reason `1e308` is.
 - **One comparison replaced three lines.** The bound subsumes the `math.isfinite`
   guard *and* that guard's own `isinstance(..., float)` workaround — which
@@ -114,11 +115,17 @@ attained. The last two lines are why `1e308` and `3.4e38` are outside it.
 
 ### The `MAX_RATIO` branch: when, and whether it happens at all
 
-`download == 0` requires `total_done == 0` **and** `all_time_download == 0`.
-Both ternary arms give that: the condition `all_time_download < total_done * 0.01`
-is true only when `all_time_download` is below a non-negative quantity, and when
-it is false the selected `all_time_download` is itself `0` only if
-`total_done * 0.01 <= 0`. Combined with `upload != 0` and with
+`download == 0` requires `total_done == 0` **and** `all_time_download == 0`,
+and both ternary arms have to be dispatched to see it:
+
+- **Condition true** → `download = total_done`, which is `0` only if
+  `total_done` is. And `0 < 0 * 0.01` is false, so this arm cannot be reached
+  with `total_done == 0` at all: it would require `all_time_download < 0`.
+- **Condition false** → `download = all_time_download`, which is `0` only if
+  `all_time_download` is; and the arm's own condition then reads
+  `0 >= total_done * 0.01`, i.e. `total_done <= 0`.
+
+Either way both counters are zero. Combined with `upload != 0` and with
 `processTorrentShareLimits`' `isFinished()` precondition, the state is: a
 *finished* torrent that has uploaded payload and whose `total_done` is zero.
 
@@ -293,9 +300,12 @@ the real cap: if the ratio bound ever has to drop near `2**31`, that test is
 what goes red, and the answer then is to split the predicate per criterion.
 
 (`setShareLimitsAction` reads the parameter as a `qlonglong` and narrows it into
-`setSeedingTimeLimit(int)`. A value outside `int` therefore lands below
-`DEFAULT_SEEDING_TIME_LIMIT` and becomes `NO_SEEDING_TIME_LIMIT` — *no limit at
-all*, i.e. a wedge. That is one more reason `FAIL` is the right answer for an
+`setSeedingTimeLimit(int)`. What a conversion outside `int`'s range produces is
+**implementation-defined** before C++20 and a modulo-2^32 wrap from C++20 on, so
+this is a claim about practice rather than about the standard: in practice it
+truncates, out-of-range values land below `DEFAULT_SEEDING_TIME_LIMIT`, and
+`setSeedingTimeLimit` rewrites anything below that to `NO_SEEDING_TIME_LIMIT` —
+*no limit at all*, i.e. a wedge. That is one more reason `FAIL` is the right answer for an
 out-of-range seed time, and it is what
 `test_an_unreachable_seed_time_is_not_a_seed_goal_either` records.)
 
@@ -341,6 +351,13 @@ extreme as a `GOAL`.
 - Not that `realRatio()`'s *codomain* is bounded. It is not — `inf` is in it by
   a named constant. The bound is on what a **wedgeable** torrent can reach,
   which is the only population lintarr's check is about.
+- And **one step in the chain is a judgement rather than a reading**, named here
+  rather than left to be inferred: that "a torrent that can wedge a download
+  queue" means "a torrent holding data", hence `download >= 1`. Everything else
+  above is read off the C++ — types, constants, comparisons. This step is an
+  argument about lintarr's scope, and it is the one to attack if this conclusion
+  is ever revisited. It is why the bound is on the finite branch rather than on
+  the codomain.
 
 ## The table
 

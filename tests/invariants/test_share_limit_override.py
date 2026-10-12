@@ -271,15 +271,14 @@ def test_a_non_finite_criterion_overrides_rather_than_defers(value):
     them verbatim and never calls ``categoryRatioLimit()``: ``inf`` is above
     ``MAX_REACHABLE_SEED_RATIO``, and every comparison against ``nan`` is
     False. They override exactly as ``-1`` does, and the global limit cannot
-    save either —
+    save either — which is why ``_overrides_the_share_limit`` is written as
+    "not a goal" rather than as a sign test.
 
     The reason for ``inf`` was previously given here as "``realRatio()`` never
     reaches ``inf``". lintarr#43 measured that false — ``Torrent::MAX_RATIO``
     is infinity — and replaced it with the bound, which excludes ``inf`` and
     every huge finite limit alike. See
     ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
-    which is why ``_overrides_the_share_limit`` is written as "not a goal"
-    rather than as a sign test.
 
     Both globals are ON here, so a ``< 0`` implementation reports PASS on a
     stack that never frees a slot. ``json`` decodes ``1e400`` and the

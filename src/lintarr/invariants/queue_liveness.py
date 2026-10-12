@@ -34,13 +34,16 @@ seeder stop" is not a single claim, because a torrent carries its own ratio and
 seeding-time limits and is released as soon as *either* is reached. Each limit
 is in one of three states, measured on qBittorrent ``release-5.2.4``:
 
-- a **goal** (``>= 0`` and finite) — the slot is released, no wedge;
+- a **goal** (within ``[0, MAX_REACHABLE_SEED_RATIO]``) — the slot is
+  released, no wedge;
 - **deferring** (``-2``, absent, or null) — ``effectiveRatioLimit()`` redirects
   it to ``categoryRatioLimit(category())``, which is the only route to
   ``globalMaxRatio()``, so the global or category setting decides;
-- **overriding** (any other negative, and ``inf``/``nan``) — returned verbatim
-  into a ``>= 0`` gate it can never pass. The redirect never happens, so the
-  global is never consulted and **cannot** release the slot.
+- **overriding** (any other negative, ``nan``, and anything *above* the
+  measured ceiling — ``inf`` included) — returned verbatim into a gate it can
+  never pass, at one end or the other. The redirect never happens, so the
+  global is never consulted and **cannot** release the slot. The upper end is
+  lintarr#43; see ``MAX_REACHABLE_SEED_RATIO``.
 
 A criterion nobody can read is a **fourth** state, not one of these, and the
 distinction matters because the two sides want opposite defaults for it.
