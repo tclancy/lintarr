@@ -34,7 +34,7 @@ from lintarr.invariants.queue_liveness import (
     _is_an_unusable_seed_criterion,
     _overrides_the_share_limit,
 )
-from tests.model.share_limit import CriterionState, classify
+from tests.model.share_limit import MAX_REACHABLE_RATIO, CriterionState, classify
 from tests.strategies import JUNK_VALUES, LIMIT_VALUES, READ_AT
 
 #: Searches rather than asserts a named case, so it is allowed to be slower
@@ -47,11 +47,17 @@ _SETTINGS = settings(
 
 #: The values the existing strategies cannot draw, each a measured case rather
 #: than a curiosity. ``inf``/``nan`` override (``inf != -2`` so the redirect
-#: never fires, and ``realRatio() >= inf`` is never true) and ``JUNK_VALUES``
-#: builds its floats with ``allow_nan=False, allow_infinity=False``. The huge
-#: ints are the ``OverflowError`` path both sides have to survive: ``json``
-#: decodes a 401-digit literal to a Python ``int``, and ``math.isfinite`` raises
-#: on one instead of answering. ``-0.0`` is a goal and reads like a negative.
+#: never fires, and both fail the range rule) and ``JUNK_VALUES`` builds its
+#: floats with ``allow_nan=False, allow_infinity=False``. The huge ints were the
+#: ``OverflowError`` path both sides had to survive — ``json`` decodes a
+#: 401-digit literal to a Python ``int``, and ``math.isfinite`` raised on one
+#: instead of answering — and they now exercise the range rule's upper end
+#: instead, both sides having replaced that guard with a bound (lintarr#43).
+#: ``-0.0`` is a goal and reads like a negative.
+#:
+#: The reason given here for ``inf`` used to be "``realRatio() >= inf`` is never
+#: true". It is not: ``Torrent::MAX_RATIO`` is infinity. See
+#: ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
 MEASURED_EDGE_VALUES: tuple[float | int, ...] = (
     math.inf,
     -math.inf,
@@ -314,6 +320,55 @@ def test_the_measurement_docs_table_still_reads_as_written():
     assert not wrong, f"model disagrees with the measurement doc: {wrong}"
     # And the absent row, which cannot be expressed as a value.
     assert classify(None, was_read=False) is CriterionState.DEFERRING
+
+
+def test_the_ceiling_measurements_table_still_reads_as_written():
+    """The second document the model claims to execute, and its *after* column.
+
+    ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` answered
+    the question the 10-05 document left open — the largest ratio
+    ``realRatio()`` can return — and its table has a *before* and an *after*
+    column because three rows moved. This control anchors the model to the
+    after column, in the same shape as
+    ``test_the_measurement_docs_table_still_reads_as_written`` anchors it to the
+    older document's.
+
+    It exists for a reason that control's docstring gives and this one inherits:
+    the cross-check property can only show that the model and the code **agree**,
+    so a wrong model and a wrong implementation would pass it together. Here
+    that risk is concrete rather than theoretical — the bound was added to both
+    sides in one change, from one reading, by one author.
+
+    The three rows written in bold in the document are the three that moved, and
+    they are the whole of lintarr#43. ``2**63`` and ``inf`` are the rows on
+    either side of the new bound, and the reason the bound is inclusive.
+    """
+    after: tuple[tuple[object, CriterionState], ...] = (
+        (2.0, CriterionState.GOAL),
+        (0, CriterionState.GOAL),
+        (-1, CriterionState.OVERRIDING),
+        (-5, CriterionState.OVERRIDING),
+        (-0.5, CriterionState.OVERRIDING),
+        (-2, CriterionState.DEFERRING),
+        (2.0**63, CriterionState.GOAL),  # attained, hence an inclusive bound
+        (1e308, CriterionState.OVERRIDING),  # moved
+        (3.4e38, CriterionState.OVERRIDING),  # moved
+        (10**400, CriterionState.OVERRIDING),  # moved
+        (math.inf, CriterionState.OVERRIDING),
+        (math.nan, CriterionState.OVERRIDING),
+    )
+    wrong = [
+        (value, classify(value).value, expected.value)
+        for value, expected in after
+        if classify(value) is not expected
+    ]
+    assert not wrong, f"model disagrees with the 10-12 measurement doc: {wrong}"
+    # The document's own claim about WHY those three moved: each is above the
+    # measured ceiling, and the row below it is not. Asserted rather than
+    # restated, so a bound edited on one side cannot leave this table agreeing
+    # with a sentence the document no longer supports.
+    assert all(v > MAX_REACHABLE_RATIO for v in (1e308, 3.4e38, 10**400, math.inf))
+    assert 2.0**63 == MAX_REACHABLE_RATIO
 
 
 def test_a_criterion_that_is_not_a_number_is_unreadable_whatever_python_thinks():

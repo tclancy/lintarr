@@ -1,52 +1,62 @@
 # How large a seed ratio can qBittorrent ever reach?
 
-**Measured 2026-10-12** against **qBittorrent `release-5.2.4`** and **Sonarr
-`v4.0.20.3014`**, by reading the code paths end to end on the release tags.
+**Measured 2026-10-12** against **qBittorrent `release-5.2.4`**, **libtorrent
+`RC_2_0`** and **Sonarr `v4.0.20.3014`**, by reading the code paths end to end
+on those tags.
 
 Issue [#43](https://github.com/tclancy/lintarr/issues/43). That ticket asked one
-question and declined to prescribe a fix until it was answered:
+question and refused to prescribe a fix until it was answered:
 
 > **What is the largest ratio `realRatio()` can return?**
 
-This settles it, and the answer inverts the ticket's hypothesis.
+Because a threshold guessed rather than measured is the thing this project calls
+its cardinal sin, and [#14](https://github.com/tclancy/lintarr/issues/14) is the
+precedent: that ticket guessed `-1` was a sentinel, and the measurement showed
+the rule was a *range* rule covering every negative.
 
 ## TL;DR
 
-- **There is no finite ceiling. `realRatio()`'s maximum is `inf`, by an
-  explicit named constant** — `Torrent::MAX_RATIO`, which is
-  `std::numeric_limits<qreal>::infinity()`. So the ticket's conditional ("if it
-  is bounded … the range rule wants an upper bound") resolves to *not bounded*,
-  and **`_is_a_seed_goal` does not grow an upper bound.**
-- **`1e308` as a `GOAL` is therefore correct**, and so is PR #42's pin of it.
-  The ticket read `1e308` as "#14 wearing a finite sign"; it is not — the value
-  is reachable by the same single branch that reaches every other value.
-- **The real defect is the one the ticket used as its *premise*.** Both
-  `_is_a_seed_goal` and PR #42's `gate_can_fire` say a ratio limit of `inf` is
-  excluded because "`realRatio()` never reaches it". **It does reach it**, by
-  name, and `inf >= inf` is True. The behaviour stays; the stated reason was
-  false and is corrected below.
-- **`1e308`, `3.4e38` and `inf` are reachability-equivalent**, and that is the
-  finding that disposes of any candidate bound: all three are satisfied by, and
-  *only* by, the `MAX_RATIO` branch. A bound `B` placed anywhere would file
-  `B+1` as unreachable while the one branch that reaches `1e308` reaches `B+1`
-  too.
-- **No magnitude rule could be right for `seed_time` anyway, and the predicate
-  is shared.** `seedingTimeLimit` is compared against `finishedTime() / 60`,
-  which grows with the wall clock, and the limit's own type caps it **4085
-  years** below where the comparison's type caps — so *every* representable
-  seed-time limit is eventually satisfied. §5.
-- **Neither side bounds the magnitude on the way in.** Sonarr's validator is
-  `GreaterThan(0.0).AsWarning()` and nothing else; `setRatioLimit` floors and
-  never ceilings. §4.
+- **There is a measurable ceiling, and `_is_a_seed_goal` now carries it.** For
+  any torrent that holds data — the only kind that can wedge a download queue —
+  `realRatio()` is `all_time_upload / (qreal)download` with both `int64_t` and
+  `download >= 1`, so it cannot exceed `(double)INT64_MAX`, which is exactly
+  `2.0**63`. The range rule is now `0 <= value <= MAX_REACHABLE_SEED_RATIO`.
+- **#43's hypothesis was right.** `seedCriteria.seedRatio: 1e308` was filed as a
+  reachable `GOAL` and disarmed the flagship wedge check byte-identically to a
+  real ratio of `2.0`. That is lintarr#14 wearing a large positive sign, and it
+  was a live false PASS on `main`.
+- **The bound is inclusive, and that is measured too.** `(double)INT64_MAX` is
+  *attained*, not approached: `INT64_MAX / 1.0` **is** that double. A `<` would
+  file the one attainable extreme as unreachable.
+- **The premise everything rested on was false.** Four docstrings and a prior
+  measurement document said a ratio limit of `inf` is excluded because
+  "`realRatio()` never reaches it". `Torrent::MAX_RATIO` **is**
+  `std::numeric_limits<qreal>::infinity()`, `realRatio()` returns it on its
+  other branch, and `inf >= inf` is True. All five are corrected; `inf` is still
+  an override, now for the same reason `1e308` is.
+- **One comparison replaced three lines.** The bound subsumes the `math.isfinite`
+  guard *and* that guard's own `isinstance(..., float)` workaround — which
+  existed because `math.isfinite` raises `OverflowError` on an `int` too large
+  for a `float`, and `json` decodes a 401-digit literal to exactly that. A
+  Python `int` compares against a `float` exactly and never raises. `import math`
+  is gone from both files.
+- **The bound is safe for `seed_time`, which shares the predicate — by
+  arithmetic, not by design.** Sonarr's `SeedTime` is an `int?` of minutes, so
+  `2**31 - 1` is the most that field can carry — the ratio bound is 4.3e9 times
+  larger. Asserted rather than assumed — §5.
 
 ## What changed in the code
 
-Nothing in the behaviour. Three docstrings and one test docstring carried the
-false "never reaches it" claim, plus PR #42's module docstring carried this as
-an open question; all are corrected to the measured reason, and two tests now
-pin the huge-finite decision explicitly rather than leaving it to a `st.floats`
-draw. See "The decision" below for why *the same behaviour* follows from a
-different premise.
+- `_is_a_seed_goal` gains an upper end: `0 <= fact.value <= MAX_REACHABLE_SEED_RATIO`,
+  replacing `>= 0` plus the `math.isfinite` special case.
+- `tests/model/share_limit.py`'s `gate_can_fire` gains the same bound,
+  re-derived here from the C++ types rather than imported — and that retires
+  the one clause its module docstring admitted was borrowed from the
+  implementation.
+- `1e308`, `3.4e38` and a 401-digit `int` move from `GOAL` to `OVERRIDING` on
+  both sides. **This is the assertion PR #42 pinned as an open question and
+  predicted would go red when someone measured the ceiling** — it going red is
+  the question resolving, not a regression, exactly as that file said.
 
 ## 1. The two branches of `realRatio()`
 
@@ -71,19 +81,16 @@ qreal TorrentImpl::realRatio() const
 }
 ```
 
-Two branches, and they have different codomains:
+Two branches, with different codomains:
 
 - **the finite branch** — `upload / (qreal)download`, both `int64_t`, with
-  `download >= 1`. Its supremum is `(double)INT64_MAX`.
+  `download >= 1`. Supremum `(double)INT64_MAX`.
 - **the `MAX_RATIO` branch** — `download == 0 && upload != 0`.
+  `src/base/bittorrent/torrent.cpp:47`:
 
-`src/base/bittorrent/torrent.cpp:47`:
-
-```cpp
-const qreal Torrent::MAX_RATIO = std::numeric_limits<qreal>::infinity();
-```
-
-That line is the whole answer to #43. The maximum is `inf`.
+  ```cpp
+  const qreal Torrent::MAX_RATIO = std::numeric_limits<qreal>::infinity();
+  ```
 
 ### The finite branch's supremum, computed
 
@@ -91,52 +98,77 @@ That line is the whole answer to #43. The maximum is `inf`.
 exactly `2^63`:
 
 ```
-INT64_MAX            = 9223372036854775807
-float(INT64_MAX)     = 9.223372036854776e+18
+INT64_MAX                     = 9223372036854775807
+float(INT64_MAX)              = 9.223372036854776e+18
 float(INT64_MAX) == 2.0**63   -> True
+float(INT64_MAX) >= 1e308     -> False
+float(INT64_MAX) >= 3.4e38    -> False
 ```
 
-So the finite branch cannot reach `1e308` or `3.4e38`:
+IEEE-754 double semantics are identical in C++ `qreal` and Python `float`, so
+the Python above checks the C++ comparison rather than analogising to it.
 
+The second line is why the bound is **inclusive**: `2^63` is the value a torrent
+reaches having uploaded `INT64_MAX` bytes against one byte downloaded, so it is
+attained. The last two lines are why `1e308` and `3.4e38` are outside it.
+
+### The `MAX_RATIO` branch: when, and whether it happens at all
+
+`download == 0` requires `total_done == 0` **and** `all_time_download == 0`.
+Both ternary arms give that: the condition `all_time_download < total_done * 0.01`
+is true only when `all_time_download` is below a non-negative quantity, and when
+it is false the selected `all_time_download` is itself `0` only if
+`total_done * 0.01 <= 0`. Combined with `upload != 0` and with
+`processTorrentShareLimits`' `isFinished()` precondition, the state is: a
+*finished* torrent that has uploaded payload and whose `total_done` is zero.
+
+**Whether any sequence of operations reaches that state is NOT established
+here, and an earlier draft of this document got it wrong.** That draft claimed
+you could get there by adding a torrent as a seed, seeding it, then setting
+every file to "do not download". libtorrent refutes it — `bytes_done()` in
+`src/torrent.cpp:4109-4116`:
+
+```cpp
+if (m_seed_mode || is_seed())
+{
+    // once we're a seed and remove the piece picker, we stop tracking
+    // piece- and file priority. We consider everything as being
+    // "wanted"
+    st.total_done = m_size_on_disk;
 ```
-float(INT64_MAX) >= 1e308    -> False
-float(INT64_MAX) >= 3.4e38   -> False
-```
 
-IEEE-754 double semantics are identical in C++ `qreal` and in Python `float`,
-so the Python above is a faithful check of the C++ comparison rather than an
-analogy.
+`m_size_on_disk` is `aux::size_on_disk(files)`, which sums every non-pad file
+regardless of priority (`src/file_storage.cpp:1615-1624`) and is computed at
+add/metadata time. So a seed's `total_done` is the full payload and cannot be
+driven to zero by priorities. The draft had conflated `total_done` with
+`total_wanted` / `total_wanted_done`, which qBittorrent keeps distinct in the
+same file it reads: `torrentimpl.cpp:466` (`wantedSize() → total_wanted`) versus
+`:473` (`completedSize() → total_wanted_done`). `realRatio()` reads
+`total_done`, and in the non-seed branch (`torrent.cpp:4131`) that is
+`calc_bytes(files, m_picker->have())` — bytes of pieces *held*, filtered ones
+included. So `total_done == 0` means **holding no pieces at all**.
 
-### Is the `MAX_RATIO` branch reachable at all?
-
-`download == 0` requires `total_done == 0` **and** `all_time_download == 0`,
-because `0 < 0 * 0.01` is false and the ternary then selects
-`all_time_download`. Combined with `upload != 0` and with
-`processTorrentShareLimits`' own `isFinished()` precondition, that is a torrent
-which is *finished*, has uploaded payload, and has **no wanted data on disk**.
-
-Reachable, and the qBittorrent source treats it as occurring rather than as
-dead code: a torrent added as a seed (so `all_time_download` stays `0`), seeded
-for a while, then with every file set to "do not download" — `wantedSize()`
-becomes 0, so `total_done` becomes 0 and `isFinished()` stays true.
-`src/webui/api/torrentscontroller.cpp:787` exists for exactly this state:
+What *is* established is that qBittorrent treats the branch as occurring rather
+than as dead code: `src/webui/api/torrentscontroller.cpp:787` exists to keep the
+value off the wire,
 
 ```cpp
 {KEY_PROP_RATIO, ((ratio >= BitTorrent::Torrent::MAX_RATIO) ? -1 : ratio)},
 ```
 
-i.e. the WebUI API reports `share_ratio: -1` rather than an infinity, which is
-also why an API consumer — Sonarr included — can never observe the `inf`.
+so an API consumer — Sonarr included — reports `share_ratio: -1` and never
+observes the infinity.
 
-**What this measurement does not establish** is how a torrent gets into that
-state in practice, or how often. It is a source measurement; the sequence above
-is read off the preconditions, not observed on a running client. That gap does
-not affect the decision, because the decision turns on the comparison in §3
-rather than on the frequency.
+**The decision does not depend on settling this**, which is why the question is
+left open rather than guessed at. Either way the branch describes a finished
+torrent holding no pieces, and such a torrent is not occupying a download slot
+— so it is not the homelab#393 wedge this check is about, and the reachable
+range over the torrents that *can* wedge is the finite branch's.
 
 ## 2. Nothing clamps a large limit on the way in
 
-`torrentimpl.cpp:2635` floors and does not ceiling:
+`torrentimpl.cpp:2635` floors and does not ceiling (comments added here, values
+from `sharelimits.h:36-37`):
 
 ```cpp
 void TorrentImpl::setRatioLimit(qreal limit)
@@ -147,26 +179,32 @@ void TorrentImpl::setRatioLimit(qreal limit)
 }
 ```
 
-`src/webui/api/torrentscontroller.cpp:1559` reads it verbatim:
+`torrentscontroller.cpp:1559` reads it verbatim:
 
 ```cpp
 const qreal ratioLimit = params()[u"ratioLimit"_s].toDouble();
 ```
 
-So `1e308` arrives at `m_ratioLimit` intact, and `effectiveRatioLimit()` returns
-it unchanged (only `-2` redirects).
+So a huge limit arrives at `m_ratioLimit` unclamped, and
+`effectiveRatioLimit()` returns it unchanged — only `-2` redirects.
 
-## 3. The gate, and why no bound can be right
+## 3. The gate, and what the gate needs on its left
 
-`src/base/bittorrent/sessionimpl.cpp:2374`:
+`src/base/bittorrent/sessionimpl.cpp:2374` (`processTorrentShareLimits`); the
+gate itself is at `:2386-2387`:
 
 ```cpp
 if (const qreal ratio = torrent->realRatio();
         (ratioLimit >= 0) && (ratio >= ratioLimit))
 ```
 
-With `ratio == inf` from the `MAX_RATIO` branch, the right-hand comparison is
-True for **every** `ratioLimit`:
+The 10-05 measurement read the left-hand conjunct and gave lintarr its `>= 0`
+rule. **The right-hand conjunct is the half #43 is about**, and it is the one
+that bounds the limit from above: `reached` needs some *attainable* `ratio`, and
+§1 says what is attainable.
+
+For the record, with `ratio == inf` from the `MAX_RATIO` branch the comparison
+is True for every limit:
 
 ```
 inf >= 0.0                     -> True
@@ -179,33 +217,33 @@ inf >= inf                     -> True
 
 Read the last two lines together: **`1e308` and `inf` have identical
 reachability.** Each is satisfied by the `MAX_RATIO` branch and by nothing else.
-
-That is what disposes of an upper bound, and it does so twice over:
-
-1. Any finite `B` would classify `B+1` as unreachable. But the single branch
-   that reaches `1e308` reaches `B+1` as well, so `B` would be drawing a line
-   where the mechanism draws none. The only non-arbitrary candidate, `2^63`, is
-   the supremum of *one branch*, not of the function.
-2. Applied consistently, a bound at `2^63` would also have to move `inf` —
-   which is on the other side of it — and `inf` is *already* excluded. So the
-   bound's only effect would be to make `1e308` agree with `inf` by moving
-   `1e308`, when the measurement says the two agree *already* and the
-   disagreement is in lintarr.
+lintarr classified them *differently* — `1e308` a `GOAL`, `inf` an override —
+and that asymmetry, not the ticket's suspicion, is what the measurement actually
+convicts. The bound removes it by moving `1e308` to join `inf`, which is the
+arming direction; the alternative, moving `inf` to join `1e308`, would disarm
+the check on the strength of a branch §1 cannot even show is reachable.
 
 ## 4. Sonarr accepts it, which was #43's second question
 
-`SeedCriteriaSettings.cs` — the field is a `double?`, and the only rule on it is
-warning-only and about sign, not magnitude:
+`SeedCriteriaSettings.cs` — the field is a `double?` and both rules on it are
+warning-only and about sign or a lower bound, never magnitude:
 
 ```csharp
 RuleFor(c => c.SeedRatio).GreaterThan(0.0)
     .When(c => c.SeedRatio.HasValue)
     .AsWarning().WithMessage("Should be greater than zero");
+...
+if (seedRatioMinimum != 0.0)
+{
+    RuleFor(c => c.SeedRatio).GreaterThanOrEqualTo(seedRatioMinimum)
+        .When(c => c.SeedRatio > 0.0)
+        .AsWarning()
+        .WithMessage($"Under {seedRatioMinimum} leads to H&R");
+}
 ```
 
-`SeedConfigProvider.cs` passes it through verbatim (`Ratio =
-seedCriteria.SeedRatio`), and `QBittorrentProxyV2.cs:227` puts the double
-straight on the wire:
+`SeedConfigProvider.cs` passes it through verbatim (`Ratio = seedCriteria.SeedRatio`),
+and `QBittorrentProxyV2.cs:229-234` puts the double straight on the wire:
 
 ```csharp
 var ratioLimit = seedConfiguration.Ratio.HasValue ? seedConfiguration.Ratio : -2;
@@ -214,112 +252,149 @@ if (ratioLimit != -2 || always)
     request.AddFormParameter("ratioLimit", ratioLimit);
 ```
 
-**So yes: `1e308` saves in Sonarr and travels to qBittorrent intact.** `1e309`
-does not — it is `Infinity` as a `double` — which is the same boundary the JSON
-decode on lintarr's side already crosses.
+**So yes: `1e308` saves in Sonarr and leaves it unclamped.** `1e309` does not —
+it is `inf` as a `double` — the same boundary the JSON decode on lintarr's side
+already crosses.
 
-## 5. The seed-time half has no ceiling at all, and the predicate is shared
+Not read here: how .NET renders that `double?` into the form parameter and
+whether the rendering round-trips through `QString::toDouble()`. "Unclamped by
+either side's own logic" is what this section establishes; the exact wire bytes
+would need a capture, as in
+[`2026-10-02-qbittorrent-5.2.4-webui-ban.md`](2026-10-02-qbittorrent-5.2.4-webui-ban.md).
+It does not matter for lintarr, which reads the value from Sonarr's API rather
+than off the wire to qBittorrent.
+
+## 5. The seed-time half has no ceiling of its own, and the predicate is shared
 
 `_is_a_seed_goal` is applied to `seed_ratio` **and** `seed_time`
-(`_seed_criteria` returns both), so any magnitude rule added to it has to be
-right for both. It cannot be.
-
-The seeding-time arm of the same `if`/`else if` chain is:
+(`_seed_criteria` returns both), so a bound measured from the ratio lands on the
+time too. The seeding-time arm of the same `if`/`else if` chain is:
 
 ```cpp
 else if (const qlonglong seedingTimeInMinutes = torrent->finishedTime() / 60;
         (seedingTimeLimit >= 0) && (seedingTimeInMinutes >= seedingTimeLimit))
 ```
 
-`seedingTimeLimit` here is an `int` — `processTorrentShareLimits` declares it
-`const int seedingTimeLimit = torrent->effectiveSeedingTimeLimit();` and that
-accessor returns `int`, so `int` is the type of the operand actually compared.
-(`setShareLimitsAction` reads the parameter as a `qlonglong` and then narrows it
-into `setSeedingTimeLimit(int)`; Sonarr's own `SeedTime` is an `int?` of
-minutes, so nothing wider ever arrives from the arr side.) `finishedTime() / 60`
-is a `qlonglong` that grows with the wall clock. The limit's own type caps it far
-below where the comparison's type does:
+`finishedTime() / 60` grows with the wall clock, so there is no magnitude above
+which a seed time stops being satisfiable. Two separate caps make the shared
+bound safe anyway, and they are both well below it:
 
-```
-INT32_MAX minutes            = 2147483647          = 4085.8 years
-int64 seconds / 60 (minutes) = 153722867280912930  = 292471208678 years
-limit cap < comparison cap   -> True
-```
+| cap | value | source |
+|---|---|---|
+| what Sonarr's field can hold | `2**31 - 1` minutes ≈ 4085 years | `SeedTime` is `int?` (`SeedCriteriaSettings.cs`) |
+| what qBittorrent compares | `int` | `const int seedingTimeLimit = torrent->effectiveSeedingTimeLimit();`, and that accessor returns `int` |
+| the ratio bound | `2**63` ≈ 9.2e18 | §1 |
 
-So **every representable seed-time limit is eventually satisfied** — there is no
-magnitude above which a seed time stops being a goal. A bound derived from the
-ratio and applied to the shared predicate would be wrong for half its callers,
-and splitting the predicate per criterion would give up the protection this
-file buys deliberately: `test_a_zero_seed_time_is_still_a_seed_goal` exists
-because a rule can be got wrong one field at a time.
+`2**63 / (2**31 - 1)` is `4294967298.0`, so the ratio bound sits more than
+**nine** orders of magnitude above the largest seed time Sonarr can report and
+every representable seed-time limit stays a `GOAL`. That is an arithmetic coincidence rather than a design, so
+`test_the_largest_representable_seed_time_is_still_a_seed_goal` asserts it at
+the real cap: if the ratio bound ever has to drop near `2**31`, that test is
+what goes red, and the answer then is to split the predicate per criterion.
+
+(`setShareLimitsAction` reads the parameter as a `qlonglong` and narrows it into
+`setSeedingTimeLimit(int)`. A value outside `int` therefore lands below
+`DEFAULT_SEEDING_TIME_LIMIT` and becomes `NO_SEEDING_TIME_LIMIT` — *no limit at
+all*, i.e. a wedge. That is one more reason `FAIL` is the right answer for an
+out-of-range seed time, and it is what
+`test_an_unreachable_seed_time_is_not_a_seed_goal_either` records.)
 
 ## The decision
 
-`_is_a_seed_goal` keeps its rule: readable type, then finite, then `>= 0`. No
-upper bound. Three independent reasons, each sufficient:
+`_is_a_seed_goal` grows an upper bound, inclusive, at `(double)INT64_MAX`:
 
-1. **There is no finite ceiling to bound against** (§1). The answer to #43's
-   question is `inf`.
-2. **`1e308` and `inf` are reachability-equivalent** (§3), so a bound cannot
-   separate them, and the only line a bound could draw is one the mechanism
-   does not.
-3. **The predicate is shared with `seed_time`, which has no ceiling** (§5).
+```python
+if not _is_a_readable_seed_criterion(fact):
+    return False
+return 0 <= fact.value <= MAX_REACHABLE_SEED_RATIO
+```
 
-### What the measurement *does* change: the reason for excluding `inf`
+Why this is a measurement and not a guess — the distinction #43 insisted on:
 
-Excluding `inf` is still right, and now for a stated reason rather than a false
-one. The false one, in two places verbatim — "a ratio limit of `inf` can never
-be reached by `realRatio()`" — is refuted by §1 and §3.
+1. **The number is read off the C++ types**, not off anyone's sense of what
+   ratio is plausible. `int64_t / (qreal)int64_t` with a divisor of at least one
+   has exactly one supremum, and it is this.
+2. **It is the frontier the mechanism itself draws.** Below it a torrent holding
+   data can satisfy the limit; above it only the `MAX_RATIO` branch can, and
+   that branch describes a torrent holding no pieces.
+3. **Both ends of the rule now come from the same two conjuncts of one `if`.**
+   `>= 0` is the left conjunct (10-05); the ceiling is what the right conjunct
+   can supply (this document). The rule is no longer half-measured.
 
-The reason that survives measurement: the `MAX_RATIO` branch requires a
-finished torrent **holding no wanted data**, and a torrent holding no data is
-not the homelab#393 wedge. lintarr's flagship check asks whether a *seeding*
-torrent will ever release its slot; for every torrent that can wedge a queue,
-`download >= 1` and the reachable range is the finite branch's `[0, 2^63]`.
-`inf` sits outside it, so excluding `inf` **arms** the check, which is the
-direction this project takes under doubt.
+And why the direction is the safe one: a limit above the ceiling cannot release
+a slot, so treating it as "no goal" **arms** the wedge check. The failure it
+closes is a false PASS, which this project ranks worst. The residual risk is the
+opposite error — a bound set too low would FAIL a stack that is fine and send an
+operator to re-set a goal that was already correct — which is why
+`test_the_largest_reachable_seed_ratio_is_still_a_seed_goal` pins the attainable
+extreme as a `GOAL`.
 
-That same argument would move `1e308` out of `GOAL` if it were pushed one step
-further — and it is deliberately not pushed, because at that point the rule
-stops being a measurement and becomes a judgement about which torrents are
-"real", which is exactly the kind of invented threshold #14 taught this project
-to refuse. The asymmetry is recorded here rather than resolved by invention,
-and the two tests added with this document pin it so it cannot drift silently.
+### What this does *not* claim
+
+- Not that anyone has seen a `1e308` seed ratio in the wild. Exposure is an
+  operator typing an absurd number, an API client, or a corrupted payload; the
+  value of the fix is that the verdict is now defensible either way, where
+  `test_an_integer_too_large_for_a_float_does_not_crash_the_check` previously
+  described its own PASS as "not very defensible".
+- Not that the `MAX_RATIO` branch is reachable or unreachable. §1 says why that
+  is still open and why the decision does not turn on it.
+- Not that `realRatio()`'s *codomain* is bounded. It is not — `inf` is in it by
+  a named constant. The bound is on what a **wedgeable** torrent can reach,
+  which is the only population lintarr's check is about.
 
 ## The table
 
-Measured by running both the shipped predicate and PR #42's independent model
-over each value. They agree on every row; the right-hand column is the one #43
-asked about.
+Measured by running the shipped predicate and PR #42's independent model over
+each value, before and after. They agree on every row in both columns.
 
-| `seedCriteria.seedRatio` | `_is_a_seed_goal` | model `classify` | reachable by |
+| `seedCriteria.seedRatio` | before | after | reachable by |
 |---|---|---|---|
-| `2.0` | `True` | `goal` | finite branch |
-| `0` | `True` | `goal` | finite branch, immediately |
-| `-1`, `-5`, `-0.5` | `False` | `overriding` | nothing — gate needs `>= 0` |
-| `-2` | `False` | `deferring` | redirected to the category |
-| `9.223372036854776e+18` (`2^63`) | `True` | `goal` | finite branch, at its supremum |
-| `1e308` | `True` | `goal` | `MAX_RATIO` branch only |
-| `3.4e38` | `True` | `goal` | `MAX_RATIO` branch only |
-| `10**400` (a Python `int`) | `True` | `goal` | `MAX_RATIO` branch only |
-| `inf` | `False` | `overriding` | `MAX_RATIO` branch only |
-| `nan` | `False` | `overriding` | nothing — every comparison is False |
+| `2.0` | `goal` | `goal` | finite branch |
+| `0` | `goal` | `goal` | finite branch, immediately |
+| `-1`, `-5`, `-0.5` | `overriding` | `overriding` | nothing — gate needs `>= 0` |
+| `-2` | `deferring` | `deferring` | redirected to the category |
+| `9.223372036854776e+18` (`2^63`) | `goal` | `goal` | finite branch, at its attained maximum |
+| `1e308` | **`goal`** | **`overriding`** | `MAX_RATIO` branch only |
+| `3.4e38` | **`goal`** | **`overriding`** | `MAX_RATIO` branch only |
+| `10**400` (a Python `int`) | **`goal`** | **`overriding`** | `MAX_RATIO` branch only |
+| `inf` | `overriding` | `overriding` | `MAX_RATIO` branch only |
+| `nan` | `overriding` | `overriding` | nothing — every comparison is False |
 
-The last two rows are the asymmetry: identical reachability, different
-classification. Argued above; pinned in
-`tests/invariants/test_queue_liveness.py`.
+The three bold rows are the false PASS #43 found. The `inf` and `nan` rows are
+unchanged in verdict and changed in *reason*: both now fail the range rule
+rather than a dedicated finiteness guard.
+
+## Where the false premise had spread
+
+"`realRatio()` never reaches `inf`" or a paraphrase, all corrected in the same
+change as the bound. Recorded because the count is the point — one sentence in
+one measurement document became the stated justification in four places, and a
+`grep` for the exact wording would have found only three of them:
+
+| site | wording |
+|---|---|
+| `docs/measurements/2026-10-05-sonarr-seed-ratio-range.md` | "`realRatio() >= inf` is never true" — the origin; now carries a supersession note |
+| `src/lintarr/invariants/queue_liveness.py`, `_is_a_seed_goal` | "can never be reached by `realRatio()`" |
+| `src/lintarr/invariants/queue_liveness.py`, `_overrides_the_share_limit` | "`realRatio()` never reaches it" |
+| `tests/invariants/test_queue_liveness.py`, `_NO_LIMIT_SEED_VALUES` | "is never reached by `realRatio()`" |
+| `tests/invariants/test_share_limit_override.py` | "`realRatio()` never reaches `inf`" |
+| `tests/invariants/test_seed_criteria_states.py` | "`realRatio() >= inf` is never true" |
 
 ## Re-deriving this
 
 ```bash
-# qBittorrent: MAX_RATIO, the two branches, the gate, and the API's -1 display
+# qBittorrent: MAX_RATIO, the two branches, the gate, the sentinels, the -1 display
 curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/base/bittorrent/torrent.cpp | grep -n 'MAX_RATIO'
-curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/base/bittorrent/torrentimpl.cpp | sed -n '1516,1531p;2635,2645p'
+curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/base/bittorrent/torrentimpl.cpp | sed -n '1516,1531p;2635,2641p'
 curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/base/bittorrent/sessionimpl.cpp | sed -n '2374,2404p'
 curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/webui/api/torrentscontroller.cpp | sed -n '787p;1557,1562p'
 curl -sL https://raw.githubusercontent.com/qbittorrent/qBittorrent/release-5.2.4/src/base/bittorrent/sharelimits.h | grep -n 'RATIO_LIMIT\|SEEDING_TIME_LIMIT'
 
-# Sonarr: the warning-only validator, the pass-through, the form parameter
+# libtorrent: total_done is NOT total_wanted, and is priority-independent for a seed
+curl -sL https://raw.githubusercontent.com/arvidn/libtorrent/RC_2_0/src/torrent.cpp | sed -n '4094,4135p'
+curl -sL https://raw.githubusercontent.com/arvidn/libtorrent/RC_2_0/src/file_storage.cpp | sed -n '1615,1624p'
+
+# Sonarr: both warning-only rules, the pass-through, the form parameter
 curl -sL https://raw.githubusercontent.com/Sonarr/Sonarr/v4.0.20.3014/src/NzbDrone.Core/Indexers/SeedCriteriaSettings.cs
 curl -sL https://raw.githubusercontent.com/Sonarr/Sonarr/v4.0.20.3014/src/NzbDrone.Core/Indexers/SeedConfigProvider.cs
 curl -sL https://raw.githubusercontent.com/Sonarr/Sonarr/v4.0.20.3014/src/NzbDrone.Core/Download/Clients/QBittorrent/QBittorrentProxyV2.cs | sed -n '227,240p'
@@ -327,5 +402,5 @@ curl -sL https://raw.githubusercontent.com/Sonarr/Sonarr/v4.0.20.3014/src/NzbDro
 # The arithmetic in this document
 python3 -c 'print(repr(float(2**63 - 1)), float(2**63-1) == 2.0**63, float(2**63-1) >= 1e308)'
 python3 -c 'import math; print([math.inf >= v for v in (0.0, 2.0, 2.0**63, 1e308, 3.4e38, math.inf)])'
-python3 -c 'print(2**31 - 1 < (2**63 - 1)//60)'
+python3 -c 'print((2**63) / (2**31 - 1))'   # 4294967298.0 -- nine orders of magnitude
 ```

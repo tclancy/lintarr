@@ -39,38 +39,42 @@ the review found the second.
    because the *partition* is what the property checks — a value misfiled
    between UNREADABLE and any other state is exactly lintarr#10 — but a reader
    should not credit this file with having re-derived it.
-2. **The ``float`` narrowing inside ``gate_can_fire``.** The ``>= 0`` gate and
-   the ``== -2`` redirect are both re-derived from quoted C++ and owe nothing to
-   ``queue_liveness``. ``isinstance(value, float)`` is different: it is a Python
-   artifact, its justification is an ``OverflowError`` in ``math.isfinite`` that
-   appears nowhere in the measurement document, and it is character-for-character
-   the implementation's own guard. So "independent" does not cover it.
+2. **The ``float`` narrowing that used to be inside ``gate_can_fire`` — now
+   gone, and recorded because the borrowing is what retired it.** The ``>= 0``
+   gate and the ``== -2`` redirect are re-derived from quoted C++ and owe
+   nothing to ``queue_liveness``. ``isinstance(value, float)`` was different: a
+   Python artifact whose justification was an ``OverflowError`` in
+   ``math.isfinite``, appearing nowhere in any measurement document, and
+   character-for-character the implementation's own guard. lintarr#43 replaced
+   both sides' finiteness test with an **upper bound** read off the C++ types
+   (see ``gate_can_fire``), which subsumes it. So this file no longer borrows
+   anything, and clause 1 is the only reservation left.
 
-### The question that borrowing left pinned — now settled, and the pin stands
+### The question that borrowing left pinned — measured, and the pin flipped
 
-Both sides file a **huge but finite** limit — ``1e308``, ``3.4e38`` — as
+Both sides used to file a **huge but finite** limit — ``1e308``, ``3.4e38`` — as
 ``GOAL``, and ``st.floats(width=32)`` really draws that range, so the property
-*pins* that agreement. This section used to call that an open question, on the
-grounds that under the document's own reasoning for ``inf`` ("a limit
-``realRatio()`` never reaches") a ratio limit of ``1e308`` is unreachable in the
-same way, which would make it ``OVERRIDING`` — lintarr#14 wearing a finite sign.
+*pinned* that agreement. This section called it an open question, on the grounds
+that under the 10-05 document's reasoning for ``inf`` ("a limit ``realRatio()``
+never reaches") a ratio limit of ``1e308`` is unreachable in the same way, which
+would make it ``OVERRIDING`` — lintarr#14 wearing a finite sign. It refused to
+prescribe a fix, because the number a fix needs had not been measured.
 
-**lintarr#43 measured it, and the pin was right.** See
-``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
-``realRatio()`` has no finite ceiling: ``Torrent::MAX_RATIO`` is
-``std::numeric_limits<qreal>::infinity()`` and is returned whenever
-``download == 0 && upload != 0``. So there is nothing for a bound to be *below*,
-and ``GOAL`` is the right state for every finite limit.
+**lintarr#43 measured it, and the question resolved against the pin.** See
+``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``. For every
+torrent that can wedge a download queue the reachable range is
+``[0, (double)INT64_MAX]``, so ``1e308`` is ``OVERRIDING`` after all and
+``gate_can_fire`` carries the bound. **This is the assertion this file's
+docstring promised would go red once someone did the measurement, and it going
+red was the question resolving rather than a regression** — which was the whole
+point of recording it instead of leaving the value quietly pinned.
 
-**What the measurement moved instead was the premise.** The reasoning quoted
-above is false where it says ``realRatio()`` never reaches ``inf`` — it does, by
-name, and ``inf >= inf`` is True. ``1e308`` and ``inf`` turn out to be
-*reachability-equivalent*: each is satisfied by the ``MAX_RATIO`` branch and by
-nothing else. The ``inf`` exclusion survives on a different ground — that branch
-needs a finished torrent holding no wanted data, which is not the wedge lintarr
-looks for — and the residual asymmetry between the two is recorded in the
-measurement document rather than invented away. ``gate_can_fire`` below says the
-same thing where it is enforced.
+The 10-05 reasoning was also wrong in its own terms, which is worth keeping
+because it is what made the question look unanswerable: ``realRatio()`` *does*
+reach ``inf``, by the named constant ``Torrent::MAX_RATIO``, and ``inf >= inf``
+is True. What saves the ``inf`` exclusion is not unreachability-in-principle but
+the bound — the branch returning ``MAX_RATIO`` needs a finished torrent holding
+no pieces at all, which is not a torrent that can wedge anything.
 
 ## Where the controls for this file live
 
@@ -82,7 +86,6 @@ because someone editing this module would otherwise run ``tests/model/`` and
 see nothing.
 """
 
-import math
 from enum import Enum
 from typing import Any, Final
 
@@ -90,6 +93,17 @@ from typing import Any, Final
 #: ``src/base/bittorrent/sharelimits.h``. The *only* value ``effectiveRatioLimit()``
 #: redirects, which is what makes it the only value that defers.
 DEFAULT_LIMIT: Final = -2
+
+#: ``(double)INT64_MAX``, the supremum of ``realRatio()``'s finite branch
+#: (``all_time_upload / (qreal)download``, both ``int64_t``, ``download >= 1``)
+#: and therefore the largest ratio limit a torrent holding data can satisfy.
+#: Exactly ``2.0**63`` as a double, and attained rather than approached —
+#: ``INT64_MAX / 1.0`` *is* that double — so the bound using it is inclusive.
+#: From ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``,
+#: which reads the C++ types; deliberately not imported from
+#: ``queue_liveness``'s constant of the same value, which is the point of this
+#: file.
+MAX_REACHABLE_RATIO: Final = 2.0**63
 
 #: ``NO_RATIO_LIMIT`` in the same header. Named because the measurement doc's
 #: readers expect it to be load-bearing and it is not: ``setRatioLimit`` rewrites
@@ -112,14 +126,10 @@ class CriterionState(Enum):
     #: ``categoryRatioLimit()``, the only route to ``globalMaxRatio()``, so a
     #: global or category setting still releases the slot.
     DEFERRING = "deferring"
-    #: Any other negative, plus ``inf`` and ``nan``. Returned verbatim into a
-    #: gate it can never pass, and the redirect never happens — so the global is
-    #: never consulted and *cannot* release the slot.
-    #:
-    #: "Can never pass" is exact for the negatives and for ``nan``, and is a
-    #: claim about the torrents this check is about for ``inf``: see the module
-    #: docstring, since ``realRatio()`` does return ``inf`` for a finished
-    #: torrent holding no wanted data (lintarr#43).
+    #: Any other negative, ``nan``, and anything above ``MAX_REACHABLE_RATIO``
+    #: — which includes ``inf``. Returned verbatim into a gate it can never
+    #: pass, and the redirect never happens — so the global is never consulted
+    #: and *cannot* release the slot.
     OVERRIDING = "overriding"
     #: Present, not null, and not a number. Sonarr's field is a ``double?`` /
     #: ``int?``, so no such value can be a limit the operator set; what the
@@ -160,7 +170,7 @@ def redirects_to_the_category(value: float) -> bool:
 
 
 def gate_can_fire(value: float) -> bool:
-    """Models the ``(limit >= 0)`` half of ``processTorrentShareLimits``.
+    """Models ``processTorrentShareLimits``' gate **and what can satisfy it**.
 
     .. code-block:: cpp
 
@@ -169,34 +179,31 @@ def gate_can_fire(value: float) -> bool:
                 (ratioLimit >= 0) && (ratio >= ratioLimit))
             reached = true;
 
-    Two things the bare comparison gets wrong. Only the first comes from the
-    measurement doc, and the difference is the subject of the module docstring's
-    independence section — read it before trusting this clause:
+    The bare ``>= 0`` is only half the question. ``reached`` also needs an
+    attainable ``ratio`` on the left, so the gate has an upper end as well as a
+    lower one, and ``MAX_REACHABLE_RATIO`` is where it sits.
 
-    * ``inf`` passes ``>= 0`` and is still filed as ``OVERRIDING``, so
-      finiteness is a separate test rather than a consequence. This half is the
-      document's — but **not for the reason the first draft gave**, which was
-      "``realRatio()`` never reaches it". lintarr#43 measured that claim false:
-      ``Torrent::MAX_RATIO`` is infinity and ``realRatio()`` returns it when
-      ``download == 0 && upload != 0``. The test stays because the branch that
-      reaches ``inf`` needs a finished torrent holding no wanted data, which is
-      not a torrent that can wedge a queue — so over the torrents the check is
-      about, the reachable range is the finite branch's ``[0, 2**63]``. See
-      ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
-    * ``math.isfinite`` raises ``OverflowError`` on a large enough ``int``, and
-      ``json`` decodes a 401-digit literal to exactly that. A Python ``int`` is
-      always finite, so asking only about ``float`` avoids the crash. **This
-      half is borrowed from the implementation and is not a second opinion** —
-      and note it answers only about the crash, not about correctness: it files
-      every finite value as reachable, including the huge ones the module
-      docstring records as an open question.
+    Both ends are re-derived from the C++ rather than from ``queue_liveness``,
+    which is what the module docstring's independence section now says — the one
+    borrowed clause was a ``math.isfinite`` workaround that this bound replaced:
+
+    * The lower end is the quoted ``ratioLimit >= 0``, from the 10-05
+      measurement.
+    * The upper end is ``realRatio()``'s own codomain, from the 10-12 one. Its
+      finite branch is ``all_time_upload / (qreal)download``, both ``int64_t``
+      with ``download >= 1``, so it cannot exceed ``(double)INT64_MAX``. Its
+      other branch returns ``Torrent::MAX_RATIO`` — genuinely infinity, which is
+      what the 10-05 document had wrong — but needs ``total_done == 0`` with
+      ``all_time_upload > 0``: a finished torrent holding no pieces, which is
+      not a torrent that can wedge a queue.
 
     ``nan`` needs no special case: every comparison against it is False, so it
-    fails ``>= 0`` on its own and lands in ``OVERRIDING`` where it belongs.
+    fails both ends and lands in ``OVERRIDING`` where it belongs. Nor does a
+    401-digit ``int``, which ``json`` really does decode from an arr payload: a
+    Python ``int`` compares against a ``float`` exactly and never raises, which
+    the ``math.isfinite`` spelling could not manage.
     """
-    if isinstance(value, float) and not math.isfinite(value):
-        return False
-    return value >= 0
+    return 0 <= value <= MAX_REACHABLE_RATIO
 
 
 def classify(value: Any, *, was_read: bool = True) -> CriterionState:

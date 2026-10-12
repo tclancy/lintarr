@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 import pytest
 
 from lintarr.facts import Known, Unknown
-from lintarr.invariants.queue_liveness import check
+from lintarr.invariants.queue_liveness import MAX_REACHABLE_SEED_RATIO, check
 from lintarr.models import ArrInstance, IndexerFacts
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
@@ -528,21 +528,21 @@ _NO_LIMIT_SEED_VALUES = (-1, -1.0, -5, -0.5, float("inf"))
 
 #: ``inf`` is in the set above rather than in a test of its own because it is
 #: the same defect wearing the opposite sign: ``inf >= 0`` is True, so the
-#: range test alone admits it. A code review found it as a live PASS after the
-#: range rule had already landed. ``json`` decodes both ``1e400`` and the
-#: non-standard ``Infinity`` token to it, so it is reachable through collect.
+#: *lower* end of the range test admits it. A code review found it as a live
+#: PASS after that rule had already landed. ``json`` decodes both ``1e400`` and
+#: the non-standard ``Infinity`` token to it, so it is reachable through
+#: collect.
 #:
-#: **Its stated reason used to be wrong.** This comment said a ratio limit of
-#: ``inf`` "is never reached by ``realRatio()``"; lintarr#43 measured that
-#: ``Torrent::MAX_RATIO`` *is* infinity and ``realRatio()`` returns it when
-#: ``download == 0 && upload != 0``, so ``inf >= inf`` releases the slot. It
-#: stays in this set because that branch needs a finished torrent holding no
-#: wanted data, which is not a torrent that can wedge a queue — over the
-#: torrents the check is about, the reachable range is the finite branch's
-#: ``[0, 2**63]``. See
-#: ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``, and note
-#: the deliberate asymmetry against
-#: ``test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal``.
+#: **Its stated reason used to be wrong, and it no longer has a reason of its
+#: own.** This comment said a ratio limit of ``inf`` "is never reached by
+#: ``realRatio()``"; lintarr#43 measured that ``Torrent::MAX_RATIO`` *is*
+#: infinity and ``realRatio()`` returns it when
+#: ``download == 0 && upload != 0``, so ``inf >= inf`` would release the slot.
+#: What excludes ``inf`` now is the *upper* end —
+#: ``MAX_REACHABLE_SEED_RATIO`` — the same bound that excludes ``1e308``. That
+#: is the point: the two have identical reachability and used to be classified
+#: differently. The dedicated ``math.isfinite`` guard is gone. See
+#: ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``.
 #:
 #: ``-inf`` is deliberately NOT here: it fails ``>= 0`` on its own and would
 #: pass this test against an implementation with no finiteness guard at all.
@@ -632,82 +632,171 @@ def test_an_integer_too_large_for_a_float_does_not_crash_the_check():
     ``math.isfinite`` converts its argument, so on an ``int`` too large for a
     ``float`` it raises instead of answering ``True`` — and ``json`` decodes a
     401-digit integer literal to exactly such an ``int``. A bare
-    ``math.isfinite(fact.value)`` in ``_is_a_seed_goal`` turns a junk payload
+    ``math.isfinite(fact.value)`` in ``_is_a_seed_goal`` turned a junk payload
     into a traceback, which this project ranks below even a false PASS.
 
-    The value is enormous and positive, so it reads as a goal and the stack
-    PASSes. That verdict is not the point here; not crashing is. It *is* the
-    point of ``test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal`` below,
-    which lintarr#43 added once the boundary question had an answer — this
-    docstring used to say such a threshold "has no measurable boundary", and
-    the measurement is that the boundary is ``inf``, so there is none to
-    invent rather than none to find.
+    **lintarr#43 closed that hole by construction rather than by a guard**, and
+    this test stays to keep it closed. The finiteness call is gone: the range
+    rule now has an upper end, ``MAX_REACHABLE_SEED_RATIO``, and a comparison
+    between a Python ``int`` of any size and a ``float`` is exact and never
+    raises. Kept pointed at a 401-digit literal because the reason the guard
+    existed is that ``json`` really decodes one, so a rewrite back to a
+    finiteness test would reopen it silently.
+
+    **The verdict flipped with it, and that is not what this test is for.** The
+    stack now FAILs: the value is above every ratio a torrent can reach, so it
+    is not a goal and the check is armed. This docstring used to say such a
+    threshold "has no measurable boundary, so none is invented here" and called
+    the PASS it then asserted "not very defensible" in the same breath. The
+    boundary turned out to be measurable;
+    ``test_an_unreachable_seed_ratio_is_not_a_seed_goal`` is where it is argued.
     """
     absurd = _arrs(_indexer(seed_ratio=_fact(10**400)))
-    assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+    assert check(wedged_qbt(), absurd).outcome is Outcome.FAIL
 
 
-#: Three finite limits above ``(double)INT64_MAX``, the supremum of the finite
-#: branch of ``realRatio()``. ``3.4e38`` is here because ``tests/strategies.py``
-#: draws ``st.floats(..., width=32)``, whose maximum is float32's; ``1e308`` is
-#: near the double ceiling; ``10**400`` is the ``int`` ``json`` decodes from a
-#: 401-digit literal and is above every float.
-_HUGE_FINITE_SEED_VALUES = (1e308, 3.4e38, 10**400)
+#: Three limits above ``MAX_REACHABLE_SEED_RATIO``. ``3.4e38`` is here because
+#: ``tests/strategies.py`` draws ``st.floats(..., width=32)``, whose maximum is
+#: float32's, so the oracle property in
+#: ``tests/invariants/test_seed_criteria_states.py`` really generates this
+#: range; ``1e308`` is near the double ceiling; ``10**400`` is the ``int``
+#: ``json`` decodes from a 401-digit literal and is above every float.
+_UNREACHABLE_SEED_VALUES = (1e308, 3.4e38, 10**400)
 
 #: Spelled out rather than ``ids=repr``, which renders the 401-digit ``int`` as
-#: 401 digits in every failure line and in the mutation round's output.
-_HUGE_FINITE_IDS = ("1e308", "float32-max", "401-digit-int")
+#: 401 digits in every failure line and in every mutation round's output.
+_UNREACHABLE_IDS = ("1e308", "float32-max", "401-digit-int")
 
 
-@pytest.mark.parametrize("value", _HUGE_FINITE_SEED_VALUES, ids=_HUGE_FINITE_IDS)
-def test_a_huge_but_finite_seed_ratio_is_still_a_seed_goal(value):
-    """No upper bound, and that is measured rather than left alone.
+@pytest.mark.parametrize("value", _UNREACHABLE_SEED_VALUES, ids=_UNREACHABLE_IDS)
+def test_an_unreachable_seed_ratio_is_not_a_seed_goal(value):
+    """lintarr#14 wearing a large positive sign, and lintarr#43 is its measurement.
 
-    lintarr#43 suspected this was lintarr#14 wearing a finite sign: if ``inf``
-    is excluded because ``realRatio()`` cannot reach it, a limit of ``1e308``
-    looks unreachable in the same way. It asked for the one number that would
-    settle it — the largest value ``realRatio()`` can return — and refused to
-    prescribe a bound without it.
+    A ratio limit no torrent can ever reach never releases a slot, which is
+    exactly what a ``-1`` does. Before #43 all three of these values **PASSed**,
+    byte-identically to a real ratio of ``2.0`` — the false-PASS shape this
+    file's whole range rule exists to close, arriving from the end nobody had
+    measured.
 
-    Measured in ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``:
-    the answer is ``inf``. ``Torrent::MAX_RATIO`` is
-    ``std::numeric_limits<qreal>::infinity()`` and ``realRatio()`` returns it
-    whenever ``download == 0 && upload != 0``. There is no finite ceiling, so
-    there is nothing for a bound to be below, and ``>= 0`` with no upper limit
-    is the whole rule.
+    #43 declined to prescribe a bound until someone established the largest
+    ratio ``realRatio()`` can return, because a guessed threshold is this
+    project's cardinal sin.
+    ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` is that
+    read: for any torrent holding data — the only kind that can wedge a download
+    queue — ``realRatio()`` is ``all_time_upload / (qreal)download`` with both
+    ``int64_t`` and ``download >= 1``, so it cannot exceed ``(double)INT64_MAX``.
+    That is ``MAX_REACHABLE_SEED_RATIO``, and it is a property of the C++ types
+    rather than of anyone's sense of plausibility.
 
-    This test exists because the decision was previously unpinned on ``main``:
-    the behaviour was reachable only through a ``st.floats`` draw in the
-    oracle's property, so a future "tidy-up" adding a plausible-looking ceiling
-    would have gone green here and red only in a probabilistic test. The
-    paired ``..._seed_time`` case is separate for the usual reason — a rule can
-    be got wrong one field at a time.
+    The companion control is
+    ``test_the_largest_reachable_seed_ratio_is_still_a_seed_goal``: without it
+    this test passes just as well against a bound set absurdly low, and a bound
+    set too low is a **false FAIL** — it sends an operator to re-set a goal that
+    was already fine.
     """
-    absurd = _arrs(_indexer(seed_ratio=_fact(value)))
-    assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+    unreachable = _arrs(_indexer(seed_ratio=_fact(value)))
+    assert check(wedged_qbt(), unreachable).outcome is Outcome.FAIL
 
 
-@pytest.mark.parametrize("value", _HUGE_FINITE_SEED_VALUES, ids=_HUGE_FINITE_IDS)
-def test_a_huge_but_finite_seed_time_is_still_a_seed_goal(value):
-    """The seed-time twin, and its reason is stronger than the ratio's.
+def test_the_ratio_ceiling_is_the_int64_division_it_models():
+    """The constant, pinned to its derivation rather than to itself.
 
-    The ratio has no *finite* ceiling. The seeding time has no ceiling at all:
-    ``processTorrentShareLimits`` compares ``finishedTime() / 60``, which grows
-    with the wall clock, against an ``int`` limit — and ``INT32_MAX`` minutes is
-    4085 years, some eleven orders of magnitude below where the ``qlonglong``
-    on the other side of the comparison caps. So *every* representable
-    seed-time limit is eventually satisfied.
+    Every other test here feeds ``MAX_REACHABLE_SEED_RATIO`` to the predicate
+    and asks what the predicate says, so none of them can see the constant
+    itself being wrong: expectation and subject are the same symbol. A bound
+    mistyped as ``2.0**64`` would pass all of them, because no test value falls
+    between ``2**63`` and ``2**64``.
 
-    That is why a magnitude rule cannot be added to ``_is_a_seed_goal`` even if
-    one were wanted for the ratio: the predicate is shared between both
-    criteria, and a ceiling correct for one would be wrong for the other.
-    Pinned here so that argument has an executable half.
+    So pin it to the computation it models —
+    ``int64_t upload / static_cast<qreal>(download)`` at its extreme, which is
+    ``INT64_MAX`` over a divisor of one — rather than to a repeated literal:
+
+    * ``INT64_MAX / 1.0`` is the largest value that expression can produce,
+      since ``download >= 1`` on that branch.
+    * It equals ``2.0**63`` exactly, because ``INT64_MAX`` is not representable
+      as a ``double`` and the division rounds up. Asserted so the equality is a
+      recorded property rather than a coincidence a reader has to trust.
+
+    See ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` §1.
     """
-    absurd = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
-    assert check(wedged_qbt(), absurd).outcome is Outcome.PASS
+    int64_max = 2**63 - 1
+    assert MAX_REACHABLE_SEED_RATIO == int64_max / 1.0
+    assert MAX_REACHABLE_SEED_RATIO == 2.0**63
+    # And it really is above every value the unreachable-set tests use, which is
+    # what makes those tests about the bound rather than about an arbitrary line.
+    assert all(v > MAX_REACHABLE_SEED_RATIO for v in _UNREACHABLE_SEED_VALUES)
+
+
+def test_the_largest_reachable_seed_ratio_is_still_a_seed_goal():
+    """The bound is inclusive, and that is measured rather than stylistic.
+
+    ``MAX_REACHABLE_SEED_RATIO`` is ``(double)INT64_MAX``, which is not an
+    unattainable supremum: ``INT64_MAX / 1.0`` *is* that double — the value a
+    torrent reaches having uploaded ``INT64_MAX`` bytes against one byte
+    downloaded. So the comparison has to be ``<=``; a ``<`` would file the one
+    attainable extreme as unreachable.
+
+    This is the upper half of the pair whose lower half is
+    ``test_a_zero_seed_ratio_is_still_a_seed_goal``. Both exist for the same
+    reason — a range rule needs a case on each side of each end, or an
+    off-by-one at that end is indistinguishable from the rule working.
+    """
+    at_the_ceiling = _arrs(_indexer(seed_ratio=_fact(MAX_REACHABLE_SEED_RATIO)))
+    assert check(wedged_qbt(), at_the_ceiling).outcome is Outcome.PASS
+
+
+def test_the_largest_representable_seed_time_is_still_a_seed_goal():
+    """The ratio-derived bound must not break the criterion it is shared with.
+
+    ``_is_a_seed_goal`` is applied to ``seed_ratio`` **and** ``seed_time``, so a
+    magnitude rule measured from the ratio lands on the time as well — and the
+    seeding-time arm of ``processTorrentShareLimits`` has no ceiling of its own:
+    it compares ``finishedTime() / 60``, which grows with the wall clock.
+
+    What makes the shared bound safe is an arithmetic coincidence rather than a
+    design, so it is asserted rather than assumed. Sonarr's ``SeedTime`` is an
+    ``int?`` of minutes (``SeedCriteriaSettings.cs``), so ``2**31 - 1`` is the
+    largest value that field can carry, and ``MAX_REACHABLE_SEED_RATIO`` is
+    ``4294967298.0`` times larger — more than nine orders of magnitude. Every
+    representable seed-time limit therefore stays a goal.
+
+    **If the ratio bound ever has to drop near ``2**31``, this test is what goes
+    red**, and the answer then is to split the predicate per criterion rather
+    than to loosen it. That is the value of pinning the real cap here instead of
+    a round number.
+    """
+    at_the_cap = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(2**31 - 1)))
+    assert check(wedged_qbt(), at_the_cap).outcome is Outcome.PASS
     # The co-located restatement this file uses throughout: with ``seed_ratio``
     # absent the stack PASSes only if ``seed_time`` was read as the goal, so the
     # assertion above cannot pass against an implementation that ignores it.
+    assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
+
+
+@pytest.mark.parametrize("value", _UNREACHABLE_SEED_VALUES, ids=_UNREACHABLE_IDS)
+def test_an_unreachable_seed_time_is_not_a_seed_goal_either(value):
+    """The predicate does not special-case magnitude per field, and must not.
+
+    Weaker than its ratio twin on purpose, and the difference is worth stating
+    rather than leaving a reader to assume. These three values are **not**
+    representable seed-time limits: Sonarr's field is an ``int?``, and if such a
+    value did somehow reach qBittorrent, ``setShareLimitsAction`` reads a
+    ``qlonglong`` and narrows it into ``setSeedingTimeLimit(int)``, where
+    anything below ``DEFAULT_SEEDING_TIME_LIMIT`` becomes
+    ``NO_SEEDING_TIME_LIMIT`` — no limit at all. So this test pins lintarr's
+    handling of a value it should never see, not seed-time semantics.
+
+    It is here because a value lintarr should never see is exactly what a junk or
+    corrupted payload delivers, and FAIL is the safe answer for one: the
+    narrowing above makes such a limit "seed forever" on the client, which is the
+    wedge. Keeping the shared predicate free of per-field magnitude special-cases
+    is what makes that fall out rather than need arranging.
+    """
+    unreachable = _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_fact(value)))
+    assert check(wedged_qbt(), unreachable).outcome is Outcome.FAIL
+    # Control: with ``seed_ratio`` absent, a stack whose ``seed_time`` IS a goal
+    # PASSes — so the FAIL above is attributable to this value rather than to
+    # ``seed_time`` being ignored.
     assert check(wedged_qbt(), WITH_SEED_TIME_ONLY).outcome is Outcome.PASS
 
 
