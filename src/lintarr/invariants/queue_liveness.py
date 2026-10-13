@@ -216,16 +216,21 @@ def _all_of(states: Iterable[bool | None]) -> bool | None:
     return None if any(state is None for state in seen) else True
 
 
-def _can_be_reached(limit: float) -> bool:
+def _can_be_reached(limit: int | float) -> bool:
     """True when a count can ever satisfy qBittorrent's ``(limit >= 0)`` gate.
 
-    The range rule, hoisted out of ``_is_a_seed_goal`` so that the three places
-    a limit arrives all apply the same one (lintarr#33). Every arm of
+    The range rule, hoisted out of ``_is_a_seed_goal`` so that every place a
+    limit arrives applies the same one (lintarr#33). Every arm of
     ``processTorrentShareLimits`` is ``(limit >= 0) && (count >= limit)``, and
-    whichever value reaches it decides — whether it came from the torrent's own
-    ``seedCriteria``, from ``categoryRatioLimit()``, or from
-    ``globalMaxRatio()``. Three hand-written sign tests were three places for
-    one rule to drift, and that drift is what lintarr#33 reported.
+    whichever value reaches it decides. **Four call sites, five field
+    shapes** — the indexer's own ``seedCriteria.seedRatio`` and
+    ``seedCriteria.seedTime``, ``globalMaxRatio()``, and a category's
+    ``ratio_limit`` *and* ``seeding_time_limit``, the last two both through
+    ``_own_share_limit``. An earlier version of this paragraph said "three
+    places" and enumerated only the ratio ones, which is the omission that
+    made the category seeding-time path easy to miss below. Hand-written sign
+    tests at each site were that many places for one rule to drift, and that
+    drift is what lintarr#33 reported.
 
     ``inf`` is the case a bare ``>= 0`` gets wrong, and it is not theoretical:
     ``Torrent::MAX_RATIO`` **is** ``std::numeric_limits<qreal>::infinity()``, so
@@ -264,17 +269,40 @@ def _can_be_reached(limit: float) -> bool:
     ``categoryRatioLimit()`` — unbounded above, which is lintarr#33's drift
     re-created and the identical false PASS arriving by a different route.
 
-    It belongs here because the ceiling is a property of ``realRatio()``, and
-    every arm of ``processTorrentShareLimits`` compares against
-    ``realRatio()`` — so it is true of whichever value reaches the gate,
-    exactly like the sign rule this function already owns.
+    It belongs here because the ceiling is a property of ``realRatio()``, so it
+    is exact for the **ratio** arm wherever that value came from — the
+    indexer's criterion, ``globalMaxRatio()`` or a category's ``ratio_limit``
+    alike — exactly like the sign rule this function already owns.
 
-    **It is inert for the seeding-time arms that also come through here**, and
-    that is measured rather than assumed: Sonarr's ``SeedTime`` is an ``int?``
-    of minutes, so ``2**31 - 1`` is the largest value the field can carry, and
-    ``MAX_REACHABLE_SEED_RATIO`` is ``4294967298.0`` times larger. Pinned by
-    ``test_the_largest_representable_seed_time_is_still_a_seed_goal``. If this
-    bound ever has to drop near ``2**31`` the two criteria need splitting.
+    **Only the first arm compares against ``realRatio()``, so the seeding-time
+    arms need their own argument and get one below.** An earlier version of
+    this paragraph said *every* arm compares against ``realRatio()``, which is
+    false against the source it cites: ``sessionimpl.cpp:2383-2404`` on
+    ``release-5.2.4`` has three arms, and the second and third compare
+    ``finishedTime() / 60`` and ``timeSinceActivity() / 60``. The sibling claim
+    one paragraph up — that every arm has the *shape*
+    ``(limit >= 0) && (count >= limit)`` — is the true one. Getting these two
+    confused is what makes the next paragraph look redundant when it is
+    load-bearing.
+
+    **It is inert for both seeding-time arms that come through here**, and for
+    both of them that is measured rather than assumed. Each is bounded by
+    Int32, and ``MAX_REACHABLE_SEED_RATIO`` is ``4294967298.0`` times larger
+    than ``2**31 - 1`` — more than nine orders of magnitude:
+
+    - the indexer's ``seedCriteria.seedTime``, where Sonarr declares
+      ``public int? SeedTime`` (``SeedCriteriaSettings.cs``). Pinned by
+      ``test_the_largest_representable_seed_time_is_still_a_seed_goal``.
+    - a category's ``seeding_time_limit``, which is **not** a Sonarr value and
+      which an earlier version of this paragraph did not reach at all:
+      qBittorrent declares ``int seedingTimeLimit``
+      (``categoryoptions.h:49``) and reads it back as ``const int``
+      (``sessionimpl.cpp:2381``). Pinned by
+      ``test_the_largest_category_seeding_time_limit_is_still_the_categorys_own``.
+
+    If this bound ever has to drop near ``2**31``, the ratio and time criteria
+    need splitting into two predicates with one shared sign rule — and both
+    pins above are what will go red to say so.
 
     ``nan`` and ``inf`` need nothing added beyond the bound. Every comparison
     against ``nan`` is False, so it fails both ends; ``inf`` fails the upper
@@ -558,9 +586,13 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
     """True when this criterion is a number that can ever release the slot.
 
     Type first (``_is_a_readable_seed_criterion``), then range. The range rule
-    is ``>= 0`` and it is not a guess: see
-    ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``, measured from
-    Sonarr's and qBittorrent's own source rather than reasoned.
+    is ``0 <= value <= MAX_REACHABLE_SEED_RATIO`` and neither end is a guess:
+    see ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md`` for the
+    lower end and
+    ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` for the
+    upper, both measured from Sonarr's and qBittorrent's own source rather than
+    reasoned. The rule itself lives in ``_can_be_reached`` so that the global
+    and category arms get the same one; this function only calls it.
 
     The short version, for ``seedCriteria.seedRatio`` and ``seedCriteria.seedTime``:
 

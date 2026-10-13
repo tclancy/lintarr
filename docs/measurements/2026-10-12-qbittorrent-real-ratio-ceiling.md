@@ -16,7 +16,7 @@ the rule was a *range* rule covering every negative.
 
 ## TL;DR
 
-- **There is a measurable ceiling, and `_is_a_seed_goal` now carries it.** For
+- **There is a measurable ceiling, and `_can_be_reached` now carries it.** For
   any torrent that holds data — the only kind that can wedge a download queue —
   `realRatio()` is `all_time_upload / (qreal)download` with both `int64_t` and
   `download >= 1`, so it cannot exceed `(double)INT64_MAX`, which is exactly
@@ -48,8 +48,32 @@ the rule was a *range* rule covering every negative.
 
 ## What changed in the code
 
-- `_is_a_seed_goal` gains an upper end: `0 <= fact.value <= MAX_REACHABLE_SEED_RATIO`,
-  replacing `>= 0` plus the `math.isfinite` special case.
+> **SUPERSEDED 2026-10-13 on the location, not on the measurement.** Everything
+> this document measures still holds; where the bound *lives* changed when
+> lintarr#33 (PR #40) merged. #40 hoisted the range rule out of
+> `_is_a_seed_goal` into a shared `_can_be_reached(limit)`, and the two PRs
+> conflicted on the same line. The resolve put this bound **inside
+> `_can_be_reached`**, so it now applies at all four call sites / five field
+> shapes rather than at the criterion alone: the indexer's `seedRatio` and
+> `seedTime`, `globalMaxRatio()`, and a category's `ratio_limit` and
+> `seeding_time_limit`. `_is_a_seed_goal` now reads `return
+> _can_be_reached(fact.value)`. Read `_can_be_reached`'s docstring before
+> moving it back — the suite passed 2128/2128 with the bound inlined again
+> while `max_ratio=1e308` returned to PASS, and
+> `test_a_finite_global_ratio_above_the_ceiling_releases_nothing` plus the
+> finite rows in `test_an_infinite_category_ratio_limit_is_not_the_categorys_own_limit`
+> exist to stop that happening silently.
+>
+> The two seeding-time arms are inert under the bound by Int32 arithmetic, each
+> with its own pin: Sonarr's `public int? SeedTime`
+> (`test_the_largest_representable_seed_time_is_still_a_seed_goal`) and
+> qBittorrent's `int seedingTimeLimit`, `categoryoptions.h:49`
+> (`test_the_largest_category_seeding_time_limit_is_still_the_categorys_own`).
+
+- `_can_be_reached` gains an upper end: `0 <= limit <= MAX_REACHABLE_SEED_RATIO`,
+  replacing `>= 0` plus the `math.isfinite` special case. (As first written this
+  line named `_is_a_seed_goal`, which is where the bound landed before #40
+  merged.)
 - `tests/model/share_limit.py`'s `gate_can_fire` gains the same bound,
   re-derived here from the C++ types rather than imported — and that retires
   the one clause its module docstring admitted was borrowed from the
@@ -311,13 +335,24 @@ out-of-range seed time, and it is what
 
 ## The decision
 
-`_is_a_seed_goal` grows an upper bound, inclusive, at `(double)INT64_MAX`:
+The range rule grows an upper bound, inclusive, at `(double)INT64_MAX`. Since
+the 2026-10-13 merge with lintarr#33 that rule lives in `_can_be_reached`, so
+the bound is applied once and reaches every arrival point:
 
 ```python
-if not _is_a_readable_seed_criterion(fact):
-    return False
-return 0 <= fact.value <= MAX_REACHABLE_SEED_RATIO
+def _can_be_reached(limit: int | float) -> bool:
+    return 0 <= limit <= MAX_REACHABLE_SEED_RATIO
+
+
+def _is_a_seed_goal(fact: Fact[Any]) -> bool:
+    if not _is_a_readable_seed_criterion(fact):
+        return False
+    return _can_be_reached(fact.value)
 ```
+
+As first written this section showed the bound inline in `_is_a_seed_goal`,
+which is correct for the shape of the code before #40 merged and is no longer
+where to look.
 
 Why this is a measurement and not a guess — the distinction #43 insisted on:
 
