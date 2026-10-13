@@ -264,10 +264,22 @@ The three wrong rows are now `OVERRIDE_RATIO`, `OVERRIDE_SEED_TIME` and
 remedies differ and only `OVERRIDE_BOTH`'s is "no global setting can help this".
 
 `inf` and `nan` override too, and that is not a curiosity: `inf != -2` so the
-redirect never fires, and `realRatio() >= inf` is never true. A `value < 0`
-spelling of the override rule reads both as deferring and PASSes a stack that
-never frees a slot, which is why `_overrides_the_share_limit` is written as
-"not a goal, and not `-2`".
+redirect never fires, and neither can satisfy the gate. A `value < 0` spelling
+of the override rule reads both as deferring and PASSes a stack that never frees
+a slot, which is why `_overrides_the_share_limit` is written as "not a goal, and
+not `-2`".
+
+> **Superseded on one point by
+> [`2026-10-12-qbittorrent-real-ratio-ceiling.md`](2026-10-12-qbittorrent-real-ratio-ceiling.md).**
+> This paragraph originally read "`realRatio() >= inf` is never true", and that
+> sentence propagated into four docstrings as the stated reason for excluding
+> `inf`. It is false: `Torrent::MAX_RATIO` is
+> `std::numeric_limits<qreal>::infinity()` and `realRatio()` returns it when
+> `download == 0 && upload != 0`, so `inf >= inf` is True. The 10-12 document
+> measures the ceiling the question actually needed and replaces the finiteness
+> test with an upper bound on the range rule; `inf` is still an override, now
+> for the same reason `1e308` is. Everything else in this document stands —
+> only this clause moved.
 
 ### What is still not expressed
 

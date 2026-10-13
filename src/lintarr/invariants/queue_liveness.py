@@ -34,13 +34,16 @@ seeder stop" is not a single claim, because a torrent carries its own ratio and
 seeding-time limits and is released as soon as *either* is reached. Each limit
 is in one of three states, measured on qBittorrent ``release-5.2.4``:
 
-- a **goal** (``>= 0`` and finite) — the slot is released, no wedge;
+- a **goal** (within ``[0, MAX_REACHABLE_SEED_RATIO]``) — the slot is
+  released, no wedge;
 - **deferring** (``-2``, absent, or null) — ``effectiveRatioLimit()`` redirects
   it to ``categoryRatioLimit(category())``, which is the only route to
   ``globalMaxRatio()``, so the global or category setting decides;
-- **overriding** (any other negative, and ``inf``/``nan``) — returned verbatim
-  into a ``>= 0`` gate it can never pass. The redirect never happens, so the
-  global is never consulted and **cannot** release the slot.
+- **overriding** (any other negative, ``nan``, and anything *above* the
+  measured ceiling — ``inf`` included) — returned verbatim into a gate it can
+  never pass, at one end or the other. The redirect never happens, so the
+  global is never consulted and **cannot** release the slot. The upper end is
+  lintarr#43; see ``MAX_REACHABLE_SEED_RATIO``.
 
 A criterion nobody can read is a **fourth** state, not one of these, and the
 distinction matters because the two sides want opposite defaults for it.
@@ -90,7 +93,6 @@ against a live client:
   motivated it.
 """
 
-import math
 from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import Any
@@ -153,6 +155,19 @@ UNLIMITED = -1
 #: a limit of the category's own. Measured on qBittorrent 5.2.3.
 USE_GLOBAL = -2
 
+#: The largest seed ratio a torrent that holds data can ever reach, and so the
+#: largest ratio limit one can ever satisfy. ``realRatio()``'s finite branch is
+#: ``all_time_upload / (qreal)download`` with both ``int64_t`` and
+#: ``download >= 1``, so its supremum is ``(double)INT64_MAX`` — which is
+#: exactly ``2.0**63`` as a double, and is *attained* (``INT64_MAX / 1.0`` is
+#: that double), which is why the bound using it is inclusive.
+#:
+#: Measured, not guessed: lintarr#43 asked for this number before any magnitude
+#: rule could be written, and
+#: ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` is the
+#: read of qBittorrent ``release-5.2.4`` that answers it.
+MAX_REACHABLE_SEED_RATIO = 2.0**63
+
 
 def _binds(limit: int) -> bool:
     """True when *limit* constrains anything at all."""
@@ -201,16 +216,21 @@ def _all_of(states: Iterable[bool | None]) -> bool | None:
     return None if any(state is None for state in seen) else True
 
 
-def _can_be_reached(limit: float) -> bool:
+def _can_be_reached(limit: int | float) -> bool:
     """True when a count can ever satisfy qBittorrent's ``(limit >= 0)`` gate.
 
-    The range rule, hoisted out of ``_is_a_seed_goal`` so that the three places
-    a limit arrives all apply the same one (lintarr#33). Every arm of
+    The range rule, hoisted out of ``_is_a_seed_goal`` so that every place a
+    limit arrives applies the same one (lintarr#33). Every arm of
     ``processTorrentShareLimits`` is ``(limit >= 0) && (count >= limit)``, and
-    whichever value reaches it decides — whether it came from the torrent's own
-    ``seedCriteria``, from ``categoryRatioLimit()``, or from
-    ``globalMaxRatio()``. Three hand-written sign tests were three places for
-    one rule to drift, and that drift is what lintarr#33 reported.
+    whichever value reaches it decides. **Four call sites, five field
+    shapes** — the indexer's own ``seedCriteria.seedRatio`` and
+    ``seedCriteria.seedTime``, ``globalMaxRatio()``, and a category's
+    ``ratio_limit`` *and* ``seeding_time_limit``, the last two both through
+    ``_own_share_limit``. An earlier version of this paragraph said "three
+    places" and enumerated only the ratio ones, which is the omission that
+    made the category seeding-time path easy to miss below. Hand-written sign
+    tests at each site were that many places for one rule to drift, and that
+    drift is what lintarr#33 reported.
 
     ``inf`` is the case a bare ``>= 0`` gets wrong, and it is not theoretical:
     ``Torrent::MAX_RATIO`` **is** ``std::numeric_limits<qreal>::infinity()``, so
@@ -238,14 +258,66 @@ def _can_be_reached(limit: float) -> bool:
     fails the range test already. Recorded so that stays a known property
     rather than a lucky one.
 
-    The ``isinstance(..., float)`` guard is load-bearing. Only a ``float`` can
-    be non-finite — a Python ``int`` always is — and ``math.isfinite`` on a
-    large enough ``int`` raises ``OverflowError`` instead of answering, which a
-    401-digit JSON integer literal is enough to produce.
+    **The upper bound arrived here in a merge resolve, not in a reviewed diff
+    — read this paragraph before trusting it.** lintarr#43 (PR #44) measured
+    the ceiling and applied it inline in ``_is_a_seed_goal``; lintarr#33
+    (PR #40) hoisted the range rule into this function. The two landed in the
+    same week against the same line and neither review saw the other. Taking
+    either side whole was wrong: main's body has no ceiling, so ``1e308`` reads
+    as a goal again and #44's entire fix is lost; #44's inline form keeps the
+    fix but leaves the *other two* arrival points — ``globalMaxRatio()`` and
+    ``categoryRatioLimit()`` — unbounded above, which is lintarr#33's drift
+    re-created and the identical false PASS arriving by a different route.
+
+    It belongs here because the ceiling is a property of ``realRatio()``, so it
+    is exact for the **ratio** arm wherever that value came from — the
+    indexer's criterion, ``globalMaxRatio()`` or a category's ``ratio_limit``
+    alike — exactly like the sign rule this function already owns.
+
+    **Only the first arm compares against ``realRatio()``, so the seeding-time
+    arms need their own argument and get one below.** An earlier version of
+    this paragraph said *every* arm compares against ``realRatio()``, which is
+    false against the source it cites: ``sessionimpl.cpp:2383-2404`` on
+    ``release-5.2.4`` has three arms, and the second and third compare
+    ``finishedTime() / 60`` and ``timeSinceActivity() / 60``. The sibling claim
+    one paragraph up — that every arm has the *shape*
+    ``(limit >= 0) && (count >= limit)`` — is the true one. Getting these two
+    confused is what makes the next paragraph look redundant when it is
+    load-bearing.
+
+    **It is inert for both seeding-time arms that come through here**, and for
+    both of them that is measured rather than assumed. Each is bounded by
+    Int32, and ``MAX_REACHABLE_SEED_RATIO`` is ``4294967298.0`` times larger
+    than ``2**31 - 1`` — more than nine orders of magnitude:
+
+    - the indexer's ``seedCriteria.seedTime``, where Sonarr declares
+      ``public int? SeedTime`` (``SeedCriteriaSettings.cs``). Pinned by
+      ``test_the_largest_representable_seed_time_is_still_a_seed_goal``.
+    - a category's ``seeding_time_limit``, which is **not** a Sonarr value and
+      which an earlier version of this paragraph did not reach at all:
+      qBittorrent declares ``int seedingTimeLimit``
+      (``categoryoptions.h:49``) and reads it back as ``const int``
+      (``sessionimpl.cpp:2381``). Pinned by
+      ``test_the_largest_category_seeding_time_limit_is_still_the_categorys_own``.
+
+    If this bound ever has to drop near ``2**31``, the ratio and time criteria
+    need splitting into two predicates with one shared sign rule — and both
+    pins above are what will go red to say so.
+
+    ``nan`` and ``inf`` need nothing added beyond the bound. Every comparison
+    against ``nan`` is False, so it fails both ends; ``inf`` fails the upper
+    end. Both were previously handled by a separate ``math.isfinite`` guard,
+    which the bound subsumes — and that retired the guard's own
+    ``isinstance(..., float)`` workaround with it. (That workaround existed
+    because ``math.isfinite`` raises ``OverflowError`` rather than answering on
+    an ``int`` too large for a ``float``, and ``json`` decodes a 401-digit
+    literal to exactly such an ``int``. A Python ``int`` compares against a
+    ``float`` exactly and never raises, so the comparison form has no such
+    hole.) This is why the merge's auto-resolved ``import math`` removal was
+    *correct* rather than a landmine: #44 deleted the import because its bound
+    subsumes the guard, and that holds wherever the guard lives.
     """
-    if isinstance(limit, float) and not math.isfinite(limit):
-        return False
-    return limit >= 0
+    return 0 <= limit <= MAX_REACHABLE_SEED_RATIO
 
 
 def _truth(fact: Fact[bool]) -> bool | None:
@@ -514,9 +586,13 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
     """True when this criterion is a number that can ever release the slot.
 
     Type first (``_is_a_readable_seed_criterion``), then range. The range rule
-    is ``>= 0`` and it is not a guess: see
-    ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md``, measured from
-    Sonarr's and qBittorrent's own source rather than reasoned.
+    is ``0 <= value <= MAX_REACHABLE_SEED_RATIO`` and neither end is a guess:
+    see ``docs/measurements/2026-10-05-sonarr-seed-ratio-range.md`` for the
+    lower end and
+    ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md`` for the
+    upper, both measured from Sonarr's and qBittorrent's own source rather than
+    reasoned. The rule itself lives in ``_can_be_reached`` so that the global
+    and category arms get the same one; this function only calls it.
 
     The short version, for ``seedCriteria.seedRatio`` and ``seedCriteria.seedTime``:
 
@@ -533,24 +609,55 @@ def _is_a_seed_goal(fact: Fact[Any]) -> bool:
       moment the torrent finishes, and ``finishedTime() / 60 >= 0`` is
       satisfied at that same instant, so the slot is released immediately.
       That is an aggressive goal, not an absent one.
-    - ``inf`` is **not** a goal, and it is the one case the range test alone
-      gets wrong: ``inf >= 0`` is True, while a ratio limit of ``inf`` can
-      never be reached by ``realRatio()``. It is ``-1`` wearing a positive
-      sign, so it needs ``math.isfinite`` rather than the comparison.
-      Reachable rather than theoretical — ``json`` decodes both ``1e400``
-      and the non-standard ``Infinity`` token to ``inf``.
+    - **The range is bounded above as well as below**, at
+      ``MAX_REACHABLE_SEED_RATIO``. A limit no torrent can reach is a limit
+      that never releases a slot, which is the ``-1`` case wearing a large
+      positive sign. ``1e308``, ``3.4e38``, a 401-digit ``int`` and ``inf``
+      all fail it, and that is the whole of the magnitude rule.
 
-    ``nan`` needs nothing added: every comparison against it is False, so it
-    already fails the range test and arms the check. Recorded here so that
-    stays a known property rather than a lucky one.
+      **This bound is measured and the number is not arbitrary.** lintarr#43
+      refused to prescribe one until someone established the largest ratio
+      ``realRatio()`` can return, on the grounds that a guessed threshold is
+      this project's cardinal sin. The read is in
+      ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``:
+      ``realRatio()`` has two branches, and for every torrent that can wedge a
+      download queue — one holding data, so ``download >= 1`` — the reachable
+      range is the finite branch's ``[0, 2**63]``. See
+      ``MAX_REACHABLE_SEED_RATIO`` for the derivation.
 
-    The ``isinstance(..., float)`` is load-bearing and not a tidy-up. Only a
-    ``float`` can be non-finite — a Python ``int`` always is — and
-    ``math.isfinite`` on a large enough ``int`` raises ``OverflowError``
-    instead of answering. ``json`` decodes a 401-digit integer literal to
-    exactly such an ``int``, so a bare ``math.isfinite(fact.value)`` here
-    turns a junk payload into a crash, which is the one outcome this file
-    ranks below a false PASS.
+      The other branch returns ``Torrent::MAX_RATIO``, which really is
+      ``std::numeric_limits<qreal>::infinity()`` — so the earlier wording
+      here, "a ratio limit of ``inf`` can never be reached by
+      ``realRatio()``", was false and is gone. It needs
+      ``total_done == 0 && all_time_download == 0`` with
+      ``all_time_upload > 0``, i.e. a finished torrent holding no pieces at
+      all that has nevertheless uploaded payload. Whether any sequence of
+      operations reaches that is **not settled** by a source read and does not
+      need to be: such a torrent holds nothing, so it is not the homelab#393
+      wedge this check is about, and it is excluded either way.
+
+    - ``nan`` and the ``inf`` case need nothing added beyond the bound. Every
+      comparison against ``nan`` is False, so it fails both ends; ``inf`` fails
+      the upper end. Both were previously handled by a separate
+      ``math.isfinite`` guard, which the bound subsumes — and that retired the
+      guard's own ``isinstance(..., float)`` workaround with it. (That
+      workaround existed because ``math.isfinite`` raises ``OverflowError``
+      rather than answering on an ``int`` too large for a ``float``, and
+      ``json`` decodes a 401-digit literal to exactly such an ``int``. A
+      Python ``int`` compares against a ``float`` exactly and never raises, so
+      the comparison form has no such hole.)
+
+    - **The bound is safe for ``seed_time``**, which goes through this same
+      predicate. Sonarr's ``SeedTime`` is an ``int?`` of minutes, so
+      ``2**31 - 1`` is the largest value that field can carry, and
+      ``MAX_REACHABLE_SEED_RATIO`` is ``4294967298.0`` times larger than that
+      — more than nine orders of magnitude. Every representable
+      seed-time limit therefore stays a goal, which is what
+      ``test_the_largest_representable_seed_time_is_still_a_seed_goal`` pins.
+      That is a measured coincidence rather than a design, so it is asserted
+      rather than assumed: the seeding-time arm has no ceiling of its own
+      (``finishedTime() / 60`` grows with the wall clock), and if this bound
+      ever has to drop near ``2**31`` the two criteria need splitting.
 
     So a negative criterion is an indexer whose torrents never stop seeding,
     and before this guard it disarmed the wedge check byte-identically to a
@@ -633,7 +740,9 @@ def _overrides_the_share_limit(fact: Fact[Any]) -> bool | None:
     out of reach.
 
     Written as "not a goal" rather than ``value < 0`` deliberately, and it is
-    not a tidy-up: ``inf`` is not a goal either (``realRatio()`` never reaches
+    not a tidy-up: ``inf`` is not a goal either (it exceeds
+    ``MAX_REACHABLE_SEED_RATIO``; lintarr#43 corrected the reason this line
+    used to give, which was that ``realRatio()`` never reaches
     it) and ``inf != -2``, so a positive infinity overrides exactly as ``-1``
     does. ``nan`` lands here for the same two reasons. A ``< 0`` spelling would
     read both as deferring and PASS a stack that cannot recover.
