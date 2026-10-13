@@ -970,12 +970,34 @@ def test_an_unclassifiable_indexer_keeps_its_note():
     assert "sonarr[main]/1337x" in f.detail
 
 
-def test_a_clean_run_carries_no_note_however_unreadable_a_criterion_was():
+def test_a_clean_run_carries_no_note():
     """A stack that cannot wedge is a PASS, and a PASS has nothing to explain."""
-    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
-    f = check(repaired_qbt(), junk)
+    f = check(repaired_qbt(), WITH_GOALS)
     assert f.outcome is Outcome.PASS
     assert f.detail == ""
+
+
+def test_an_unreadable_criterion_cannot_clear_even_a_repaired_stack():
+    """Changed by lintarr#33, and it is the cost of that fix rather than a bug.
+
+    This assertion used to read PASS, and it passed for the reason #33 reports:
+    ``_overrides_the_share_limit`` resolved "could not read" to *not overriding*,
+    which disarmed the three override routes and handed back a clean bill of
+    health on an input nobody had read. It is now an unread input like any
+    other, and ``tests/test_properties.py``'s
+    ``test_a_qbt_preference_that_was_never_read_never_passes`` states this
+    project's rule for those on exactly this healthy base: SKIP, never PASS.
+
+    So the repaired stack SKIPs, and the note is what makes that actionable —
+    an operator gets the indexer's name rather than a bare "could not read".
+    A readable criterion on the same stack still PASSes silently, which is the
+    test above.
+    """
+    junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
+    f = check(repaired_qbt(), junk)
+    assert f.outcome is Outcome.SKIP
+    assert "sonarr[main]/1337x" in f.detail
+    assert "not a number" in f.detail
 
 
 # --- No arr data at all ------------------------------------------------------
