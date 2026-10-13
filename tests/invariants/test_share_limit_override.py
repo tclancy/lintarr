@@ -190,17 +190,41 @@ def test_a_deferring_criterion_still_defers(value):
     assert check(qbt, arrs).outcome is Outcome.PASS
 
 
-@pytest.mark.parametrize("value", ["-1", True, None])
+def test_a_null_criterion_is_not_an_override():
+    """A criterion read back as ``null`` defers, exactly as ``-2`` and absent do.
+
+    Both globals are ON here, so reading it as an override would be a FAIL on a
+    stack that recovers. Sonarr reports a cleared goal this way, so this is the
+    ordinary case rather than an edge one.
+    """
+    qbt, arrs = _stack(_fact(None), _fact(None))
+    assert check(qbt, arrs).outcome is Outcome.PASS
+
+
+@pytest.mark.parametrize("value", ["-1", True])
 def test_an_unreadable_criterion_is_not_an_override(value):
     """A value nobody can read is not evidence that a limit was overridden.
 
     ``"-1"`` above all: coercing it would invent the very claim this file makes
     the loudest — that the global setting cannot help — out of a string. Both
-    globals are ON here, so reading any of these as an override is a FAIL on a
-    stack that recovers.
+    globals are ON here, so reading either of these as an override is a FAIL on
+    a stack that recovers, and that is still what this asserts against.
+
+    **The expected outcome changed with lintarr#33, and the claim did not.**
+    Not-an-override was being spelled as *definitely not an override*, which
+    cleared the stack outright; it is now *undecided*, which is the fourth state
+    these values are actually in. The protection here is unchanged — never a
+    FAIL — and ``tests/invariants/test_share_limit_reachability.py`` owns the
+    positive half, including the note that names the indexer.
+
+    ``None`` left this parametrize list in the same change: a null criterion is
+    read and understood, so it belongs with ``-2`` and absent rather than here.
+    Conflating the two is what the first version of this test did.
     """
     qbt, arrs = _stack(_fact(value), _fact(value))
-    assert check(qbt, arrs).outcome is Outcome.PASS
+    finding = check(qbt, arrs)
+    assert finding.outcome is not Outcome.FAIL, f"{value!r} read as an override"
+    assert finding.outcome is Outcome.SKIP
 
 
 def test_a_usenet_indexer_cannot_override_a_share_limit():

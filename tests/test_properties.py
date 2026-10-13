@@ -147,6 +147,7 @@ _QBT_NEED_FIELDS: dict[str, str] = {
     "qbt.max_active_torrents": "max_active_torrents",
     "qbt.dont_count_slow_torrents": "dont_count_slow_torrents",
     "qbt.max_ratio_enabled": "max_ratio_enabled",
+    "qbt.max_ratio": "max_ratio",
     "qbt.max_seeding_time_enabled": "max_seeding_time_enabled",
     "qbt.max_ratio_act": "max_ratio_act",
     "qbt.categories": "categories",
@@ -155,7 +156,7 @@ _QBT_NEED_FIELDS: dict[str, str] = {
 #: A fact that was never read at all. Unambiguous for every need.
 _NEVER_READ = Unknown(reason="field-absent", detail="generated")
 
-#: A fact read back as ``null``. For six of the seven needs this is a value we
+#: A fact read back as ``null``. For eight of the nine needs this is a value we
 #: cannot use and must not settle a premise from. ``qbt.categories`` is the
 #: documented exception and is excluded below.
 _READ_AS_NULL = Known(
@@ -173,11 +174,18 @@ _READ_AS_NULL = Known(
 _NULL_IS_A_VALUE: frozenset[str] = frozenset({"qbt.categories"})
 
 
-#: Every non-empty subset of the qbt needs. 127 of them, which is cheap and
-#: *exhaustive* — the generative version drew 200 random subsets from a space of
-#: 254 (subset x arr fixture) and covered 72, 87 and 101 of them on three
-#: measured runs. Random search over a space small enough to enumerate buys
-#: nothing but non-determinism.
+#: Every non-empty subset of the qbt needs. **511** of them with nine needs
+#: declared, which is cheap and *exhaustive* — the generative version drew 200
+#: random subsets and covered 72, 87 and 101 of them on three measured runs.
+#: Random search over a space small enough to enumerate buys nothing but
+#: non-determinism.
+#:
+#: The count in this comment was wrong before lintarr#33 and is re-derived here
+#: rather than adjusted: it read "127 of them" while the table already held
+#: eight needs, so the real figure was 255. 127 is the *null-excluded* count
+#: that the second property below parametrizes over — a different number that
+#: happened to match an earlier state of the table. Both are measured now:
+#: ``len(_NEED_SUBSETS)`` is 511 and the null-excluded slice is 255.
 _NEED_SUBSETS: list[frozenset[str]] = [
     frozenset(combo)
     for size in range(1, len(_QBT_NEED_FIELDS) + 1)
