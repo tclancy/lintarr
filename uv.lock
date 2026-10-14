@@ -211,6 +211,7 @@ dev = [
     { name = "hypothesis" },
     { name = "pre-commit" },
     { name = "pytest" },
+    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -225,6 +226,7 @@ dev = [
     { name = "hypothesis", specifier = ">=6.100" },
     { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytest", specifier = ">=8.0" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = ">=0.6" },
 ]
 
