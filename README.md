@@ -7,8 +7,16 @@ Static consistency checker for the *arr stack.
 ```bash
 uv sync
 uv run pytest
-pre-commit install   # once per clone — there are no CI workflows, so this is the gate
+pre-commit install -f   # see below — there are no CI workflows, so this is the gate
 ```
+
+`-f`, and re-run it even if you installed before: `.pre-commit-config.yaml`
+declares both `pre-commit` and `pre-push` hook types (#45), and only an install
+run after that arms the push half. The `-f` is for a machine whose git
+`init.templateDir` already ships a `pre-push` hook — a bare `pre-commit install`
+then lands in *migration mode*, where the preserved `pre-push.legacy` is itself
+`pre-commit hook-impl` and every push aborts with `bug: pre-commit's script is
+installed in migration mode` while the whole battery passes.
 
 ## Deploying (homelab)
 
