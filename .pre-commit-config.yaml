@@ -3,6 +3,32 @@
 # project is. The ruff rev and the dev group's ruff are two copies of one
 # version number, and `ruff>=0.6` is a floor, so tests/test_gates.py asserts
 # they still agree rather than trusting a comment to keep them aligned.
+#
+# `default_stages` defaults to EVERY stage, so every hook below is already
+# declared as a pre-push hook. But `default_install_hook_types` defaults to
+# `pre-commit` ALONE, so `pre-commit install` arms only the commit path and the
+# declared pre-push battery never runs -- which is what made `dispatch gates`
+# grade this repo INERT. Declaring both is the half that survives a fresh
+# clone; running `pre-commit install` is the half that is local machine state,
+# and it must be re-run by anyone who installed before this line existed.
+# See #45 (and bluelinky#12, the same fault in the same shape).
+#
+# USE `pre-commit install -f`. On a machine whose `init.templateDir` ships a
+# `pre-push` hook -- Tom's does, from `dispatch gates --arm-clones`
+# (metaframework #725) -- a FRESH clone already has one, so a bare
+# `pre-commit install` goes into MIGRATION MODE and keeps it as
+# `pre-push.legacy`. That legacy hook is itself `pre-commit hook-impl`, so the
+# nested call aborts with "bug: pre-commit's script is installed in migration
+# mode" and EVERY push then fails with the whole battery passing. Measured in a
+# throwaway clone: push rejected on a clean tree, and the identical push
+# succeeded as soon as `pre-push.legacy` was removed.
+#
+# The pre-push battery is every hook below -- including the `pytest` hook, which
+# with `pass_filenames: false` runs the whole suite. So do not add
+# `default_stages`, or a per-hook `stages:` that excludes `pre-push`, without
+# meaning it: tests/test_gates.py fails if you do.
+default_install_hook_types: [pre-commit, pre-push]
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
@@ -21,7 +47,23 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest -q
+        # `--frozen` so a push cannot re-resolve and rewrite uv.lock underneath
+        # the hook run; the lock is committed, and a push is not the moment to
+        # move it.
+        entry: uv run --frozen pytest -q
         language: system
-        types: [python]
+        # always_run, NOT `types: [python]`. pre-commit skips a hook with no
+        # matching files BEFORE it consults `pass_filenames`, and at the push
+        # stage the file list is the pushed range -- so under `types: [python]`
+        # a commit touching only this YAML file pushed GREEN while the suite
+        # never ran. Measured: a commit deleting the
+        # `default_install_hook_types` line above pushed clean with
+        # `pytest ...(no files to check)Skipped`, which is the single
+        # regression this gate exists to catch.
+        #
+        # `always_run` rather than a wider `files:` regex on purpose: the suite
+        # reads YAML, TOML, shell and Python, so a regex would be a second
+        # enumeration of the suite's own inputs, free to drift out of date
+        # exactly when it matters. The cost is ~10s on a docs-only commit.
+        always_run: true
         pass_filenames: false

@@ -116,8 +116,11 @@ Recorded because they cost real review cycles:
 ## Repo notes
 
 - Remote `origin` is `git@github.com:tclancy/lintarr` (public). Work lands
-  through PRs; run `uv run pre-commit install` once per clone. A clone without
-  the hook let an E501 reach `main` (#36).
+  through PRs; run `uv run pre-commit install -f` once per clone, **and**
+  re-run it in any clone armed before #45 added `default_install_hook_types`
+  — until it is re-run, that clone's pre-push battery is still inert. The
+  `-f` matters on a machine whose git `init.templateDir` ships a `pre-push`
+  hook (#45). A clone without the hook let an E501 reach `main` (#36).
 - MIT licensed. Python 3.13, uv, hatchling, src layout, click, httpx, pytest.
 - Hypothesis is a declared dev dependency and is now used: `tests/strategies.py`
   holds the fact/snapshot strategies and `tests/test_properties.py` the spec's

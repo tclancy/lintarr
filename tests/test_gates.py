@@ -55,6 +55,174 @@ def test_pre_commit_is_a_declared_dependency():
     assert any(spec.startswith("pre-commit") for spec in dev), dev
 
 
+_PUSH = "pre-push"
+
+# pre-commit's own HOOK_TYPES (clientlib.py). Pinned as a bounded set so a value
+# pre-commit would REJECT -- `manual`, or a typo like `pre_push` -- fails here
+# rather than passing a membership check and leaving the config unloadable.
+_HOOK_TYPES = frozenset(
+    {
+        "commit-msg",
+        "post-checkout",
+        "post-commit",
+        "post-merge",
+        "post-rewrite",
+        "pre-commit",
+        "pre-merge-commit",
+        "pre-push",
+        "pre-rebase",
+        "prepare-commit-msg",
+    }
+)
+
+# pre-commit still accepts the pre-3.x stage spellings and maps them forward, so
+# the raw YAML must be normalised before any stage comparison. Without this a
+# `stages: [push]` hook -- which IS a push hook -- reads as narrowed, and the
+# failure message sends the next reader after the wrong thing.
+_LEGACY_STAGES = {
+    "commit": "pre-commit",
+    "merge-commit": "pre-merge-commit",
+    "push": "pre-push",
+}
+
+
+# The hooks this battery is: pinned as a SET, because the derived `- id:` count
+# below cannot see a deletion -- removing a hook removes its `- id:` line too,
+# so both sides of that comparison move together and it stays green. Measured:
+# deleting `check-merge-conflict` survived the count. Pinning the set is what
+# makes a removal a deliberate edit to this file rather than a silent one.
+_EXPECTED_HOOKS = frozenset(
+    {
+        "trailing-whitespace",
+        "end-of-file-fixer",
+        "check-yaml",
+        "check-merge-conflict",
+        "ruff-check",
+        "ruff-format",
+        "pytest",
+    }
+)
+
+
+def _config():
+    return yaml.safe_load(_CONFIG.read_text())
+
+
+def _stages(declared):
+    return {_LEGACY_STAGES.get(stage, stage) for stage in declared}
+
+
+def test_the_config_arms_the_push_path_as_well_as_the_commit_path():
+    """``default_install_hook_types`` defaults to ``pre-commit`` alone.
+
+    Without this key, ``pre-commit install`` arms only the commit path, so the
+    pre-push battery every hook below is already declared for never runs --
+    which is what made ``dispatch gates`` grade this repo ``INERT`` (#45). The
+    key is the half that survives a fresh clone; ``pre-commit install`` is
+    local machine state and no test can see it.
+    """
+    declared = _config().get("default_install_hook_types")
+    assert declared is not None, (
+        "no default_install_hook_types: pre-commit install will arm only the "
+        "commit path and the declared pre-push battery will not run"
+    )
+    # Superset, not equality: adding commit-msg or post-checkout later is fine.
+    # Asserting the required set this way also fails an empty list, which a
+    # ``not in`` check on a single spelling would pass.
+    assert set(declared) >= {"pre-commit", _PUSH}, declared
+
+    # And bounded above, because this key takes no legacy spellings and gets no
+    # forward-mapping: pre-commit validates it against HOOK_TYPES verbatim, so
+    # `manual` or `pre_push` here makes the config unloadable while every
+    # assertion above still passes.
+    assert set(declared) <= _HOOK_TYPES, sorted(set(declared) - _HOOK_TYPES)
+
+
+def test_every_declared_hook_still_runs_at_the_push_stage():
+    """The battery is only as wide as the stages its hooks actually run at.
+
+    ``default_stages`` defaults to every stage, so the hooks are push hooks by
+    omission rather than by declaration -- and a later ``default_stages`` or a
+    per-hook ``stages:`` could narrow that back out without touching the key
+    the test above reads. Both narrowing routes are checked here.
+    """
+    config = _config()
+    hook_ids = [h["id"] for r in config["repos"] for h in r["hooks"]]
+
+    # Two reachability controls, because they fail on different things and
+    # neither subsumes the other. Every assertion below is of the form "nothing
+    # excludes pre-push", and an empty hook list satisfies all of them
+    # vacuously.
+    #
+    # First: the parse reached every hook the file writes down. This one cannot
+    # see a DELETION -- removing a hook removes its ``- id:`` line too, so both
+    # sides move together and it stays green (measured). It catches the other
+    # thing: a parse that stops early while the text still declares seven.
+    declared_ids = _CONFIG.read_text().count("- id:")
+    assert len(hook_ids) == declared_ids, (
+        f"parsed {len(hook_ids)} hooks {hook_ids} but the file writes down "
+        f"{declared_ids} — the parse is not reaching every hook, so the stage "
+        "checks below prove nothing"
+    )
+
+    # Second: the battery is still the battery. This is the half that sees a
+    # deletion, and it makes removing a hook a deliberate edit here.
+    assert set(hook_ids) == _EXPECTED_HOOKS, (
+        f"hook set changed — missing {sorted(_EXPECTED_HOOKS - set(hook_ids))}, "
+        f"unexpected {sorted(set(hook_ids) - _EXPECTED_HOOKS)}; update "
+        "_EXPECTED_HOOKS if the change is intended"
+    )
+
+    default_stages = config.get("default_stages")
+    assert default_stages is None or _PUSH in _stages(default_stages), (
+        f"default_stages is {default_stages}, which drops the push stage for "
+        "every hook that does not override it"
+    )
+
+    narrowed = [
+        h["id"]
+        for r in config["repos"]
+        for h in r["hooks"]
+        if "stages" in h and _PUSH not in _stages(h["stages"])
+    ]
+    assert not narrowed, (
+        f"hooks declaring stages that exclude {_PUSH}: {narrowed} — they are "
+        "installed on push but will be skipped there"
+    )
+
+
+def test_the_suite_hook_runs_even_when_the_range_holds_no_python():
+    """Otherwise this file cannot catch the regression it exists to catch.
+
+    pre-commit skips a hook with no matching files *before* it consults
+    ``pass_filenames``, and at the push stage the file list is the pushed range.
+    Under ``types: [python]`` a commit touching only ``.pre-commit-config.yaml``
+    pushed GREEN with ``pytest ...(no files to check)Skipped`` -- measured --
+    so deleting ``default_install_hook_types`` was a clean push. Every gate in
+    this file is about a non-Python file, so every one of them had the hole.
+
+    This is also the assertion that keeps a future narrowing honest: swapping
+    ``always_run`` back for any file matcher (``types``, ``files``, ``exclude``)
+    re-opens it, and no other test here can see that.
+    """
+    pytest_hooks = [h for r in _config()["repos"] for h in r["hooks"] if h["id"] == "pytest"]
+    assert len(pytest_hooks) == 1, pytest_hooks
+    hook = pytest_hooks[0]
+
+    assert hook.get("always_run") is True, (
+        "the pytest hook is not always_run, so a commit whose range holds no "
+        f"matching file skips the suite entirely: {hook}"
+    )
+    # always_run is necessary but not sufficient -- a `files`/`exclude` matcher
+    # alongside it still filters what the hook sees, and `types` defaults to
+    # [file] which an always_run hook with pass_filenames: false does not need.
+    for narrowing in ("files", "exclude", "types", "types_or"):
+        assert narrowing not in hook, (
+            f"the pytest hook declares {narrowing!r}, which narrows what it "
+            f"matches and can empty it again: {hook}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Two gates about the suite and the messages, rather than about the pins.
 # ---------------------------------------------------------------------------
