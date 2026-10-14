@@ -1,7 +1,9 @@
 """The gate has to grade what the developer actually runs.
 
-lintarr ships no CI workflows, so ``.pre-commit-config.yaml`` is the only thing
-standing between a change and ``main``. That makes its pins part of the
+``.pre-commit-config.yaml`` is the gate on the committer's own machine, and
+since #47 ``.github/workflows/tests.yml`` runs the same three checks on every
+pull request (pinned separately in ``tests/test_ci_workflow.py``). The local
+half is still where a change is caught first, which makes its pins part of the
 behaviour: a hook ``rev`` and a project dependency are two independent copies of
 one version number, and nothing in a passing hook run can notice them drifting
 apart. ``ruff>=0.6`` is a floor, so any ``uv lock --upgrade`` moves ``uv run
