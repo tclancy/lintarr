@@ -219,6 +219,43 @@ def test_an_infinite_global_ratio_limit_releases_nothing():
     assert finding.conflict in SEED_CRITERIA_CONFLICTS
 
 
+def test_a_finite_global_ratio_above_the_ceiling_releases_nothing():
+    """The FINITE half, and it is what makes the shared bound falsifiable.
+
+    ``inf`` above is caught by a finiteness guard as well as by the range, so
+    it cannot distinguish where the range rule lives. These values can: they
+    are finite, they pass ``>= 0``, and no finished torrent's ``realRatio()``
+    reaches them, because that quotient's supremum is ``(double)INT64_MAX``
+    (lintarr#43; ``docs/measurements/2026-10-12-qbittorrent-real-ratio-ceiling.md``).
+
+    **This test exists because the resolve's thesis had no gate behind it.**
+    lintarr#43 measured the ceiling and applied it inline in
+    ``_is_a_seed_goal``; lintarr#33 hoisted the range rule into the shared
+    ``_can_be_reached``. The merge of the two put the ceiling in the shared
+    helper so that the global and category arms get it too -- and with the
+    bound moved back to the criterion sites instead, the whole suite still
+    passed 2128/2128 while ``max_ratio=1e308`` went back to PASS on a stack
+    where nothing releases a slot. A design claim nothing can falsify is not a
+    design claim. Both rows below go red under that mutant.
+    """
+    for limit in (1e308, 3.4e38, 10**400, float(2**63) * 2):
+        qbt, arrs = _stack(_NO_RATIO, max_ratio=limit)
+        finding = check(qbt, arrs)
+        assert finding.outcome is Outcome.FAIL, (
+            f"max_ratio={limit!r} with the flag on gave {finding.outcome.name}; "
+            "it is finite but above the realRatio() ceiling, so nothing reaches it"
+        )
+        assert finding.conflict in SEED_CRITERIA_CONFLICTS
+
+    # The control, re-stated here rather than inherited: the band BELOW the
+    # ceiling must still clear the stack, or this assertion would also pass
+    # against a rule that simply failed every large number.
+    qbt, arrs = _stack(_NO_RATIO, max_ratio=float(2**63 - 1024))
+    assert check(qbt, arrs).outcome is Outcome.PASS, (
+        "a ratio just inside the ceiling must still read as a goal"
+    )
+
+
 def test_a_finite_global_ratio_limit_still_releases():
     """The control. A real global limit drains the seeders and clears the stack."""
     qbt, arrs = _stack(_NO_RATIO, max_ratio=2.0)
@@ -334,6 +371,65 @@ def test_an_infinite_category_ratio_limit_is_not_the_categorys_own_limit():
 
     assert verdict(float("inf")) is Outcome.FAIL, "an infinite category limit releases nothing"
     assert verdict(float("nan")) is Outcome.FAIL
+    # The FINITE rows, and the category half of what makes the shared bound
+    # falsifiable -- see
+    # `test_a_finite_global_ratio_above_the_ceiling_releases_nothing`. `inf` and
+    # `nan` are both caught by finiteness as well as by the range, so neither
+    # can tell whether the ceiling reached this arm at all. These can, and they
+    # go red with the bound moved back to the criterion sites.
+    assert verdict(1e308) is Outcome.FAIL, (
+        "a finite category limit above the realRatio() ceiling releases nothing"
+    )
+    assert verdict(10**400) is Outcome.FAIL
+    # ... and the band just inside it is still the category's own limit, so
+    # these rows cannot be satisfied by a rule that just rejects big numbers.
+    assert verdict(float(2**63 - 1024)) is Outcome.PASS
+
+
+def test_the_largest_category_seeding_time_limit_is_still_the_categorys_own():
+    """The ratio ceiling must not reclassify a category's SEEDING-TIME limit.
+
+    ``_can_be_reached`` carries a bound derived from ``realRatio()``, and a
+    category's ``seeding_time_limit`` comes through the same predicate. That is
+    only safe by arithmetic: qBittorrent declares ``int seedingTimeLimit``
+    (``categoryoptions.h:49``) and reads it back as ``const int``
+    (``sessionimpl.cpp:2381``), so Int32 caps the field at ``2**31 - 1`` and
+    ``MAX_REACHABLE_SEED_RATIO`` is ``4294967298.0`` times larger.
+
+    The sibling pin for the *indexer's* ``seedTime`` already existed
+    (``test_the_largest_representable_seed_time_is_still_a_seed_goal``); this
+    is the category half, which the resolve's docstring originally argued for
+    without reaching. Not a restatement of the arithmetic — it drives the
+    largest value the field can hold through the real predicate chain, so if
+    the bound ever drops near ``2**31`` this goes red rather than the claim
+    quietly becoming false.
+    """
+    both_globals_off = {"max_ratio_enabled": False, "max_seeding_time_enabled": False}
+
+    def verdict(seeding_time_limit):
+        qbt = qbt_with(
+            **(
+                SLOTS
+                | both_globals_off
+                | {
+                    "categories": {
+                        "tv-sonarr": {
+                            "ratio_limit": -2,
+                            "seeding_time_limit": seeding_time_limit,
+                        }
+                    }
+                }
+            )
+        )
+        return check(qbt, _arrs(_indexer(seed_ratio=_NO_RATIO, seed_time=_NO_RATIO))).outcome
+
+    assert verdict(2**31 - 1) is Outcome.PASS, (
+        "the largest seeding-time limit Int32 can carry must still read as the "
+        "category's own limit; the ratio ceiling is nine orders of magnitude above it"
+    )
+    # The control: a value genuinely above the bound is still rejected here, so
+    # the row above is not passing because this arm skips the range rule.
+    assert verdict(10**400) is Outcome.FAIL
     # The control, and the reason this cannot just be `not value >= 0`: a real
     # category limit still breaks the wedge for everything filed under it.
     assert verdict(2.0) is Outcome.PASS
