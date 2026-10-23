@@ -35,5 +35,6 @@ dev = [
     "hypothesis>=6.100",
     "pre-commit>=4.6.2",
     "pytest>=8.0",
+    "pyyaml>=6.0.3",
     "ruff>=0.6",
 ]

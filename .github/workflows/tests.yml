@@ -1,0 +1,116 @@
+name: Tests
+
+# lintarr's only gate used to be `.pre-commit-config.yaml`, and that gate is
+# LOCAL MACHINE STATE: it grades whatever the committer happened to have
+# installed, it cannot grade a PR that arrives from anywhere else, and nobody
+# reading the PR can see whether it ran. Both open PRs read `ABSENT` in
+# `dispatch pr-gates` as a result -- no check-run on the head at all, which in
+# the GitHub UI looks exactly like a passing one. See #47.
+#
+# This is the TEST gate only. The review gate -- a `dispatch/require-review`
+# status, a Claude review bot, a `CLAUDE_CODE_OAUTH_TOKEN` secret -- is
+# bluelinky#35 and is Tom's open decision. Nothing here depends on it, and
+# nothing here forecloses any of its three options.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # `reopened` is load-bearing, not decoration. `gh pr close && gh pr reopen`
+    # is the only re-gate an agent can raise without moving the head SHA, and
+    # `gh run rerun` is NOT a substitute: a rerun replays the merge commit
+    # recorded when the run first triggered, so a PR whose failure was since
+    # fixed on `main` stays red. In an `opened`-only repo the close/reopen
+    # raises nothing and the PR comes back with no check-run -- absent, which
+    # renders as green. tests/test_ci_workflow.py pins this.
+    types: [opened, synchronize, reopened]
+
+# Keyed by ref, so `main` and each PR branch queue independently.
+#
+# NOT cancelled on a pull_request, and that is the opposite of this fleet's
+# usual setting. A cancel and the `reopened` trigger above are in direct
+# tension: the re-gate raised by `gh pr close && gh pr reopen` lands in this
+# same group and cancels the run already in flight, and `cancelled` is in
+# `dispatch pr-gates`'s INCONCLUSIVE_CONCLUSIONS -- it scores NOT_RUN, not
+# green. `drop_superseded_attempts` rescues that only when the later attempt
+# STARTED after the earlier one FINISHED, and a concurrency cancel is exactly
+# the overlapping case, so whether it is rescued is a race. When it loses, the
+# `cancelled` row sits on the head SHA permanently and the bot App cannot
+# re-run it (metaframework#808 at `97b7cb6`). So the re-gate would be able to
+# manufacture the unreadable state it exists to clear.
+#
+# The saving it would buy is nil: this suite is ten seconds, so there is
+# almost never an in-flight run to supersede. On `push` to `main` there is no
+# re-gate mechanism and no PR to misread, so cancelling there is free.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+# Default is read-all on a public repo; state it rather than inherit it.
+permissions:
+  contents: read
+
+jobs:
+  # ONE JOB on purpose. GitHub bills every job rounded UP to a whole minute,
+  # and lint, format and pytest here total well under one. Splitting them
+  # would buy three independent red/green lights and pay three minutes for
+  # one minute of work. The cost of a single job is that a failing step stops
+  # the ones after it -- read the FIRST failure, not the only one.
+  test:
+    runs-on: ubuntu-latest
+    # Generous against a ten-second suite. Without it the default is 360
+    # minutes, and a wedged Hypothesis run would hold this PR at PENDING for
+    # six hours rather than failing.
+    timeout-minutes: 10
+    env:
+      # What makes the `python-version` pin below load-bearing rather than
+      # decorative. `setup-python` only puts an interpreter on PATH; `uv` does
+      # its own discovery and is constrained only by `requires-python`, so
+      # with no `.python-version` in the repo it is uv's choice which one runs
+      # the suite. This pins that choice to the one the pin names.
+      UV_PYTHON: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # pyproject.toml says `requires-python = ">=3.13"`. Pinned rather
+          # than floated so a new interpreter landing on the runner image is a
+          # deliberate bump here, not a surprise red on an unrelated PR.
+          python-version: "3.13"
+
+      # `--frozen`, not a bare `uv sync`. `uv.lock` is committed, and a CI run
+      # that re-resolves is grading a dependency set nobody reviewed -- which
+      # is also how a lockfile diff nobody authored ends up in a PR.
+      #
+      # (An earlier draft of this comment said the `pytest` pre-commit hook
+      # runs `uv run --frozen` "for the same reason". It does not, at this
+      # revision -- `.pre-commit-config.yaml` has a bare `uv run pytest -q`,
+      # and it gains `--frozen` only in the unmerged PR #46. A comment is the
+      # one thing a mutation round cannot grade, so it is corrected rather
+      # than quietly dropped.)
+      #
+      # `--all-groups` because the `dev` group is where pytest, hypothesis and
+      # ruff live; without it none of the three steps below has a binary.
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      # Same ruff the pre-commit hooks run, because both resolve it from the
+      # same `uv.lock`. `--fix` is deliberately absent: a gate that edits the
+      # tree to make itself pass is not a gate.
+      - name: Lint (ruff)
+        run: uv run --frozen ruff check src/ tests/
+
+      - name: Format check (ruff)
+        run: uv run --frozen ruff format --check src/ tests/
+
+      # The step this workflow exists for. A linter cannot see a broken
+      # invariant, which is all this project is: #24 shipped a test whose whole
+      # assertion block had been dropped by a three-way merge, and ruff noticed
+      # only because the deletion happened to orphan a bound name.
+      - name: Run tests
+        run: uv run --frozen pytest -q
