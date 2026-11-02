@@ -19,9 +19,13 @@ name: Require Code Review
 # `actions/secrets` 403s under the bot token so no agent can read or set
 # `CLAUDE_CODE_OAUTH_TOKEN` either. The unprovisioned arm below publishes
 # `pending` naming its own remedy, which is visibly not-green without being a
-# red X whose only fix is a repo-settings write no agent can perform. lintarr is
-# the third repo on that provisioning list, behind bluelinky and
-# abi-django-utils.
+# red X whose only fix is a repo-settings write no agent can perform.
+#
+# lintarr is the third repo on that provisioning list, and the three are not in
+# the same state -- a distinction a first draft of this header got wrong.
+# bluelinky's gate is MERGED and awaiting the two steps; abi-django-utils' is
+# still on open PR #25 (`claude/24-review-gate`) and so is awaiting a merge
+# first; this one is awaiting both.
 #
 # WHAT ALREADY GRADES THIS REPO, because this file must not contradict it.
 # `.github/workflows/tests.yml` (#47, merged #48) is the TEST gate and carries

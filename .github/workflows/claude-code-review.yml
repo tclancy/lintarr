@@ -12,13 +12,36 @@ name: Claude Code Review
 # `claude_args` value below is that file's. The divergences are listed under
 # WHAT DIFFERS.
 #
-# IT CANNOT RUN HERE YET, and this PR does not pretend otherwise. The Claude
-# GitHub App is not installed on this repo -- `claude[bot]` has posted zero
-# times, measured 2026-11-01 -- and `secrets.CLAUDE_CODE_OAUTH_TOKEN` does not
-# exist, which the sibling gate reports as `pending` rather than as a red X.
-# Both are repo-settings writes that 403 under the bot App's token, so they are
-# Tom's: install the App, add the secret. Until then this workflow is installed
-# and inert, which is the state bluelinky and abi-django-utils are also in.
+# IT MUST BE A GREEN NO-OP UNTIL TOM PROVISIONS IT, and that takes an explicit
+# step rather than happening by itself. The Claude GitHub App is not installed
+# on this repo -- `claude[bot]` has posted zero times, measured 2026-11-01 --
+# and `secrets.CLAUDE_CODE_OAUTH_TOKEN` does not exist. Both are repo-settings
+# writes that 403 under the bot App's token, so they are Tom's: install the
+# App, add the secret.
+#
+# WITHOUT the `Is the reviewer token configured?` step below, this file is not
+# inert -- it RUNS, and `claude-code-action`'s own environment validation fails
+# the job ("Either ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, ... is
+# required"), putting a red X on every PR here with a remedy only Tom can
+# apply. That is precisely the workload transfer option (a) was chosen to
+# avoid, and `require-review.yml`'s `pending` arm is the other half of avoiding
+# it. The guard step is bluelinky's, added there for this exact reason on
+# 2026-10-23 and verified firing on abi-django-utils run `40173373407` and
+# bluelinky run `41356970097`, both green with an empty `REVIEWER_TOKEN`.
+#
+# A FIRST DRAFT OF THIS PORT OMITTED THAT STEP, because it copied
+# parsons-remote's file, and parsons-remote is PROVISIONED -- so the step is
+# absent there without consequence. Worse, the omission could not have been
+# caught by this PR's own CI: until the file is on the default branch, the
+# action's token exchange fails with `workflow_not_found_on_default_branch`,
+# which it converts into a green **workflow validation skip**. The red would
+# have arrived on the NEXT PR, authored by whoever came along next. Found in
+# review. `tests/test_review_workflow_config.py` now pins the step.
+#
+# One correction worth carrying, since a stale claim here is what caused the
+# above: **abi-django-utils has no copy of this file on `main`**. Its copy is
+# on open PR #25 (`claude/24-review-gate`), so it is unmerged rather than
+# awaiting provisioning. bluelinky's is merged and guarded.
 #
 # Steady-state burn reduction (metaframework#320 §5), inherited:
 #   - Auto-trigger on `opened`/`reopened` only, never `synchronize`. A 10-commit
@@ -111,8 +134,30 @@ jobs:
       id-token: write
 
     steps:
+      # LAYER 0, and the step this port was missing. An unset secret
+      # interpolates to the empty string; a job-level `if:` cannot see
+      # `secrets` at all, which is why this is a step and not a condition on
+      # the job. With `ready=no` the three steps below skip and the job
+      # concludes green having done nothing -- a visible no-op, while
+      # `require-review.yml` publishes `pending` naming the same remedy. The
+      # alternative is a red X whose only fix is a repo-settings write no agent
+      # can perform. Ported verbatim from bluelinky's copy.
+      - name: Is the reviewer token configured?
+        id: gate
+        env:
+          REVIEWER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${REVIEWER_TOKEN}" ]; then
+            echo "ready=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::CLAUDE_CODE_OAUTH_TOKEN is not set - review skipped. Add the repo secret and install the Claude GitHub App to enable the gate (bluelinky#35)."
+          fi
+
       - name: Resolve PR head SHA
         id: pr
+        if: steps.gate.outputs.ready == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
@@ -142,11 +187,15 @@ jobs:
           echo "sha=${sha}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.gate.outputs.ready == 'yes'
         with:
           fetch-depth: 1
+          # The PR head, not the merge ref: an `issue_comment` run would
+          # otherwise review the default branch.
           ref: ${{ steps.pr.outputs.sha }}
 
       - name: Run Claude Code Review
+        if: steps.gate.outputs.ready == 'yes'
         uses: anthropics/claude-code-action@5eb090f3c3afd701a0672cd32981197ca27688f6 # v1.0.253
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -227,6 +276,13 @@ jobs:
           # being denied 6-10 times a run is still unidentified.
           #
           # Both settings are pinned by
-          # `tests/test_require_review_workflow.py`, which is the only thing
-          # here that can fire before the App is installed.
+          # `tests/test_review_workflow_config.py` -- which is a MODULE THIS
+          # PORT ORIGINALLY DROPPED. The comment here was rewritten to cite
+          # `test_require_review_workflow.py` instead, and that module contains
+          # zero occurrences of `track_progress`, `--max-turns`,
+          # `allowed_bots` or the inline-comment tool name: the citation was
+          # false and `track_progress: true` -> `false` survived all 136 tests.
+          # Found in review. The settings half of parsons-remote's module is
+          # now ported; the half about that repo's own run history is not, and
+          # its omission is declared in the new module's docstring.
           claude_args: '--allowed-tools "mcp__github_inline_comment__create_inline_comment,TodoWrite,Bash(gh issue view:*),Bash(gh search:*),Bash(gh issue list:*),Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr list:*)" --max-turns 40'

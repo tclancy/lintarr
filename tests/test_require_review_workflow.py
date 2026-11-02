@@ -1,10 +1,12 @@
 """Guards on `.github/workflows/require-review.yml` and its wiring.
 
-Companion to `tests/test_ci_workflow.py` (which guards the TEST gate,
-`tests.yml`) and to `tests/test_review_gate_decision.py` (which guards the
-*decision logic*). This module guards the third thing: the plumbing that
-connects the reviewer to the status, and the cross-file agreements that nothing
-else can see.
+Companion to three others: `tests/test_ci_workflow.py` (the TEST gate,
+`tests.yml`), `tests/test_review_gate_decision.py` (the *decision logic*), and
+`tests/test_review_workflow_config.py` (the *reviewer's settings*, including
+the token guard that keeps it a green no-op until Tom provisions it). This
+module guards the fourth thing: the plumbing that connects the reviewer to the
+status, the input document the gate is handed, and the cross-file agreements
+that nothing else can see.
 
 Deliberately parsed as TEXT rather than as YAML, and the reason here is not the
 one the source copy gives. parsons-remote's copy says its repo declares no yaml
@@ -1066,3 +1068,304 @@ class TestTheDetectorsCanFail:
         b = set(re.findall(pattern, "      - uses: actions/checkout@" + "b" * 40 + "\n"))
         assert a and b, "the matcher cannot see a SHA-pinned checkout at all"
         assert len(a | b) == 2, "the detector cannot distinguish two different pins"
+
+
+class TestTheInputBuilderIsExecutedAndNotOnlyRead:
+    """The gate's `jq -n --slurpfile ...` program, run rather than grepped.
+
+    THIS WAS THE WIDEST HOLE IN THE PORT, and it is inherited -- the source
+    copy has no guard here either. `test_review_gate_decision.py` feeds
+    `review-gate.jq` a HAND-WRITTEN document; the real document is assembled by
+    the program in `require-review.yml`'s publish step, and nothing ran it.
+    Measured in review: five one-token mutations to that program survived all
+    136 tests, and each is a production-visible failure --
+
+      ``bot_logins: ["nobody[bot]"]``       every reviewed PR reads red forever
+      ``reviewer_logins: ["someone-else"]`` the gate becomes unsatisfiable, and
+                                            on this repo that arm is currently
+                                            the ONLY one that can go green
+      ``author: $pr[0].head.user.login``    `exempt_reason` stops matching, so
+                                            every Dependabot PR reads red
+      ``head_committed_at: ...author.date`` on a rebased head the author date is
+                                            older, so a review that predates the
+                                            push reads FRESH -- a false green
+      ``number: $pr[0].id``                 the refusal names a PR that does not
+                                            exist
+
+    `test_the_bot_login_the_gate_trusts_is_the_one_the_reviewer_posts_as` was
+    the guard nominally covering the first row. It asserts `"claude[bot]" in
+    gate` against RAW text, and that literal appears seven times in
+    `review-gate.jq` and five in `require-review.yml`, nearly all in prose. It
+    cannot fail. That is exactly the defect class this port was told to expect.
+
+    So: extract the program, run it against fixtures, and assert the MAPPING --
+    with two differing rows, because a field asserted to hold *a* legal value
+    survives both a hardcoded constant and a read of the wrong row.
+    """
+
+    #: Where each output key must come from. The whole point of the table: a
+    #: guard that only checked the keys exist would survive every row above.
+    EXPECTED_SOURCES = {
+        "number": ("pr", "number"),
+        "author": ("pr", "user.login"),
+        "title": ("pr", "title"),
+        "head_committed_at": ("head", "commit.committer.date"),
+    }
+
+    @staticmethod
+    def _program(gate: str) -> str:
+        """The `jq -n ... '<program>'` text from the publish step.
+
+        Read off `active_lines` and sliced between the single quotes that
+        delimit the jq program, so the `#`-comment INSIDE the program (the one
+        explaining `reviewer_logins`) is gone before the program is handed to
+        jq -- which is what `active_lines` is for, and is also how a
+        commented-out line in it would show up as missing rather than as
+        present.
+        """
+        active = active_lines(gate)
+        anchor = "jq -n \\"
+        assert anchor in active, "no `jq -n` input builder in the workflow"
+        tail = active[active.index(anchor) :]
+        start = tail.index("'{")
+        end = tail.index("}'", start)
+        return tail[start + 1 : end + 1]
+
+    def test_the_program_slice_is_a_program_and_not_the_step(self, gate):
+        # Control for the slice: one that over-reached would hand jq the
+        # surrounding shell and every assertion below would fail for the wrong
+        # reason, or -- worse, with a laxer slice -- succeed on a fragment.
+        program = self._program(gate)
+        assert program.startswith("{") and program.rstrip().endswith("}")
+        assert "gh api" not in program, "the slice swept in the shell around the program"
+        assert "slurpfile" not in program
+        for key in self.EXPECTED_SOURCES:
+            assert f"{key}:" in program, f"{key} missing from the extracted program"
+
+    @staticmethod
+    def _row(n: int) -> dict:
+        """Two rows that differ in EVERY field the builder reads.
+
+        `n` is 1 or 2. Nothing here is shared between the two, so a builder
+        that hardcodes a value, or reads the right field off the wrong
+        document, produces row 1's answer for row 2's input and is caught.
+        """
+        return {
+            "pr": {
+                "number": 100 + n,
+                "user": {"login": f"author-{n}"},
+                "title": f"feat: change {n}",
+                # A decoy at `head.user.login`: the mutation that survived
+                # review read the HEAD repo's owner instead of the PR author,
+                # and with no such field present that mutant yields null and
+                # could look like a different bug.
+                "head": {"user": {"login": f"head-owner-{n}"}},
+            },
+            "head": {
+                "commit": {
+                    "committer": {"date": f"2026-10-2{n}T04:00:00Z"},
+                    # The other surviving mutant's target. An author date that
+                    # is OLDER than the committer date is the real shape after
+                    # a rebase, which is the case where reading the wrong one
+                    # is a false green rather than a wash.
+                    "author": {"date": f"2026-10-0{n}T04:00:00Z"},
+                }
+            },
+            "comments": [{"user": {"login": f"commenter-{n}"}, "body": f"c{n}"}],
+            "reviews": [{"user": {"login": f"reviewer-{n}"}, "state": "APPROVED"}],
+        }
+
+    def _build(self, gate: str, row: dict, tmp_path: Path) -> dict:
+        """Run the real program over `row`, exactly as the workflow does."""
+        import json
+
+        args = []
+        for name in ("pr", "head", "comments", "reviews"):
+            path = tmp_path / f"{name}.json"
+            path.write_text(json.dumps(row[name]))
+            args += ["--slurpfile", name, str(path)]
+        proc = subprocess.run(
+            ["jq", "-n", *args, self._program(gate)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, f"the input builder failed:\n{proc.stderr}"
+        return json.loads(proc.stdout)
+
+    def test_the_builder_produces_exactly_the_keys_the_gate_reads(self, gate, tmp_path):
+        built = self._build(gate, self._row(1), tmp_path)
+        assert set(built) == {
+            "number",
+            "author",
+            "title",
+            "head_committed_at",
+            "bot_logins",
+            "reviewer_logins",
+            "comments",
+            "reviews",
+        }
+
+    @pytest.mark.parametrize("key", sorted(EXPECTED_SOURCES))
+    def test_each_field_is_read_from_the_document_and_path_it_names(self, gate, tmp_path, key):
+        """Two rows, so membership cannot stand in for correspondence."""
+        doc, path = self.EXPECTED_SOURCES[key]
+        for n in (1, 2):
+            row = self._row(n)
+            want = row[doc]
+            for part in path.split("."):
+                want = want[part]
+            got = self._build(gate, row, tmp_path)[key]
+            assert got == want, (
+                f"{key} came back {got!r} but {doc}.{path} is {want!r} on row {n} -- "
+                "the builder is reading a different field, a different document, "
+                "or a hardcoded value"
+            )
+
+    def test_the_head_timestamp_is_the_COMMITTER_date_and_not_the_author_date(self, gate, tmp_path):
+        # Called out separately because it is the only one of the five whose
+        # wrong answer is a FALSE GREEN rather than a false red: after a rebase
+        # or an amend the author date is older than the push, so a stale review
+        # would compare fresh against it.
+        row = self._row(1)
+        built = self._build(gate, row, tmp_path)
+        assert built["head_committed_at"] == row["head"]["commit"]["committer"]["date"]
+        assert built["head_committed_at"] != row["head"]["commit"]["author"]["date"]
+
+    def test_the_author_is_the_pr_author_and_not_the_head_repo_owner(self, gate, tmp_path):
+        # The decoy row exists so this can distinguish "reads the right field"
+        # from "reads a field that happens to be absent".
+        row = self._row(1)
+        built = self._build(gate, row, tmp_path)
+        assert built["author"] == row["pr"]["user"]["login"]
+        assert built["author"] != row["pr"]["head"]["user"]["login"]
+
+    def test_the_two_allow_lists_are_the_ones_the_gate_and_the_reviewer_agree_on(
+        self, gate, tmp_path
+    ):
+        """The literals, read out of the built document rather than grepped.
+
+        `bot_logins` must be the login the reviewer posts as, and
+        `reviewer_logins` the human allow-list -- and a `"claude[bot]" in gate`
+        text assertion cannot see either go wrong, because that literal is all
+        over the prose in both files.
+        """
+        built = self._build(gate, self._row(1), tmp_path)
+        assert built["bot_logins"] == ["claude[bot]"], (
+            "the gate would trust a login the reviewer never posts as, so every "
+            "reviewed PR would read red"
+        )
+        assert built["reviewer_logins"] == ["tclancy"], (
+            "with no Claude App installed here this is the only arm that can go "
+            "green, so a wrong login makes the gate unsatisfiable by anyone"
+        )
+        # And the bot login must be the one `claude-code-review.yml` actually
+        # produces. Asserted against the built value, not the file's text.
+        assert "claude[bot]" in built["bot_logins"]
+
+    def test_the_collections_pass_through_unflattened(self, gate, tmp_path):
+        # `--slurpfile` makes each `$name` an ARRAY of the file's documents,
+        # so every reference needs `[0]`. Dropping it on `comments` yields a
+        # list-of-lists, which `review-gate.jq`'s `.comments[]?` then iterates
+        # into arrays and silently matches nothing.
+        row = self._row(2)
+        built = self._build(gate, row, tmp_path)
+        assert built["comments"] == row["comments"]
+        assert built["reviews"] == row["reviews"]
+
+    def test_the_built_document_actually_satisfies_the_gate_end_to_end(self, gate, tmp_path):
+        """The two halves joined: builder output straight into the real gate.
+
+        Neither suite covered this seam. A builder that is individually correct
+        and a gate that is individually correct can still disagree about a key
+        name, and the symptom would be a permanently red status with no
+        explanation in either file.
+        """
+        from tests.test_review_gate_decision import REAL_FINISHED_COMMENT, run_gate
+
+        row = self._row(1)
+        row["comments"] = [
+            {
+                "user": {"login": "claude[bot]"},
+                "body": REAL_FINISHED_COMMENT,
+                "updated_at": "2026-10-21T05:00:00Z",
+                "created_at": "2026-10-21T05:00:00Z",
+                "author_association": "NONE",
+            }
+        ]
+        verdict = run_gate(self._build(gate, row, tmp_path))
+        assert verdict["state"] == "success", verdict
+        assert "claude[bot]" in verdict["description"]
+
+        # And the refusal path, so the success above is not a tautology.
+        row["comments"] = []
+        row["reviews"] = []
+        refusal = run_gate(self._build(gate, row, tmp_path))
+        assert refusal["state"] == "failure"
+        # The refusal names the number the builder supplied, which is the
+        # fifth surviving mutant (`$pr[0].id` instead of `.number`).
+        assert f"#{row['pr']['number']}" in refusal["description"]
+
+
+class TestEveryPublishedDescriptionFitsTheStatusField:
+    """GitHub 422s a status description over 140 characters.
+
+    `review-gate.jq` has `truncate140` and two tests for it. The THREE
+    descriptions published by the shell -- the unprovisioned arm, the ERR trap
+    and the `failure()` fallback -- have no bound and had no test. The
+    unprovisioned one is at 136 of 140 today, so the next edit to that sentence
+    crosses the limit; and inside the trap a 422 is swallowed by `|| true`,
+    which means NO status at all -- the stale-verdict outcome the trap exists
+    to prevent.
+    """
+
+    LIMIT = 140
+
+    #: Two spellings, because the shell publishes through two surfaces and a
+    #: detector that knew only one found 1 of 3 on its first run -- which
+    #: would have passed the loop below while saying nothing about the other
+    #: two. `publish <state> "..."` is the helper (the unprovisioned arm and
+    #: the ERR trap pass the text as its second argument); `-f description=`
+    #: is the `failure()` fallback, which POSTs directly.
+    _VIA_HELPER = re.compile(r'publish\s+(?:pending|error)\s*\\?\s*"([^"]+)"')
+    _VIA_FLAG = re.compile(r'-f description="([^"$][^"]*)"')
+
+    @classmethod
+    def _descriptions(cls, gate: str) -> list[str]:
+        """Every literal description the shell publishes.
+
+        Read off `active_lines` so a commented-out example cannot be counted,
+        and the `"$2"` / `"$description"` indirections are excluded -- those
+        carry the jq verdict, which `truncate140` already bounds and tests.
+        """
+        active = active_lines(gate)
+        return cls._VIA_HELPER.findall(active) + cls._VIA_FLAG.findall(active)
+
+    def test_each_one_fits(self, gate):
+        found = self._descriptions(gate)
+        # Reachability: an empty list satisfies the loop, and an empty list is
+        # what a rename of the flag produces.
+        assert len(found) == 3, f"expected three shell-published descriptions, found {found}"
+        for text in found:
+            assert len(text) <= self.LIMIT, (
+                f"{len(text)} chars, over GitHub's {self.LIMIT}-char limit, so the POST "
+                f"422s -- and in the ERR trap that means no status at all:\n  {text}"
+            )
+
+    def test_the_detector_can_see_an_overlong_one(self):
+        # Control: without this the test above passes on a detector that found
+        # nothing in a file full of overlong strings.
+        over = "x" * 200
+        assert self._VIA_FLAG.findall(f'-f description="{over}" \\') == [over]
+        assert self._VIA_HELPER.findall(f'publish pending \\\n  "{over}"') == [over], (
+            "the helper-call detector cannot see a multi-line publish, which is "
+            "the form the unprovisioned arm uses"
+        )
+
+    def test_the_detector_skips_the_jq_verdict_indirections(self, gate):
+        # `-f description="$2"` and `description="$description"` must NOT be
+        # measured as literals: their content is the jq verdict, bounded by
+        # `truncate140` and tested there. Counting them would report a 2-char
+        # pass and dilute the assertion above.
+        assert '-f description="$2"' in gate
+        assert not any(d.startswith("$") for d in self._descriptions(gate))
