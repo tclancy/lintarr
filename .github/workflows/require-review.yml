@@ -1,0 +1,428 @@
+name: Require Code Review
+
+# The second half of the review gate Tom greenlit on `tclancy/bluelinky#35` --
+# option (a), "a reviewer plus a status bound to the head", for the public
+# repos. `claude-code-review.yml` PRODUCES a review; this publishes a commit
+# status saying whether one exists for the CURRENT head, so a PR that has not
+# been reviewed reads red instead of reading exactly like a reviewed one.
+#
+# This repo is the LAST of #35's four, and the only one that arrived with no
+# review gate of any kind. Ported from `tclancy/parsons-remote` PR #26 (blob
+# `712bc2f62c8ec0bc4bae8b695adb01fb404f036a`), not from bluelinky `main`:
+# bluelinky #53 carries three fixes downstream of that copy and is still open.
+# The decision logic is `.github/review-gate.jq`; see its header for provenance
+# and for the three places this port diverges.
+#
+# IT WILL READ `pending` HERE UNTIL TOM DOES TWO THINGS, and that is the design
+# rather than a defect. `claude[bot]` has posted zero times in this repo
+# (measured 2026-11-01), so the Claude GitHub App is not installed, and
+# `actions/secrets` 403s under the bot token so no agent can read or set
+# `CLAUDE_CODE_OAUTH_TOKEN` either. The unprovisioned arm below publishes
+# `pending` naming its own remedy, which is visibly not-green without being a
+# red X whose only fix is a repo-settings write no agent can perform. lintarr is
+# the third repo on that provisioning list, behind bluelinky and
+# abi-django-utils.
+#
+# WHAT ALREADY GRADES THIS REPO, because this file must not contradict it.
+# `.github/workflows/tests.yml` (#47, merged #48) is the TEST gate and carries
+# three commented, deliberate choices: `reopened` in its trigger list, because
+# `gh run rerun` replays a stale merge commit and an `opened`-only repo cannot
+# be re-gated without moving the head; concurrency NOT cancelled on a
+# `pull_request`, because a close/reopen re-gate lands in the same group and
+# `cancelled` scores NOT_RUN rather than green; and `tests/test_ci_workflow.py`
+# pinning both. This file agrees with all three and tests.yml is untouched by
+# this PR.
+#
+# WHY A COMMIT STATUS AND NOT THIS JOB'S OWN CHECK. A check-run attaches to the
+# SHA of the event that triggered it. An `issue_comment` run executes in the
+# default-branch context, so its implicit check lands on `main`'s tip and never
+# touches the PR head -- which is the whole mechanism behind metaframework#620.
+# Posting to `repos/.../statuses/<head sha>` targets the PR head from either
+# trigger. This job therefore always succeeds; the verdict is the status.
+#
+# WHY NOT VENDOR metaframework's `review_gate.py`. It is 668 lines and lives in
+# a PRIVATE repo, so this public repo's `github.token` cannot read it cross-repo
+# and `actions/checkout` with no `repository:` would look for
+# `lintarr/src/dispatch/review_gate.py` and find nothing. Its extra
+# sophistication (docs-only skip, round counting) is tuning for that repo's own
+# history. `jq` and `gh` are both preinstalled on `ubuntu-latest`, so this job
+# needs no checkout of a language runtime and no dependency install.
+#
+# HOW THIS INTERACTS WITH THE REVIEWER'S TRIGGER LIST, which is the part worth
+# reading before filing a bug against it. `claude-code-review.yml` carries
+# `types: [opened, reopened]` -- `synchronize` is deliberately off (the
+# metaframework#320 §5 burn cut). This workflow DOES listen to `synchronize`.
+# That asymmetry is the design, not an oversight: a fix-up push moves the head,
+# the reviewer does not re-run, and this status therefore goes RED on the new
+# head. That red is accurate -- nothing has reviewed those bytes -- and the
+# remedies are in the refusal text (`/review`, or a re-gate).
+#
+# NOT A MERGE BLOCK. `GET /repos/tclancy/lintarr/rulesets` returns `[]`
+# (2026-11-01) and nothing enforces this status today. This repo is public, so
+# rulesets ARE available here and could make it a real block whenever Tom wants
+# one; `GET .../branches/main/protection` is 403 under the bot App's token, so
+# that surface was not read and is not claimed either way. The red X is
+# backpressure for autonomous agents, which is what #35 asked for.
+#
+# WHAT GRADES THIS WORKFLOW. On a `pull_request` event `actions/checkout`
+# defaults to `refs/pull/N/merge`, so the `review-gate.jq` -- and for a
+# same-repo PR, the copy of THIS FILE -- that runs is the PR's own. There is no
+# equivalent here of the server-side check that stops `claude-code-review.yml`
+# reviewing a PR that edits it: a PR CAN grant itself a laxer
+# `dispatch/require-review`. Pinning `ref:` to the default branch would fix the
+# gate half of that, and it is deliberately NOT done in the PR that introduces
+# the file, because the default branch does not carry `.github/review-gate.jq`
+# until this merges and the sparse checkout would resolve to nothing. Worth
+# revisiting once it has.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    # OBSERVED ON parsons-remote PR #26, THIS GATE'S OWN FIRST PR ANYWHERE, and
+    # it is a property of GitHub rather than of this file: an `issue_comment`
+    # run ALWAYS executes the copy of the workflow on the **default branch**,
+    # because the event is attached to an issue rather than to a PR ref. So
+    # until this file is on `main`, no `issue_comment` run can fire for it at
+    # all -- and the `/review` remedy named in `review-gate.jq`'s refusal
+    # messages does nothing on a PR whose branch is the only place this
+    # workflow exists.
+    #
+    # Measured there: `claude[bot]` posted at 20:13:30 and finished editing at
+    # 20:14:06, both after the head commit at 20:13:06, and the status stayed
+    # red because no run fired. `pull_request_review` is NOT affected -- that
+    # event carries the PR ref, and its run at 20:10:48 did execute the branch
+    # copy and did flip the status green.
+    #
+    # Consequences, in the order they bite:
+    #   * On the PR that INTRODUCES this gate, `/review` cannot clear the
+    #     status. A re-gate (`gh pr close N && gh pr reopen N`) can, because
+    #     `reopened` is a `pull_request` event, as can Tom submitting a formal
+    #     review. That is how #26 was taken green.
+    #   * Once merged, `/review` works as the refusal message says -- but only
+    #     once the Claude App is installed here, since otherwise nothing is
+    #     listening for it. On this repo today that is still outstanding.
+    #   * A later PR that EDITS this file is graded by `main`'s copy on the
+    #     comment path and by its own on the `pull_request` path, so the two can
+    #     disagree. Related to the self-grading note at the top of this file.
+    #
+    # `edited` as well as `created`, and that is a consequence of the gate's
+    # own rule rather than a nicety. `.github/review-gate.jq` rejects a bot
+    # comment that is the action's in-flight status line, and `track_progress:
+    # true` posts that line first and EDITS it into the finished one in place.
+    # On `created` alone the gate could never observe a run finish. The cost is
+    # one run per edit during a live review; they are ~15s, and this repo is
+    # public, where Actions minutes are free.
+    types: [created, edited]
+  # A formal APPROVED / CHANGES_REQUESTED satisfies the gate -- it is how Tom
+  # satisfies it himself, and until the App is installed here it is the ONLY
+  # thing that can -- but it arrives as `pull_request_review`, not as an
+  # `issue_comment`. Without this, approving a PR yourself left the red X
+  # sitting there.
+  pull_request_review:
+    types: [submitted]
+
+concurrency:
+  group: require-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  # MUST stay false, and here it agrees with `tests.yml`'s own reasoning rather
+  # than only with the fleet's. GitHub paints a *cancelled* run red on the PR
+  # even when the authoritative status this workflow publishes is green, which
+  # is what made three metaframework PRs read UNSTABLE with every real check
+  # passing (metaframework#511); and `cancelled` scores NOT_RUN in `dispatch
+  # pr-gates`, so a close/reopen re-gate would be able to manufacture the
+  # unreadable state it exists to clear. The concurrency group still serialises,
+  # so two runs never race to write the same commit status, and a run still
+  # pending when a newer one queues is dropped -- which is what bounds the
+  # `edited` burst.
+  cancel-in-progress: false
+
+jobs:
+  require-review:
+    # For `issue_comment`, only run when the comment could change the answer:
+    # the review bot posting or ticking its own comment (the self-heal path), or
+    # anyone asking for a review. Ordinary human discussion is skipped.
+    #
+    # BOTH remedy spellings, because `claude-code-review.yml`'s own `if:`
+    # accepts both `/review` and `@claude review`. Admitting only the first
+    # would leave `@claude review` running the reviewer while this workflow sat
+    # out the comment that asked for it. (The bot's own reply would re-fire us
+    # regardless, via the `claude[bot]` arm -- so this is belt-and-braces, not
+    # the only path. `tests/test_require_review_workflow.py` pins the agreement
+    # so a new spelling over there cannot silently go unhandled here.)
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request &&
+       (github.event.comment.user.login == 'claude[bot]' ||
+        contains(github.event.comment.body, '/review') ||
+        contains(github.event.comment.body, '@claude review')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      # Only the one file. The gate is a jq program and `ubuntu-latest` ships
+      # jq and gh already. Pinned to a full commit SHA with a version comment,
+      # matching `tests.yml` and `claude-code-review.yml`, so a compromised tag
+      # re-point cannot run in CI; Dependabot's github-actions ecosystem bumps
+      # all three together -- once `.github/dependabot.yml` exists here, which
+      # it does not yet and which is out of this PR's scope.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/review-gate.jq
+          sparse-checkout-cone-mode: false
+
+      - name: Resolve PR number and head SHA
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # `issue_comment` carries no pull_request object, so the head SHA has
+          # to be looked up. `pull_request` and `pull_request_review` both have
+          # it.
+          #
+          # Every value arrives through `env:` above rather than being
+          # interpolated into this script by a GitHub expression. Stated
+          # precisely, because the obvious justification overclaims: NO
+          # attacker-controlled text reaches a shell anywhere in this workflow
+          # today. The PR title does enter the gate, but it travels
+          # file -> `--slurpfile` -> file and is never a shell word, and the
+          # five values below are an event name, two numbers, a repo slug and a
+          # SHA. The discipline is kept because it is the surface the next edit
+          # reaches for, and because of the parsing hazard immediately below --
+          # not because there is a live injection here.
+          #
+          # And an expression in a `run:` body is not inert even in a COMMENT:
+          # GitHub evaluates them before the shell ever sees the script, so a
+          # commented-out one is still parsed, and an INVALID one makes the
+          # whole workflow file unparseable. bluelinky hit this: the tell was a
+          # run that FAILED with zero jobs, no annotation and no log, and
+          # `check-yaml`, `prettier` and `@action-validator/cli` all passed the
+          # file. `tests/test_require_review_workflow.py` bans the expression
+          # token from every `run:` block in BOTH workflows -- with no
+          # exemption, which is a divergence from parsons-remote's copy and is
+          # explained at that test.
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            number="$ISSUE_NUMBER"
+            sha="$(gh api "repos/${REPO}/pulls/${number}" --jq .head.sha)"
+          else
+            number="$PR_NUMBER"
+            sha="$PR_HEAD_SHA"
+          fi
+          echo "number=${number}" >> "$GITHUB_OUTPUT"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      # A cross-repository PR's `GITHUB_TOKEN` is read-only, so `statuses:
+      # write` above is not granted and the POST below would 403 -- turning
+      # every outside contribution into a red *workflow* run, which is worse
+      # than no gate. Outside contributions get Tom's own review; this gate is
+      # backpressure on agent PRs.
+      #
+      # THE DISCRIMINATOR IS `head.repo.full_name`, NOT `head.repo.fork`.
+      # `.fork` answers "is the head repo a fork of something" -- a property of
+      # the REPO, not of the PR -- so in a repo that is itself a fork it reads
+      # `true` for every same-repo branch, and keying on it skips 100% of that
+      # repo's PRs while looking like a correctly-installed gate.
+      #
+      # DIVERGES (2) only in which repo the measurement is about. That failure
+      # is a measured fact about bluelinky, which IS a fork. It is not true
+      # here: `gh repo view tclancy/lintarr --json isFork` is `false` as of
+      # 2026-11-01, so `.fork` would work in this repo today by accident --
+      # which is the same position parsons-remote is in. `full_name` is still
+      # what this compares, because it answers the question actually being
+      # asked ("is the head branch in this repo?") and does not quietly become
+      # wrong if this repo is ever re-created as a fork.
+      - name: Is this a cross-repository PR?
+        id: fork
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            head_repo="$HEAD_REPO"
+          else
+            head_repo="$(gh api "repos/${REPO}/pulls/${NUMBER}" --jq '.head.repo.full_name')"
+          fi
+          # Default to "yes, cross-repo" when the head repo cannot be read at
+          # all: a DELETED head repo reports `null`, and skipping is the safe
+          # direction (no status is better than a 403-failed job).
+          if [ "$head_repo" = "$REPO" ]; then
+            fork=false
+          else
+            fork=true
+          fi
+          echo "fork=${fork}" >> "$GITHUB_OUTPUT"
+          # An `if`, not `[ ... ] && echo`: under `set -e` a false test makes
+          # the whole AND-list exit 1 and takes the step down with it, so the
+          # same-repo case -- the common one -- would fail the job.
+          if [ "$fork" = "true" ]; then
+            echo "::notice::Cross-repository PR (head ${head_repo}) - review gate skipped; its token cannot write a commit status."
+          fi
+
+      - name: Evaluate the gate and publish the status to the PR head
+        if: steps.fork.outputs.fork != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.pr.outputs.number }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # Layer 0: an UNSET secret interpolates to the empty string, so this
+          # is how the gate learns the reviewer cannot run at all. Without it a
+          # repo with no secret gets a permanent red X whose only remedy is a
+          # repo-settings write no agent can perform -- exactly the workload
+          # transfer option (a) was chosen to avoid. `pending` instead: visibly
+          # not-green, not a false pass, and it names the owner and the remedy.
+          #
+          # DIVERGES (3), and this is the one divergence that changes what a
+          # reader should EXPECT to see. In parsons-remote this arm is defensive
+          # only for a human-or-agent PR, because that repo's reviewer is
+          # provisioned and working. Here it is the EXPECTED state on every
+          # non-Dependabot PR, including this one: no `CLAUDE_CODE_OAUTH_TOKEN`
+          # secret and no Claude GitHub App. bluelinky is in the same position.
+          # So `pending` on this PR is the gate working, and the remedy is the
+          # two provisioning steps at the top of this file.
+          #
+          # It is independently reachable on a **Dependabot** event, whose runs
+          # read a different secret store, which is why the check sits after the
+          # gate rather than before it. See the note at its site.
+          REVIEWER_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          publish() {
+            gh api -X POST "repos/${REPO}/statuses/${SHA}" \
+              -f state="$1" \
+              -f context="dispatch/require-review" \
+              -f description="$2" \
+              -f target_url="${RUN_URL}" >/dev/null
+            printf 'dispatch/require-review = %s: %s\n' "$1" "$2"
+          }
+
+          # Publish `error` rather than nothing if anything below blows up.
+          # Without this the step just dies under `set -e` and NO status is
+          # posted -- so the PR silently keeps whatever status it already had,
+          # which on a re-evaluation of an approved-then-pushed PR is a stale
+          # GREEN. A gate's failure mode must not be "leave the last verdict
+          # standing". `trap` fires on the non-zero exit; `publish` is defined
+          # above it, and the `|| true` keeps a failing publish from recursing.
+          trap 'publish error "Gate could not be evaluated - see the run log. This is a gate failure, not a review verdict." || true' ERR
+
+          # `--paginate` without `--jq` emits one JSON array PER PAGE, which is
+          # not a single document. `--jq '.[]'` streams the objects and `jq -s`
+          # reassembles them into one array, so this is page-count-independent.
+          gh api "repos/${REPO}/issues/${NUMBER}/comments" --paginate --jq '.[]' | jq -s '.' > comments.json
+          gh api "repos/${REPO}/pulls/${NUMBER}/reviews"   --paginate --jq '.[]' | jq -s '.' > reviews.json
+          gh api "repos/${REPO}/pulls/${NUMBER}" > pr.json
+          gh api "repos/${REPO}/commits/${SHA}" > head.json
+
+          # `--slurpfile`, not `--argjson "$(cat ...)"`: a PR body or a review
+          # comment can be long, and routing the whole document through argv
+          # puts it under ARG_MAX and through another layer of shell quoting
+          # for no gain. Each `$name` is an ARRAY of the file's documents,
+          # hence `[0]`.
+          jq -n \
+            --slurpfile pr       pr.json \
+            --slurpfile head     head.json \
+            --slurpfile comments comments.json \
+            --slurpfile reviews  reviews.json \
+            '{ number: $pr[0].number,
+               author: $pr[0].user.login,
+               title:  $pr[0].title,
+               head_committed_at: $head[0].commit.committer.date,
+               bot_logins: ["claude[bot]"],
+               # The formal-review arm is allow-listed separately -- see the
+               # long note on `candidates` in `.github/review-gate.jq`. This
+               # repo is public, so without it any GitHub account (and any
+               # fleet bot) could turn the status green by submitting a review.
+               reviewer_logins: ["tclancy"],
+               comments: $comments[0],
+               reviews: $reviews[0] }' > gate-input.json
+
+          verdict="$(jq -f .github/review-gate.jq gate-input.json)"
+          state="$(printf '%s' "$verdict" | jq -r .state)"
+          description="$(printf '%s' "$verdict" | jq -r .description)"
+
+          # THE UNPROVISIONED CHECK RUNS *AFTER* THE GATE, NOT BEFORE IT, AND
+          # THE ORDER IS THE WHOLE POINT. It used to be the first thing in this
+          # step, which meant an empty `CLAUDE_CODE_OAUTH_TOKEN` short-circuited
+          # before `exempt_reason` was ever evaluated.
+          #
+          # That is not hypothetical, and on THIS repo it is the common case
+          # rather than a corner. **Dependabot runs read a separate secret
+          # store** (Settings -> Secrets -> Dependabot), so
+          # `secrets.CLAUDE_CODE_OAUTH_TOKEN` is empty on a Dependabot
+          # `pull_request` event even when the Actions secret exists -- and with
+          # NEITHER store populated here, every Dependabot PR would publish
+          # `pending` telling Tom to add a secret, instead of the `success`
+          # `exempt_reason` grants it. Found in the bot review of
+          # parsons-remote PR #26.
+          #
+          # Ordering it this way also keeps ONE source of truth for the
+          # exemption. The obvious alternative -- test the author in shell
+          # before the token check -- puts `dependabot[bot]` in both this file
+          # and `review-gate.jq`, which is the drift
+          # `test_the_exempt_author_lists_agree` exists to prevent.
+          if [ "$state" != "success" ] && [ -z "${REVIEWER_TOKEN}" ]; then
+            publish pending \
+              "Not provisioned for this event: no CLAUDE_CODE_OAUTH_TOKEN visible, so the reviewer cannot run. Dependabot uses a separate secret store."
+            exit 0
+          fi
+
+          publish "$state" "$description"
+
+      # The ERR trap above only covers the step it is declared in. If the
+      # `Resolve PR number and head SHA` or `Is this a cross-repository PR?`
+      # step dies first -- a transient 5xx or a secondary rate limit on `gh api`
+      # is enough -- then nothing publishes, and the PR silently keeps whatever
+      # `dispatch/require-review` it already had. On a re-evaluation of an
+      # approved-then-pushed PR that is a stale GREEN, which is the exact
+      # failure mode the trap exists to prevent, arriving one step earlier than
+      # the trap can see.
+      #
+      # `if: failure()` so it runs only when something above failed, and it
+      # re-resolves the SHA itself rather than trusting `steps.pr.outputs` --
+      # which is empty precisely when the resolve step is what broke. If the SHA
+      # cannot be recovered at all there is nowhere to post, and saying so in
+      # the log is all that is left.
+      - name: A failure anywhere above must not leave a stale verdict standing
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            number="$ISSUE_NUMBER"
+          else
+            number="$PR_NUMBER"
+            sha="$PR_HEAD_SHA"
+          fi
+          if [ -z "${sha:-}" ]; then
+            sha="$(gh api "repos/${REPO}/pulls/${number}" --jq .head.sha || true)"
+          fi
+          if [ -z "${sha:-}" ]; then
+            echo "::warning::Could not resolve a head SHA, so no status could be published."
+            exit 0
+          fi
+          gh api -X POST "repos/${REPO}/statuses/${sha}" \
+            -f state=error \
+            -f context="dispatch/require-review" \
+            -f description="Gate failed before it could evaluate - see the run log. Not a review verdict." \
+            -f target_url="${RUN_URL}" >/dev/null || true
