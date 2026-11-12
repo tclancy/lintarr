@@ -44,6 +44,15 @@ consistency.
   - The orphan-credential guard is a usage error (#3).
   - The homelab#393 fixture is in `tests/fixtures/homelab.py`.
 
+## Review gate
+
+- **Provisioned 2026-11-12 (UTC).** `CLAUDE_CODE_OAUTH_TOKEN` was set via
+  `metaframework/scripts/sync-claude-review-secret.sh`; the Claude GitHub App
+  is installed account-wide. `claude-code-review.yml` now reviews for real and
+  `require-review.yml` should go green once a review exists for the head.
+- Still a soft signal: no ruleset requires the status (`rulesets` is `[]`).
+- Re-check fleet-wide with `sync-claude-review-secret.sh --check`.
+
 ## Open items
 
 - **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
