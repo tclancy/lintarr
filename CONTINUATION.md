@@ -1,9 +1,15 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-10-07 (UTC)
-**State:** P0b's `queue-liveness` check is live on homelab. It runs hourly as an
-edge-triggered systemd timer, and the first run (2026-10-07 21:40 UTC) PASSed
-against the real stack. 853 tests, pre-commit clean.
+**Last updated:** 2026-11-12 (UTC)
+**State:** P0b's `queue-liveness` check is live on homelab and PASSing. It runs
+hourly as an edge-triggered systemd timer. Re-verified 2026-11-12: every hourly
+run PASSes, and the box's checkout is at `95d2616`, which differs from `main`
+only by CI and docs.
+
+**IN PROGRESS: P2 scoping** (simulator-vs-real-container differential). No code
+yet. Tom chose P2 over P1 on 2026-11-12 because every other check would build on
+the same untested queue model. Homelab runs `linuxserver/qbittorrent:5.2.3`,
+which is the version to pin conformance against.
 
 ## What lintarr is, and why
 
@@ -30,7 +36,10 @@ consistency.
 - **Deployed** per `docs/superpowers/specs/2026-10-05-deploy-scope.md`:
   - `lintarr.timer` fires `lintarr.service` at :17 each hour.
   - `--state-file` (`src/lintarr/edge.py`) means a problem pages once through
-    homelab's `unit-failure-alert-user@`, not every hour.
+    homelab's `unit-failure-alert-user@`, not every hour. That handler
+    (`/usr/local/bin/unit-failure-alert.sh`) pushes to ntfy topic
+    **`homelab-alerts`**, and escalates a repeating failure as `urgent` with a
+    copy to `claude`.
   - Units and env live in homelab `roles/native-apps` (homelab#542).
   - Sonarr/Radarr keys are read from each app's `config.xml` at deploy time.
 - **Operate it:** `itguy deploy lintarr`, `itguy logs lintarr --level info`.
@@ -46,11 +55,6 @@ consistency.
 
 ## Open items
 
-- **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
-  `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
-  into it, so `state.json` sits beside the env file. It's harmless (0600 in a
-  0700 dir), but it isn't what the unit's comments say. Fix it by renaming one
-  of the two directories.
 - **Known limits of edge-triggering:** a config/usage error exits 2 before
   state is read, so it pages every run. There's also no periodic re-page for a
   long-lived problem.
@@ -80,8 +84,12 @@ Per `docs/superpowers/specs/2026-08-26-lintarr-design.md`, all present:
 - the state-machine simulator (`tests/model/queue.py`)
 - the five-outcome lattice and exit codes (`outcomes.py`)
 
-Next: pick the next spec phase. The design doc's Runtime section (webhook,
-HTTP API, SQLite history) and the P3 invariants remain.
+Next: P2 (see State above). P1 (`explain`, API, UI, SQLite history,
+suppression) and the P3 invariants come after it.
+
+The systemd state-dir quirk recorded here earlier is fixed: the unit uses
+`StateDirectory=lintarr-state`, a real 0700 dir holding `state.json`, and the
+old `~/.local/state/lintarr` symlink is gone (checked on the box 2026-11-12).
 
 **Known gap carried forward:** the simulator validates that the closed form was
 *derived* correctly. It cannot catch a *wrong model* — a sweep over the
