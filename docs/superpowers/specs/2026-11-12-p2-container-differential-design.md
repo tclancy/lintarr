@@ -131,13 +131,13 @@ does not encode the builder's own reading of qBittorrent. Concretely, as of
 
 1. Every seeding torrent occupies a `max_active_torrents` slot.
 2. `max_active_uploads` is not consulted (the predicate does not declare it).
-3. The slow-torrent exemption applies to downloads only.
+3. With the slow-torrent exemption on, slow torrents count against no limit, seeders included. The predicate makes "exemption off" a premise of the seeder wedge (`queue_liveness.py:1042`). *(Corrected while planning: an earlier draft said "downloads only", which was the simulator's comment, not the predicate's belief.)*
 4. With a share limit enabled, a seeder that meets it leaves and frees its slot.
 5. `queueing_enabled=false` means nothing queues.
 
 These rules land in **their own commit, before the harness first talks to a
 container**, so git shows they were not fitted to observations. Where the
-builder believes a rule is wrong (the reviewer suspects 2 and 3 are), the rule
+builder believes a rule is wrong (the reviewer suspects 2 is), the rule
 **stays as the predicate believes it**. The scenario is expected to disagree,
 and that disagreement is the finding. See "Known disagreements" below.
 
