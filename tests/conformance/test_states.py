@@ -39,8 +39,26 @@ def test_tally_counts_each_bucket():
         "e": "queuedUP",
         "f": "pausedUP",
     }
-    assert tally(states, set(states)) == Counts(1, 2, 1, 1, 1)
+    assert tally(states, set(states)) == Counts(
+        downloading=1, queued=2, seeding=1, seeding_queued=1, left=1
+    )
 
 
 def test_vanished_torrent_counts_as_left():
-    assert tally({"a": "downloading"}, {"a", "gone"}) == Counts(1, 0, 0, 0, 1)
+    assert tally({"a": "downloading"}, {"a", "gone"}) == Counts(
+        downloading=1, queued=0, seeding=0, seeding_queued=0, left=1
+    )
+
+
+def test_extra_hashes_in_states_are_ignored():
+    states = {"a": "downloading", "stale": "uploading"}
+    assert tally(states, {"a"}) == Counts(
+        downloading=1, queued=0, seeding=0, seeding_queued=0, left=0
+    )
+
+
+def test_extra_hash_with_unmapped_state_does_not_raise():
+    states = {"a": "downloading", "stale": "missingFiles"}
+    assert tally(states, {"a"}) == Counts(
+        downloading=1, queued=0, seeding=0, seeding_queued=0, left=0
+    )

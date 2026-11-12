@@ -17,7 +17,7 @@ def bencode(value: int | bytes | str | list | dict) -> bytes:
     if isinstance(value, list):
         return b"l" + b"".join(bencode(v) for v in value) + b"e"
     if isinstance(value, dict):
-        items = sorted((_key_bytes(k), v) for k, v in value.items())
+        items = sorted(((_key_bytes(k), v) for k, v in value.items()), key=lambda kv: kv[0])
         return b"d" + b"".join(bencode(k) + bencode(v) for k, v in items) + b"e"
     raise TypeError(f"cannot bencode {type(value).__name__}")
 
