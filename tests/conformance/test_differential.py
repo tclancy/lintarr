@@ -16,6 +16,7 @@ from tests.conformance.runner import (
     force_failure_scenario,
     judge,
     observe_steps,
+    set_prefs_verified,
     with_one_retry,
     wrong_prediction,
 )
@@ -35,6 +36,9 @@ POLL_S = 1.0
 def _assert_reached_target(s: Scenario, steps: list[Step]) -> None:
     """Raise HarnessError unless the scenario ran as designed."""
     if s.cfg.dont_count_slow_torrents:
+        # This only guards _wait_stable's own contract (it sleeps until
+        # event_at + settle_s, so this holds by construction). It does not prove
+        # the exemption was on: set_prefs_verified's read-back is what does that.
         last = steps[-1]
         if last.stable_at - last.event_at < SETTLE_S:
             raise HarnessError(f"{s.id}: judged before the slow timer and settle had elapsed")
@@ -77,7 +81,7 @@ def _predicted(s: Scenario) -> list[Counts]:
 
 def _assert_scenario_matches_model(qbt: QbtHarness, s: Scenario) -> None:
     qbt.reset()
-    qbt.set_prefs(s.prefs)
+    set_prefs_verified(qbt, s.prefs)
     steps = observe_steps(qbt, s, poll_s=POLL_S, settle_s=SETTLE_S, timeout_s=TIMEOUT_S)
     _assert_reached_target(s, steps)
     try:

@@ -44,6 +44,9 @@ class QbtHarness:
             self._http.post("/api/v2/app/setPreferences", data={"json": json.dumps(prefs)})
         )
 
+    def preferences(self) -> dict[str, object]:
+        return self._checked(self._http.get("/api/v2/app/preferences")).json()
+
     def add(self, t: HarnessTorrent, *, complete: bool) -> None:
         if complete:
             (self._downloads / t.name).write_bytes(t.data)

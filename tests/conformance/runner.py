@@ -8,6 +8,7 @@ say what kind of failure it was (spec "Failure alerting").
 
 import itertools
 import json
+import math
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, replace
@@ -18,7 +19,7 @@ import pytest
 
 from tests.conformance.known import Known
 from tests.conformance.qbt import HarnessError
-from tests.conformance.scenarios import Scenario
+from tests.conformance.scenarios import PREF_KEYS, Scenario
 from tests.conformance.states import Bucket, UnmappedState, bucket_of, tally
 from tests.conformance.torrents import HarnessTorrent, make_torrent
 from tests.model.queue import (
@@ -42,6 +43,49 @@ class Harness(Protocol):
     def add(self, t: HarnessTorrent, *, complete: bool) -> None: ...
     def delete(self, hashes: list[str], *, delete_files: bool) -> None: ...
     def states(self) -> dict[str, str]: ...
+
+
+# --- preferences ---------------------------------------------------------------
+
+
+class PrefsHarness(Protocol):
+    def set_prefs(self, prefs: dict[str, object]) -> None: ...
+    def preferences(self) -> dict[str, object]: ...
+
+
+def _same_pref(sent: object, got: object) -> bool:
+    """Equal as qBittorrent means it: numbers by value (0 == 0.0, -1 == -1.0),
+    but a bool only matches a bool, since True == 1 would hide a wrong key type."""
+    if isinstance(sent, bool) or isinstance(got, bool):
+        return type(sent) is type(got) and sent == got
+    if isinstance(sent, (int, float)) and isinstance(got, (int, float)):
+        return math.isclose(sent, got, rel_tol=0, abs_tol=1e-9)
+    return sent == got
+
+
+def set_prefs_verified(h: PrefsHarness, prefs: dict[str, object]) -> None:
+    """Send `prefs`, then raise HarnessError unless every PREF_KEYS key reads back
+    from GET /api/v2/app/preferences equal to what was sent.
+
+    setPreferences answers 200 and silently ignores a key it does not know, so
+    without the read-back a misspelt or unsupported key would leave the scenario
+    running on the previous scenario's value. The one normalisation measured
+    (item 4: `max_ratio` reads back -1 whenever `max_ratio_enabled` is off) needs
+    no special case, because prefs_for already sends -1 then; an override that
+    sent anything else with the flag off would rightly fail here.
+    """
+    unsent = sorted(PREF_KEYS - prefs.keys())
+    if unsent:
+        raise HarnessError(f"prefs do not set every PREF_KEYS key: {unsent}")
+    h.set_prefs(prefs)
+    got = h.preferences()
+    wrong = {
+        key: (prefs[key], got.get(key, "<absent>"))
+        for key in sorted(PREF_KEYS)
+        if key not in got or not _same_pref(prefs[key], got[key])
+    }
+    if wrong:
+        raise HarnessError(f"preferences did not read back as sent (sent, got): {wrong}")
 
 
 # --- observe -----------------------------------------------------------------
