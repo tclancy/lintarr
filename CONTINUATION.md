@@ -1,9 +1,11 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-10-07 (UTC)
-**State:** P0b's `queue-liveness` check is live on homelab. It runs hourly as an
-edge-triggered systemd timer, and the first run (2026-10-07 21:40 UTC) PASSed
-against the real stack. 853 tests, pre-commit clean.
+**Last updated:** 2026-11-13 (UTC)
+**State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
+`trace()`) is built on branch `claude/p2-differential`, awaiting merge. It found
+F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
+homelab, hourly as an edge-triggered systemd timer (first PASS against the real
+stack 2026-10-07 21:40 UTC).
 
 ## What lintarr is, and why
 
@@ -59,13 +61,48 @@ consistency.
   is not consulted, `seeding_queued` is always 0) is wrong: the upload limit
   queues seeders (`queuedUP`) when the slow exemption is off. Known in
   1-wedged-slow-off.
+  It also contradicts the **shipped predicate**, not only `trace()`. The
+  predicate FAILs the `_WEDGED` fixture (3/3/5, exemption off) and
+  `tests/test_check_cli.py` pins exit 1 on it. On 5.2.3 that fixture does not
+  wedge: in measurement item 4 (ul=3, tot=5) two seeders sit `queuedUP` and the
+  three downloads start. The predicate's own docstring already says why that
+  must be so: "a seeder that cannot get one does not hold a download back"
+  (`_no_slot_for_a_first_download`, `queue_liveness.py:483-484`). With ul=3 only
+  three seeders are active, so five seeders cannot hold five torrent slots. The
+  module's caveat that the wedge axiom "has never been validated against a
+  running qBittorrent" (`queue_liveness.py:80-85`) is stale: it has now been
+  measured, and on this build it does not hold for idle seeders. `src/` was not
+  changed in P2 slice 1 (R7), so the fixture and its exit-1 pin stand until Tom
+  decides what the FAIL should rest on.
 - **F3 (P2 differential, 2026-11-13).** `trace()` rule 3 is wrong:
   `dont_count_slow_torrents` frees `max_active_downloads` (and, observed in
-  1-wedged-slow-on, the upload limit) but NOT `max_active_torrents`. This is a
-  possible **false PASS** of the shipped predicate: its slow-exemption premise
-  (`qbt.slow_exempt_off`, `queue_liveness.py:1042`) treats the exemption as
-  rescuing a full `max_active_torrents`, and measured item 3e shows it does not.
-  Known in 1-wedged-slow-on, 1b-*-slow-on and 7-*-slow-on.
+  1-wedged-slow-on, the upload limit) but NOT `max_active_torrents`. Known in
+  1-wedged-slow-on, 1b-*-slow-on and 7-*-slow-on. The shipped predicate's
+  slow-exemption premise (`qbt.slow_exempt_off`, `queue_liveness.py:1042`)
+  treats the exemption as rescuing a full `max_active_torrents`. That is a false
+  PASS for **seeder absorption** only if some seeder wedge exists, and F1 says
+  idle seeders do not produce one. Actively uploading seeders are not "slow", so
+  the exemption would not cover them either way. A different route is real and
+  separate: measurement item 3e, a stalled **download** holding
+  `max_active_torrents=1` with the exemption on, keeps the next download
+  `queuedDL` for the 120 s watched. The predicate does not model that route at
+  all, and no differential scenario reproduces it yet.
+- **The registry records joint effects (blind spot).** Each Known entry records
+  the combined F1+F2+F3 trace, so fixing one finding in `trace()` makes no entry
+  stale and turns nothing red. "Model fixed, so the stale entry pages" holds only
+  when every finding behind a scenario is fixed together. Relatedly, mutating
+  rule 1, and the F3-shaped rule-3 change ("the exemption frees downloads but
+  not total"), both survive: every scenario that depends on them is Known, so
+  the live differential cannot yet tell the right rule from the wrong one (R4
+  partial; spec Goal 4 unmet).
+- **The nightly is silent when no run fails.** It pages only when a run exists
+  and fails. Three cases page nobody: GitHub auto-disables scheduled workflows on
+  a public repo after 60 days without repo activity; scheduled runs can be
+  dropped or delayed; and a revoked or empty `NTFY_TOKEN` turns the alert step
+  red, but nobody hears it.
+  `DECISION NEEDED:` (Tom) a dead-man's switch outside GitHub (e.g. a homelab
+  timer that checks the last successful conformance run is under 36 h old), or
+  explicit acceptance of the gap. Nothing is built yet.
 
 - **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
   `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
@@ -107,8 +144,10 @@ HTTP API, SQLite history) and the P3 invariants remain.
 **Known gap carried forward:** the simulator validates that the closed form was
 *derived* correctly. It cannot catch a *wrong model* — a sweep over the
 predicate's own parameters cannot discover a parameter the predicate is
-missing. That is P2's container differential test, and until it exists the
-flagship check rests on one reading of the qBittorrent docs.
+missing. P2's container differential now exists (P2 slice 1, branch
+`claude/p2-differential`) and has done exactly that: it found F1-F3, and each
+bears on the shipped predicate's assumptions, not only on `trace()`. What it found, and what it still cannot
+distinguish, is in Open items above.
 
 ## Hard-won lessons from the P0a build
 

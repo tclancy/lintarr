@@ -5,9 +5,9 @@
 `lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476` (qBittorrent **v5.2.3**,
 libtorrent **2.0.14**, the build homelab runs today). Harness: the container
 lifecycle of the `qbt` fixture in `tests/conformance/conftest.py`, logging every
-state transition of `GET /api/v2/torrents/info` at a 0.25 s poll. Every item is
-reproducible with `tools/probe_qbt_conformance.py` (its docstring says how to
-run each one, e.g. `uv run python tools/probe_qbt_conformance.py item4b --reps
+state transition of `GET /api/v2/torrents/info` at a 0.25 s poll.
+`tools/probe_qbt_conformance.py` is written to reproduce every item; 4b was
+re-run from it (its docstring says how to run each one, e.g. `uv run python tools/probe_qbt_conformance.py item4b --reps
 3`). The first session ran the same code from a throwaway pytest file; the 4b
 replications ran from the committed tool. The pinning test is
 `tests/conformance/test_assumptions.py`.
@@ -20,8 +20,8 @@ and reported here. `trace()`, `states.py` and the spec were not changed.
 
 ## TL;DR
 
-- **The headline wedge does not reproduce in the container with idle,
-  peerless seeders added complete, then stalled downloads added.** In item 4b
+- **The headline wedge does not reproduce in the container with idle
+  (upspeed 0, num_seeds 0) seeders added complete, then stalled downloads added.** In item 4b
   (`_WEDGED` with `max_active_uploads=-1`), five `stalledUP` seeders fill
   `max_active_torrents=5`. Three downloads added next all start, and three
   seeders are demoted to `queuedUP` to make room. `trace()` predicts
@@ -313,7 +313,7 @@ its slots.**
 
 None of these changes `trace()`, `states.py` or the spec. Each is for Tom.
 
-**F1. In this container, idle peerless seeders added complete do not hold a
+**F1. In this container, idle (upspeed 0, num_seeds 0) seeders added complete do not hold a
 full `max_active_torrents` against stalled downloads added after them.** The
 downloads start and seeders are demoted to `queuedUP`. Evidence: item 4b at the
 `_WEDGED` shape, 3 of 3 runs (`max_active_torrents=5` full of five `stalledUP`
@@ -326,8 +326,10 @@ What it contradicts:
 - `trace()` rule 1 ("every seeding torrent occupies a `max_active_torrents`
   slot"), insofar as the rule is used to block a queued start.
 - The predicate's absorbing-state claim: "seeders never release slots"
-  (`queue_liveness.py:9`) and "once five torrents completed they held every slot
-  permanently" (`queue_liveness.py:3-5`).
+  (`queue_liveness.py:9`). The module docstring's account of the #393 incident
+  (`queue_liveness.py:3-5`: "once five torrents completed they held every slot
+  permanently") is a narrative of what was diagnosed, not a claim the predicate
+  makes; F1 bears on it only as the explanation the predicate was built on.
 
 What it does not contradict: that seeders *count* against `max_active_torrents`
 (`_max_active_torrents_binds`, `queue_liveness.py:497-499`: "Seeding torrents
@@ -339,7 +341,7 @@ how many slots seeders actually reach" (`queue_liveness.py:83`).
 **Reconciling with #393.** #393 did wedge: 52 torrents, no active downloads, for
 weeks. So F1 does not refute the incident. It narrows the mechanism. "Seeders
 fill `max_active_torrents`" is not enough on its own, at least for idle seeders
-on this build. Something F1 did not reproduce must also hold.
+on this build. Something F1 did not reproduce may also be needed.
 
 Not measured, and each could be that something:
 - Torrents that *finish* downloading in place (the #393 path) rather than being
@@ -387,6 +389,80 @@ will every scenario whose prediction relies on rules 1, 2 or 3 with seeders
 present or `max_active_torrents` binding. The brief says a disagreement here is
 expected to become a known disagreement in Task 5. That registry was not
 created in this task.
+
+## Differential observations (Task 5, 2026-11-13)
+
+The evidence behind the Known entries in `tests/conformance/known.py`, copied
+from the Task 5 run of `tests/conformance/test_differential.py` against the same
+pinned image. Settings: `settle_s` 15, poll 1 s, timeout 45 s, slow timer 1.
+Counts are `(downloading, queued, seeding, seeding_queued, left)`, one per
+event. Raw rows are `name hash-prefix state`; `cN` names are complete torrents,
+`iN` incomplete. Every disagreement below gave the same counts on both attempts,
+and the final full run (33 passed) passed every one against its Known entry.
+
+| id | predicted by `trace()` | observed | finding |
+|---|---|---|---|
+| 1-wedged-slow-off | (0,0,5,0,0) (0,3,5,0,0) | (0,0,3,2,0) (3,0,2,3,0) | F2, F1 |
+| 1-wedged-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3 |
+| 1b-wedged-uploads-unlimited-slow-off | (0,0,5,0,0) (0,3,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F1 |
+| 1b-wedged-uploads-unlimited-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3 |
+| 7-remove-seeder-slow-off | (0,0,3,0,0) (0,2,3,0,0) (1,1,2,0,0) | (0,0,3,0,0) (2,0,1,2,0) (2,0,1,1,0) | F1 |
+| 7-remove-seeder-slow-on | (0,0,3,0,0) (2,0,3,0,0) (2,0,2,0,0) | (0,0,3,0,0) (2,0,1,2,0) (2,0,1,1,0) | F3 |
+
+**1-wedged-slow-off** (dl/ul/tot 3/3/5, exemption off). The raw rows of this
+run were not kept: its second attempt hit a since-fixed harness race
+(`missingFiles` on reused hashes), and the second exception replaced the first
+attempt's notes. The counts come from the first attempt's failure message. They
+equal item 4 above, whose raw rows are recorded there. At step 0
+`max_active_uploads=3` holds 2 of 5 seeders `queuedUP` (F2); at step 1 the 3
+downloads start and a third seeder goes `queuedUP` (F1). Active total 5.
+
+**1-wedged-slow-on** (3/3/5, exemption on):
+- step 0: c0 30f61dcc882c, c1 e2145f101de6, c2 1af9d56a4f50, c3 8519b9b6cd01,
+  c4 73b251c93a4f, all `stalledUP`.
+- step 1: i5 8bbcc9619ae9, i6 07fdef700321, i7 8869aa5462af `stalledDL`; c0,
+  c1, c2 `queuedUP`; c3, c4 `stalledUP`.
+- `trace()` exempts every slow torrent from every limit and predicts 8 active;
+  the client caps the active total at `max_active_torrents=5` (F3), and the
+  downloads take the slots (F1). Side observation: with the exemption on, the
+  upload limit of 3 did not hold seeders at step 0 (5 `stalledUP`), so the
+  exemption does free `max_active_uploads`.
+
+**1b-wedged-uploads-unlimited-slow-off** (3/-1/5, exemption off):
+- step 0: c0 9bc2332b82da, c1 f3b90c2ef4d1, c2 dbc30f51b314, c3 a5f0c5dcf9c0,
+  c4 a49dfdc4322f, all `stalledUP`.
+- step 1: i5 aabbb5dea876, i6 8f7bb3c0f982, i7 8637cf978bc2 `stalledDL`; c0,
+  c1, c2 `queuedUP`; c3, c4 `stalledUP`.
+- `max_active_torrents` was full of 5 active seeders and the downloads started
+  anyway (F1); `trace()` predicts they queue. Same counts as item 4b.
+
+**1b-wedged-uploads-unlimited-slow-on** (3/-1/5, exemption on):
+- step 0: c0 cba77143e0a5, c1 134ef6d1214c, c2 a66d71f60462, c3 b15efb4a8f97,
+  c4 d71061f3d0ff, all `stalledUP`.
+- step 1: i5 760725769314, i6 978e4862a330, i7 d2d687c51e37 `stalledDL`; c0,
+  c1, c2 `queuedUP`; c3, c4 `stalledUP`.
+- F3, as for 1-wedged-slow-on.
+
+**7-remove-seeder-slow-off** (-1/-1/3, exemption off; events
+`AddComplete(3), AddIncomplete(2), RemoveSeeder()`):
+- step 0: c0 fc2822435c87, c1 8c52e2caa355, c2 f0e0b429ead6, all `stalledUP`.
+- step 1: i3 ab9aa46eade0, i4 586dc374384c `stalledDL`; c0 `stalledUP`; c1, c2
+  `queuedUP`.
+- step 2 (c0, the one active seeder, deleted): i3, i4 `stalledDL`; c1
+  `queuedUP`; **c2 `stalledUP`**.
+- The downloads displace 2 seeders (F1), so no download is ever queued. Step 2
+  is new evidence, not measured in Task 4: **a `queuedUP` seeder resumes into
+  the slot the deleted seeder freed.** `trace()`'s "the queue advances by one"
+  never has a queued download to advance.
+
+**7-remove-seeder-slow-on** (-1/-1/3, exemption on):
+- step 0: c0 b6e6c39f2af9, c1 0ebc4be67909, c2 f5272bbfc236, all `stalledUP`.
+- step 1: i3 42a5d8e51f30, i4 1bfc9e92b8a9 `stalledDL`; c0 `stalledUP`; c1, c2
+  `queuedUP`.
+- step 2 (c0 deleted): i3, i4 `stalledDL`; c1 `queuedUP`; **c2 `stalledUP`**,
+  the same queuedUP-seeder resume as slow-off.
+- The exemption does not lift `max_active_torrents=3` (F3), so the active total
+  stays 3, not the 5 `trace()` predicts; the seeders yield (F1).
 
 ## What `test_assumptions.py` pins
 

@@ -7,7 +7,9 @@ changing turns the scenario red. An entry is added by hand in a PR, never by the
 harness: that PR is the "seen and understood" step.
 
 The findings F1-F3 are in docs/measurements/2026-11-13-qbt-conformance-assumptions.md
-("Stop-rule findings"); Tom ruled them seen and understood on 2026-11-13.
+("Stop-rule findings"); Tom ruled them seen and understood on 2026-11-13. The
+raw states behind each entry are in the same doc, "Differential observations
+(Task 5, 2026-11-13)".
 """
 
 from dataclasses import dataclass
@@ -30,7 +32,8 @@ _SEEDERS_IDLE = Counts(0, 0, 5, 0, 0)
 _DOWNLOADS_DISPLACE = Counts(3, 0, 2, 3, 0)
 # Scenario 7: 2 downloads displace 2 of 3 seeders; removing the one active seeder
 # lets one queuedUP seeder resume. No download was ever queued. Step 2 (a queuedUP
-# seeder resuming after the delete) was first observed here, not in Task 4.
+# seeder resuming after the delete) was first observed in this differential, not
+# in Task 4; the raw rows are in the measurements doc, "Differential observations".
 _REMOVE_SEEDER = (Counts(0, 0, 3, 0, 0), Counts(2, 0, 1, 2, 0), Counts(2, 0, 1, 1, 0))
 
 _F1 = f"F1: seeders yield max_active_torrents slots to new downloads {_MEASURED}"
@@ -41,7 +44,8 @@ _F3 = (
 
 _STEP2_NEW = (
     "; step 2, a queuedUP seeder resuming into the freed slot, was first observed "
-    "in this differential (2026-11-13), not measured in Task 4"
+    "in this differential, not measured in Task 4 (measurements 2026-11-13, "
+    "Differential observations)"
 )
 
 KNOWN_DISAGREEMENTS: dict[str, Known] = {
