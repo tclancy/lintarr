@@ -12,13 +12,17 @@ _URL = "https://github.com/tclancy/lintarr/actions/runs/1"
 _TOKEN = "tk_super_secret_value"
 
 
+_STDIN: dict[Path, str] = {}
+
+
 def _fake_curl(bin_dir: Path, exit_code: int) -> Path:
     log = bin_dir / "argv.json"
     stub = bin_dir / "curl"
     stub.write_text(
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
-        f"open({str(log)!r}, 'w').write(json.dumps(sys.argv[1:]))\n"
+        "stdin = sys.stdin.read() if '--config' in sys.argv else ''\n"
+        f"open({str(log)!r}, 'w').write(json.dumps({{'argv': sys.argv[1:], 'stdin': stdin}}))\n"
         "print('fake curl output mentioning nothing secret')\n"
         f"sys.exit({exit_code})\n"
     )
@@ -44,8 +48,10 @@ def _run(tmp_path: Path, *, token: str = _TOKEN, result: object = None, curl_exi
     proc = subprocess.run(
         ["bash", str(_SCRIPT)], cwd=work, env=env, capture_output=True, text=True, check=False
     )
-    argv = json.loads(log.read_text()) if log.exists() else None
-    return proc, argv
+    call = json.loads(log.read_text()) if log.exists() else None
+    if call is not None:
+        _STDIN[tmp_path] = call["stdin"]
+    return proc, call["argv"] if call else None
 
 
 def _header(argv: list[str], name: str) -> str:
@@ -82,12 +88,23 @@ def test_disagreement_result_sets_title_body_and_url(tmp_path):
     proc, argv = _run(tmp_path, result=result)
     assert proc.returncode == 0, proc.stderr
     assert "disagreement" in _header(argv, "Title")
+    assert _STDIN[tmp_path] == f'header = "Authorization: Bearer {_TOKEN}"\n'
+    assert _TOKEN not in " ".join(argv)
+    assert "--config" in argv
     assert _header(argv, "Priority") == "Priority: high"
     assert _header(argv, "Click") == f"Click: {_URL}"
     assert _body(argv).startswith("disagreement: 1-a,2-b")
     assert _URL in _body(argv)
     assert "--fail-with-body" in argv
     assert argv[-1] == "https://notifications.tomclancy.info/homelab-alerts"
+
+
+@pytest.mark.parametrize("kind", ["pass", "disagreement\nPriority: min", "", "DISAGREEMENT", 7])
+def test_an_unknown_kind_is_a_harness_error(tmp_path, kind):
+    proc, argv = _run(tmp_path, result={"kind": kind, "failed": ["a"]})
+    assert proc.returncode == 0, proc.stderr
+    assert _body(argv).startswith("harness-error")
+    assert "harness-error" in _header(argv, "Title")
 
 
 def test_failed_ids_are_capped_at_300_chars(tmp_path):

@@ -19,15 +19,20 @@ permissions:
 jobs:
   conformance:
     runs-on: ubuntu-latest
-    # timeout-minutes arithmetic (brief's formula, scenarios x events x
-    # (settle + 2 polls) x 2 retry + 3 min container start):
-    #   18 scenarios, 34 events in total (sum over scenarios, max 3 each)
-    #   settle_s = 15, poll ~1-2 s so 2 polls = 4 s -> 19 s per event
-    #   34 x 19 s x 2 = 1292 s = 21.5 min; + 3 min start = 24.5 -> 25 min.
-    # Measured, for scale: the full local container run (33 items: 18
-    # differential + 15 harness/assumption tests) took 738 s = 12.3 min.
-    # 25 is under the 45 min ceiling, so no matrix split is needed.
-    timeout-minutes: 25
+    # Timeouts. The brief's formula (scenarios x events x (settle + 2 polls)
+    # x 2 retry + 3 min container start):
+    #   18 scenarios, 34 events in total; settle_s = 15, 2 polls ~ 4 s
+    #   34 x 19 s x 2 = 1292 s = 21.5 min; + 3 min start = 24.5 min.
+    # Measured: the full local container run (33 items) took 738 s = 12.3 min.
+    # But the formula ignores the per-event TIMEOUT_S = 45: worst case is
+    # 34 x 45 s x 2 = ~51 min, and a night where the harness stalls (every
+    # scenario fails its first event twice) takes ~27 min.
+    # A job-level timeout CANCELS the job, and failure() is false for a
+    # cancelled job, so the pytest step carries its own 35 min timeout: that
+    # fails the step, which turns any overrun into a harness-error page. The
+    # job's 40 min sits above it as a backstop, and the alert also runs on
+    # cancelled().
+    timeout-minutes: 40
     env:
       UV_PYTHON: "3.13"
     steps:
@@ -46,12 +51,13 @@ jobs:
 
       - name: Run conformance differential
         run: uv run --frozen pytest -m container -q
+        timeout-minutes: 35
         env:
           CONFORMANCE_FORCE_FAILURE: ${{ inputs.force_failure }}
 
-      # Only runs when an earlier step failed, so a green run never exercises it.
+      # Runs only after a failure or cancellation, so a green run never exercises it.
       - name: Alert on failure
-        if: failure()
+        if: failure() || cancelled()
         run: tools/conformance_alert.sh
         env:
           NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}

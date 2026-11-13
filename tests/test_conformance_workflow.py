@@ -55,6 +55,17 @@ def test_permissions_are_read_only_and_there_is_one_job():
     assert 0 < job["timeout-minutes"] <= 45
 
 
+def test_a_step_timeout_fails_the_step_and_sits_inside_the_job_timeout():
+    """A job-level timeout CANCELS the job and failure() is false for a cancelled
+    job, so the pytest step needs its own, shorter, timeout to turn an overrun
+    into a failure that pages."""
+    doc = _load(_WORKFLOW)
+    (job,) = doc["jobs"].values()
+    (step,) = [s for s in job["steps"] if "pytest" in s.get("run", "")]
+    assert isinstance(step["timeout-minutes"], int)
+    assert 0 < step["timeout-minutes"] < job["timeout-minutes"]
+
+
 def test_the_pytest_step_runs_the_container_marker_with_the_drill_flag():
     steps = [s for s in _steps(_load(_WORKFLOW)) if "pytest" in s.get("run", "")]
     assert len(steps) == 1, steps
@@ -67,7 +78,7 @@ def test_the_alert_step_runs_on_failure_with_the_secret_and_run_url():
     steps = [s for s in _steps(_load(_WORKFLOW)) if "conformance_alert.sh" in s.get("run", "")]
     assert len(steps) == 1, steps
     (step,) = steps
-    assert step["if"] == "failure()"
+    assert step["if"] == "failure() || cancelled()"
     assert step["env"]["NTFY_TOKEN"] == "${{ secrets.NTFY_TOKEN }}"
     assert step["env"]["RUN_URL"] == (
         "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

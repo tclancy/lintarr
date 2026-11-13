@@ -22,7 +22,9 @@ path = sys.argv[1]
 try:
     with open(path) as fh:
         data = json.load(fh)
-    kind = str(data["kind"])
+    kind = data["kind"]
+    if kind not in ("disagreement", "unmapped-state", "harness-error"):
+        kind = "harness-error"
     failed = ",".join(str(i) for i in data.get("failed", []))
 except FileNotFoundError:
     kind, failed = "harness-error", f"{path} was missing"
@@ -37,8 +39,10 @@ result="$(read_result)"
 kind="$(printf '%s\n' "$result" | sed -n 1p)"
 failed="$(printf '%s\n' "$result" | sed -n 2p)"
 
-curl --fail-with-body -sS \
-  -H "Authorization: Bearer $NTFY_TOKEN" \
+# The token goes to curl on stdin (--config -), never argv, so it is invisible
+# to `ps` and to xtrace. printf is a builtin, so it forks no argv either.
+printf 'header = "Authorization: Bearer %s"\n' "$NTFY_TOKEN" | curl --fail-with-body -sS \
+  --config - \
   -H "Title: lintarr conformance: $kind" \
   -H "Priority: high" \
   -H "Click: $RUN_URL" \
