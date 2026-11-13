@@ -403,11 +403,11 @@ and the final full run (33 passed) passed every one against its Known entry.
 | id | predicted by `trace()` | observed | finding |
 |---|---|---|---|
 | 1-wedged-slow-off | (0,0,5,0,0) (0,3,5,0,0) | (0,0,3,2,0) (3,0,2,3,0) | F2, F1 |
-| 1-wedged-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3 |
+| 1-wedged-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3, F1 |
 | 1b-wedged-uploads-unlimited-slow-off | (0,0,5,0,0) (0,3,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F1 |
-| 1b-wedged-uploads-unlimited-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3 |
+| 1b-wedged-uploads-unlimited-slow-on | (0,0,5,0,0) (3,0,5,0,0) | (0,0,5,0,0) (3,0,2,3,0) | F3, F1 |
 | 7-remove-seeder-slow-off | (0,0,3,0,0) (0,2,3,0,0) (1,1,2,0,0) | (0,0,3,0,0) (2,0,1,2,0) (2,0,1,1,0) | F1 |
-| 7-remove-seeder-slow-on | (0,0,3,0,0) (2,0,3,0,0) (2,0,2,0,0) | (0,0,3,0,0) (2,0,1,2,0) (2,0,1,1,0) | F3 |
+| 7-remove-seeder-slow-on | (0,0,3,0,0) (2,0,3,0,0) (2,0,2,0,0) | (0,0,3,0,0) (2,0,1,2,0) (2,0,1,1,0) | F3, F1 |
 
 **1-wedged-slow-off** (dl/ul/tot 3/3/5, exemption off). The raw rows of this
 run were not kept: its second attempt hit a since-fixed harness race

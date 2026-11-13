@@ -82,15 +82,19 @@ consistency.
   treats the exemption as rescuing a full `max_active_torrents`. That is a false
   PASS for **seeder absorption** only if some seeder wedge exists, and F1 says
   idle seeders do not produce one. Actively uploading seeders are not "slow", so
-  the exemption would not cover them either way. A different route is real and
+  the exemption would not free their slots: if they can wedge (unmeasured; the
+  next slice), the predicate PASSes that config wrongly, independently of F3.
+  That is a separate false-PASS candidate. A different route is real and
   separate: measurement item 3e, a stalled **download** holding
   `max_active_torrents=1` with the exemption on, keeps the next download
   `queuedDL` for the 120 s watched. The predicate does not model that route at
   all, and no differential scenario reproduces it yet.
-- **The registry records joint effects (blind spot).** Each Known entry records
-  the combined F1+F2+F3 trace, so fixing one finding in `trace()` makes no entry
-  stale and turns nothing red. "Model fixed, so the stale entry pages" holds only
-  when every finding behind a scenario is fixed together. Relatedly, mutating
+- **The registry records joint effects (blind spot).** Every Known entry that F2
+  or F3 explains also carries F1, so fixing F2 or F3 alone in `trace()` makes no
+  entry stale and turns nothing red. Fixing F1 alone does stale the F1-only
+  entries (1b-*-slow-off, and 7-*-slow-off if the fix models the step-2 resume).
+  "Model fixed, so the stale entry pages" holds only when every finding behind a
+  scenario is fixed together. Relatedly, mutating
   rule 1, and the F3-shaped rule-3 change ("the exemption frees downloads but
   not total"), both survive: every scenario that depends on them is Known, so
   the live differential cannot yet tell the right rule from the wrong one (R4
