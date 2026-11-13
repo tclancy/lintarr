@@ -51,22 +51,52 @@ def _docker(*args: str, timeout: float = DOCKER_TIMEOUT) -> None:
         raise HarnessError(f"docker {' '.join(args[:2])} failed: {r.stderr.strip()}")
 
 
-def _sweep_stale() -> None:
-    """Remove leftovers from a crashed session or a timed-out `docker run`.
+EXPIRY_LABEL = "lintarr-conformance.expires"
+LIFETIME_SECONDS = 2 * 60 * 60  # comfortably above any session's length
 
-    The name prefix is ours alone, so removing everything that matches is safe.
+
+def _expired(lines: list[str], now: float) -> list[str]:
+    """Container IDs from `<id> <expiry epoch>` lines whose expiry has passed.
+
+    Malformed lines are ignored: a container we cannot date is never removed.
     """
-    r = _run(["ps", "-aq", "--filter", "name=^lintarr-conformance-"], DOCKER_TIMEOUT)
-    for cid in r.stdout.split():
-        _run(["rm", "-f", cid], DOCKER_TIMEOUT)
+    ids = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            if float(parts[1]) <= now:
+                ids.append(parts[0])
+        except ValueError:
+            continue
+    return ids
+
+
+def _warn_rm_failed(target: str, detail: str) -> None:
+    warnings.warn(f"docker rm -f {target} failed: {detail}", RuntimeWarning, stacklevel=3)
+
+
+def _sweep_expired() -> None:
+    """Remove containers whose expiry label has passed (a crashed session, or one
+    leaked by a timed-out `docker run`). Containers of a concurrent live run carry
+    a future expiry and are never touched.
+    """
+    fmt = '{{.ID}} {{.Label "' + EXPIRY_LABEL + '"}}'
+    r = _run(["ps", "-a", "--filter", f"label={EXPIRY_LABEL}", "--format", fmt], DOCKER_TIMEOUT)
+    for cid in _expired(r.stdout.splitlines(), time.time()):
+        _remove(cid)
 
 
 def _remove(container: str) -> None:
-    r = _run(["rm", "-f", container], DOCKER_TIMEOUT)
+    """Remove a container; never raises, so it cannot mask an in-flight exception."""
+    try:
+        r = _run(["rm", "-f", container], DOCKER_TIMEOUT)
+    except HarnessError as exc:
+        _warn_rm_failed(container, str(exc))
+        return
     if r.returncode != 0:
-        warnings.warn(
-            f"docker rm -f {container} failed: {r.stderr.strip()}", RuntimeWarning, stacklevel=2
-        )
+        _warn_rm_failed(container, r.stderr.strip())
 
 
 def _wait_ready(base_url: str) -> None:
@@ -99,10 +129,12 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
     port = _free_port()
     container = f"lintarr-conformance-{port}"  # teardown keys on the name, not parsed output
     harness = None
+    started = False
     try:
-        _sweep_stale()
+        _sweep_expired()
         _docker(
             "run", "-d", "--rm", "--name", container,
+            "--label", f"{EXPIRY_LABEL}={int(time.time()) + LIFETIME_SECONDS}",
             "-p", f"127.0.0.1:{port}:{port}",
             "-e", f"WEBUI_PORT={port}",
             "-e", f"PUID={os.getuid()}",
@@ -111,6 +143,7 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
             QBT_IMAGE,
             timeout=PULL_TIMEOUT,
         )  # fmt: skip
+        started = True
         base_url = f"http://127.0.0.1:{port}"
         _wait_ready(base_url)
         time.sleep(2)  # the WebUI answers a beat before auth is wired up (probe_qbt_ban.py)
@@ -122,4 +155,5 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
             if harness is not None:
                 harness.close()
         finally:
-            _remove(container)
+            if started:
+                _remove(container)
