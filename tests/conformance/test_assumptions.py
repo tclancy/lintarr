@@ -6,6 +6,7 @@ changes what a differential scenario means. Needs Docker.
 """
 
 import time
+from collections.abc import Callable
 
 import pytest
 
@@ -19,8 +20,9 @@ pytestmark = pytest.mark.container
 SHARE_LIMIT_TIMEOUT = 30.0
 # Measured: an add settles in 1.3-3.2 s (checkingResumeData, then any queue release).
 SETTLE_TIMEOUT = 10.0
-# How long a torrent that should stay queued is watched for.
-HOLD_SECONDS = 15.0
+# How long a state that should hold is watched, asserted on every poll. Longer
+# than libtorrent's 30 s auto-manage interval, so a tick-driven change is caught.
+HOLD_SECONDS = 35.0
 POLL = 0.25
 
 # Every key a test below touches, at the image's own default, restored first.
@@ -51,7 +53,11 @@ def _fresh(qbt: QbtHarness, prefs: dict[str, object]) -> None:
     qbt.set_prefs(_QUEUE_DEFAULTS | prefs)
 
 
-def _assert_eventually(qbt: QbtHarness, done, timeout: float) -> dict[str, str]:
+States = dict[str, str]
+Check = Callable[[States], bool]
+
+
+def _assert_eventually(qbt: QbtHarness, done: Check, timeout: float) -> States:
     deadline = time.monotonic() + timeout
     states = qbt.states()
     while not done(states):
@@ -62,7 +68,16 @@ def _assert_eventually(qbt: QbtHarness, done, timeout: float) -> dict[str, str]:
     return states
 
 
-def _state_is(t: HarnessTorrent, want: str):
+def _assert_holds(qbt: QbtHarness, holds: Check, seconds: float = HOLD_SECONDS) -> None:
+    """Assert `holds` on every poll for `seconds`, not only at the end."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        states = qbt.states()
+        assert holds(states), f"stopped holding after {seconds:.0f}s window began: {states}"
+        time.sleep(POLL)
+
+
+def _state_is(t: HarnessTorrent, want: str) -> Check:
     return lambda states: states.get(t.info_hash) == want
 
 
@@ -128,14 +143,13 @@ def _two_incompletes(
 
 def _assert_held_in_queue(qbt: QbtHarness, t: HarnessTorrent) -> None:
     _assert_eventually(qbt, _state_is(t, "queuedDL"), SETTLE_TIMEOUT)
-    time.sleep(HOLD_SECONDS)
-    assert qbt.states()[t.info_hash] == "queuedDL"
+    _assert_holds(qbt, _state_is(t, "queuedDL"))
 
 
 def test_slow_exemption_frees_the_download_limit(qbt):
     """Item 3, end to end: exemption on, 1 s timer, max_active_downloads=1 full.
-    The second download reaches stalledDL within one settle (measured 1.3-3.2 s;
-    it sometimes passes through queuedDL for ~1.6 s, sometimes skips it)."""
+    The second download reaches stalledDL within one settle. Item 3d measured
+    1.32 s, 1.32 s and 3.15 s; the 3.15 s run sat in queuedDL for 1.57 s first."""
     b = _two_incompletes(qbt, _DOWNLOAD_LIMIT_1, dont_count=True, tag="dl-exempt")
     _assert_eventually(qbt, _state_is(b, "stalledDL"), SETTLE_TIMEOUT)
 
@@ -171,10 +185,15 @@ def test_download_displaces_seeder_from_full_torrent_limit(qbt, dont_count):
     seeds = [make_torrent(f"assume-displace-{dont_count}-s{i}") for i in range(2)]
     for s in seeds:
         qbt.add(s, complete=True)
-    _assert_eventually(qbt, lambda st: all(st.get(s.info_hash) == "stalledUP" for s in seeds), 10)
+    _assert_eventually(
+        qbt, lambda st: all(st.get(s.info_hash) == "stalledUP" for s in seeds), SETTLE_TIMEOUT
+    )
     inc = make_torrent(f"assume-displace-{dont_count}-inc")
     _add_settled(qbt, inc, complete=False, want="stalledDL")
-    time.sleep(HOLD_SECONDS)
-    states = qbt.states()
-    assert states[inc.info_hash] == "stalledDL"
-    assert sorted(states[s.info_hash] for s in seeds) == ["queuedUP", "stalledUP"]
+
+    def displaced(states: States) -> bool:
+        seeders = sorted(states.get(s.info_hash, "<absent>") for s in seeds)
+        return states.get(inc.info_hash) == "stalledDL" and seeders == ["queuedUP", "stalledUP"]
+
+    _assert_eventually(qbt, displaced, SETTLE_TIMEOUT)
+    _assert_holds(qbt, displaced)

@@ -1,11 +1,16 @@
 # qBittorrent 5.2.3: what the conformance differential assumes, measured
 
-**Measured 2026-11-13, 00:11 to 00:38 UTC**, against the pinned conformance image
+**Measured 2026-11-13, 00:11 to 00:38 UTC, plus two item-4b replications at
+00:51 to 00:55 UTC**, against the pinned conformance image
 `lscr.io/linuxserver/qbittorrent:5.2.3_v2.0.14-ls476` (qBittorrent **v5.2.3**,
-libtorrent **2.0.14**, the build homelab runs). Harness: the session fixture `qbt` in
-`tests/conformance/conftest.py`, driven from a throwaway pytest file that logged
-every state transition of `GET /api/v2/torrents/info` at a 0.25 s poll. The
-pinning test is `tests/conformance/test_assumptions.py`.
+libtorrent **2.0.14**, the build homelab runs today). Harness: the container
+lifecycle of the `qbt` fixture in `tests/conformance/conftest.py`, logging every
+state transition of `GET /api/v2/torrents/info` at a 0.25 s poll. Every item is
+reproducible with `tools/probe_qbt_conformance.py` (its docstring says how to
+run each one, e.g. `uv run python tools/probe_qbt_conformance.py item4b --reps
+3`). The first session ran the same code from a throwaway pytest file; the 4b
+replications ran from the committed tool. The pinning test is
+`tests/conformance/test_assumptions.py`.
 
 This is Task 4 (spec check R10) of P2 slice 1
 (`docs/superpowers/specs/2026-11-12-p2-container-differential-design.md`). It
@@ -15,12 +20,15 @@ and reported here. `trace()`, `states.py` and the spec were not changed.
 
 ## TL;DR
 
-- **The headline wedge does not reproduce.** Five seeders filling
-  `max_active_torrents=5` under the `_WEDGED` prefs **do not** keep three new
-  downloads queued. libtorrent starts all three downloads and demotes seeders to
-  `queuedUP` to make room. `trace()` predicts `queued=3`; the container says
-  `queued=0`. This holds with `max_active_uploads=3` (item 4) and with `-1`
-  (item 4b). See "Stop-rule findings" F1.
+- **The headline wedge does not reproduce in the container with idle,
+  peerless seeders added complete, then stalled downloads added.** In item 4b
+  (`_WEDGED` with `max_active_uploads=-1`), five `stalledUP` seeders fill
+  `max_active_torrents=5`. Three downloads added next all start, and three
+  seeders are demoted to `queuedUP` to make room. `trace()` predicts
+  `queued=3`; the container says `queued=0`, in 3 of 3 runs. Four more runs at
+  `max_active_torrents=2` (3b, 3c) show the same displacement. #393 did wedge,
+  so this narrows the mechanism that can produce the wedge; it does not refute
+  the incident. See "Stop-rule findings" F1 for what was not measured.
 - **`max_active_uploads` binds seeders.** With five seeders and
   `max_active_uploads=3`, two sit in `queuedUP` (F2). This is the rule-2
   disagreement the spec predicted.
@@ -71,10 +79,10 @@ Every state seen that was not the settled one, in all runs:
 
 | transient | when | lasted | count |
 |---|---|---|---|
-| absent from `torrents/info` | the poll right after `torrents/add` | ≤0.26 s | 1 of 47 adds (00:32:25.188Z) |
+| absent from `torrents/info` | the poll right after `torrents/add` | ≤0.26 s | 1 of 63 adds (00:32:25.188Z) |
 | `checkingResumeData` | every add, complete or not | 0.26 to 1.59 s | every add |
 | `queuedUP` on a fresh seeder, then `stalledUP` | 2 seeders, all limits free | 1.32 s (00:15:40.610Z to 00:15:41.928Z) | 1 run |
-| `queuedDL` on a fresh download, then `stalledDL` | download slots free (item 4, all 3 incompletes) | 1.32 s (00:34:22.147Z to 00:34:23.472Z) | 1 run (item 4; in 4b they went straight to `stalledDL`) |
+| `queuedDL` on a fresh download, then `stalledDL` | 3 downloads added to 5 seeders (items 4, 4b) | 1.31 to 1.57 s (e.g. 00:34:22.147Z to 00:34:23.472Z) | 3 of 4 runs (item 4; 4b reps 2 and 3; 4b rep 1 went straight to `stalledDL`) |
 | `queuedDL`, then `stalledDL` | slow exemption releasing `max_active_downloads` | 1.57 s (00:24:17.552Z to 00:24:19.130Z) | 1 of 4 runs |
 
 `tally()` counts the first row as **left** and the last two as **queued**. So
@@ -259,30 +267,92 @@ Item 4b, step 1, 00:36:32.245Z: all five seeds `stalledUP` (`7eefccc5dd4c`,
 `865192f3c4fa` and `e7f5e32558d8` `stalledUP`. All three downloads were
 `stalledDL` by 00:36:32.524Z, 0.27 s after being added.
 
-In both, the active total is exactly 5 = `max_active_torrents`, and 3 =
-`max_active_downloads` of them are the downloads. **The torrent limit is
-enforced, but downloads take priority over seeders for its slots.**
+**Item 4b, replicated** with `tools/probe_qbt_conformance.py item4b --reps 2`
+(00:51:02Z and 00:53:12Z). Both runs: step 1 `(0, 0, 5, 0, 0)`, step 2
+`(3, 0, 2, 3, 0)`. The downloads went `queuedDL` 0.27 s after the add, then
+`stalledDL` at 1.58 s (rep 2) and 1.84 s (rep 3), and three seeders went
+`queuedUP` on the same poll. Raw step-2 rows of rep 2, 00:53:12.938Z, as
+returned (fields cut to those that matter):
+
+```json
+{"hash": "5c56dd09212bfe7b1ef0754fce732cfcd27604ea", "name": "probe4b-r1-inc0", "state": "stalledDL", "num_seeds": 0, "priority": 1, "dlspeed": 0, "upspeed": 0}
+{"hash": "3fe279c63392c5c9a03a2a027557b319e8370e71", "name": "probe4b-r1-inc1", "state": "stalledDL", "num_seeds": 0, "priority": 2, "dlspeed": 0, "upspeed": 0}
+{"hash": "e5e3a377060442cf0dae58f1a874e9cc73125d05", "name": "probe4b-r1-inc2", "state": "stalledDL", "num_seeds": 0, "priority": 3, "dlspeed": 0, "upspeed": 0}
+{"hash": "3a34f408cb7fca15f444d07d902af318ad73f91a", "name": "probe4b-r1-seed0", "state": "queuedUP", "num_seeds": 0, "priority": 0, "dlspeed": 0, "upspeed": 0}
+{"hash": "ee29b60048e6a240e1ae42a6b8f77b8a11a23422", "name": "probe4b-r1-seed1", "state": "queuedUP", "num_seeds": 0, "priority": 0, "dlspeed": 0, "upspeed": 0}
+{"hash": "35a3afed312b1f68a073658cc68540afe035d65c", "name": "probe4b-r1-seed2", "state": "queuedUP", "num_seeds": 0, "priority": 0, "dlspeed": 0, "upspeed": 0}
+{"hash": "9d6bdadbfab7dc05bbee1e8953d96eecbfa3dd0d", "name": "probe4b-r1-seed3", "state": "stalledUP", "num_seeds": 0, "priority": 0, "dlspeed": 0, "upspeed": 0}
+{"hash": "28daa5bde5aab6250c5bfa9349a69482b2f3c59a", "name": "probe4b-r1-seed4", "state": "stalledUP", "num_seeds": 0, "priority": 0, "dlspeed": 0, "upspeed": 0}
+```
+
+(The tool numbers its own reps from 1, so the `-r1-` names are this doc's rep
+2.) Rep 3 is the same shape with hashes `972c908c304b…`, `8d011887a0f7…`,
+`3a4d6ff13422…` `stalledDL` (priority 1 to 3); `14ccd814054c…`,
+`5b7628cd0dc4…`, `4e6f8d19952b…` `queuedUP`; `8a9bef809971…`, `6992b66b43b3…`
+`stalledUP`.
+
+| 4b rep | UTC | step 1 | step 2 |
+|---|---|---|---|
+| 1 | 00:35:52Z | `(0, 0, 5, 0, 0)` | `(3, 0, 2, 3, 0)` |
+| 2 | 00:51:02Z | `(0, 0, 5, 0, 0)` | `(3, 0, 2, 3, 0)` |
+| 3 | 00:53:12Z | `(0, 0, 5, 0, 0)` | `(3, 0, 2, 3, 0)` |
+
+**What item 4 and 4b each show.** Only 4b is a clean test of a full torrent
+limit. In 4b all five seeders were active, so `max_active_torrents=5` was full
+when the downloads arrived, and the downloads still started. In item 4 (`ul=3`)
+only three seeders were active at step 1, because `max_active_uploads` had
+queued two (F2). The torrent limit therefore had two free slots when the
+downloads arrived. Three downloads in two free slots still demoted one more
+seeder, but item 4 does not show seeders being displaced from a *full* limit.
+In every run the active total after step 2 is exactly 5 = `max_active_torrents`,
+and 3 = `max_active_downloads` of them are the downloads. **The torrent limit is
+enforced, but for these idle seeders, downloads take priority over them for
+its slots.**
 
 ## Stop-rule findings
 
 None of these changes `trace()`, `states.py` or the spec. Each is for Tom.
 
-**F1. Seeders do not hold `max_active_torrents` slots against a download.**
-Seen in items 3b, 3c, 4 and 4b, 6 runs out of 6, with the exemption on and off.
-This contradicts `trace()` rule 1 ("every seeding torrent occupies a
-`max_active_torrents` slot", in the sense of blocking a queued start). It also
-contradicts the premise of the predicate's seeder-absorption wedge
-(`queue_liveness.py`, module docstring point 2: "Seeders absorb every slot";
-`_max_active_torrents_binds`). The predicate's own docstring already flags this
-as unvalidated: "libtorrent's allocation order may bound how many slots seeders
-actually reach". The measurement says it does, for this build, at least in the
-order "seeders exist, then downloads are added". Not measured: torrents that
-*finish* downloading in place (the #393 path) rather than being added complete.
-Those are marked complete by libtorrent through a different route, and the
-container cannot finish a download because no peers exist. The likely mechanism
-is libtorrent ranking downloading torrents ahead of seeding ones when it hands
-out `active_limit` slots. That has not been checked against libtorrent source
-here.
+**F1. In this container, idle peerless seeders added complete do not hold a
+full `max_active_torrents` against stalled downloads added after them.** The
+downloads start and seeders are demoted to `queuedUP`. Evidence: item 4b at the
+`_WEDGED` shape, 3 of 3 runs (`max_active_torrents=5` full of five `stalledUP`
+seeders), and items 3b (3 runs) and 3c (1 run) at `max_active_torrents=2`, with
+the slow exemption on and off. Item 4 (`ul=3`) shows a seeder being demoted too,
+but its torrent limit was not full when the downloads arrived (see Item 4), so
+it is not counted here.
+
+What it contradicts:
+- `trace()` rule 1 ("every seeding torrent occupies a `max_active_torrents`
+  slot"), insofar as the rule is used to block a queued start.
+- The predicate's absorbing-state claim: "seeders never release slots"
+  (`queue_liveness.py:9`) and "once five torrents completed they held every slot
+  permanently" (`queue_liveness.py:3-5`).
+
+What it does not contradict: that seeders *count* against `max_active_torrents`
+(`_max_active_torrents_binds`, `queue_liveness.py:497-499`: "Seeding torrents
+count against it"). That is confirmed. Seeders do occupy the slots until a
+download needs them, which is why the active total is always exactly 5 (or 2).
+The predicate already flags the gap: "libtorrent's allocation order may bound
+how many slots seeders actually reach" (`queue_liveness.py:83`).
+
+**Reconciling with #393.** #393 did wedge: 52 torrents, no active downloads, for
+weeks. So F1 does not refute the incident. It narrows the mechanism. "Seeders
+fill `max_active_torrents`" is not enough on its own, at least for idle seeders
+on this build. Something F1 did not reproduce must also hold.
+
+Not measured, and each could be that something:
+- Torrents that *finish* downloading in place (the #393 path) rather than being
+  added complete. The container cannot finish a download because no peers exist.
+- **Actively uploading** seeders. Every seeder here had `num_seeds 0`,
+  `upspeed 0`, so libtorrent may rank it differently from a seeder that is
+  serving peers.
+- **Population size.** #393 had 52 torrents; these runs had at most 8.
+- **Whether #393 ran on this build.** The pin is what homelab runs today. Which
+  qBittorrent and libtorrent #393 ran on was not recorded here.
+- The mechanism itself. libtorrent ranking downloading torrents ahead of seeding
+  ones when it hands out `active_limit` slots would explain it. That has not
+  been checked against libtorrent source.
 
 **F2. `max_active_uploads` binds seeders** (item 4 step 1: 3 `stalledUP`, 2
 `queuedUP` under `max_active_uploads=3`). This contradicts `trace()` rule 2 (the
@@ -297,9 +367,22 @@ torrents count against no limit, seeders included"). It also bears on the
 predicate's `qbt.slow_exempt_off` premise (`_slot_premises`), which treats the
 exemption as rescuing `max_active_torrents`. What 3e shows is a client that is
 wedged by stalled **downloads**: `max_active_torrents=1`, exemption on, one dead
-download, and everything behind it queued for good.
+download, and everything behind it queued for the 120 s observed.
 
-**Consequence for Task 5.** Scenario 1 and 1b will disagree on night one. So
+Raw rows from the 3e runs. Each row is as of that torrent's last state change;
+the final read at the end of each 120 s hold showed the same states:
+
+```json
+{"utc": "2026-11-13T00:24:20.486Z", "hash": "b5d2805477adb27d3a8e41a014a81c1a4e12c028", "name": "item3e-r1-a", "state": "stalledDL", "num_seeds": 0, "priority": 1, "dlspeed": 0, "upspeed": 0}
+{"utc": "2026-11-13T00:24:22.054Z", "hash": "cb4838e160917dc4e8b7e85ccd4bfcc339eebbcb", "name": "item3e-r1-b", "state": "queuedDL", "num_seeds": 0, "priority": 2, "dlspeed": 0, "upspeed": 0}
+{"utc": "2026-11-13T00:26:21.960Z", "hash": "42e6e228d857d98895ae8c5bccca00bdc21a5de0", "name": "item3e-r2-a", "state": "stalledDL", "num_seeds": 0, "priority": 1, "dlspeed": 0, "upspeed": 0}
+{"utc": "2026-11-13T00:26:23.537Z", "hash": "26f556277b42bc9317c2ad47e88aadd4bcd98df7", "name": "item3e-r2-b", "state": "queuedDL", "num_seeds": 0, "priority": 2, "dlspeed": 0, "upspeed": 0}
+{"utc": "2026-11-13T00:28:23.459Z", "hash": "17f2d7c721a4007e372c9c0787b0a719e8cc86aa", "name": "item3e-r3-a", "state": "stalledDL", "num_seeds": 0, "priority": 1, "dlspeed": 0, "upspeed": 0}
+{"utc": "2026-11-13T00:28:25.024Z", "hash": "f8da5ef26ff35f7581e84498c763d5ec63454e65", "name": "item3e-r3-b", "state": "queuedDL", "num_seeds": 0, "priority": 2, "dlspeed": 0, "upspeed": 0}
+```
+
+**Consequence for Task 5.** Scenarios 1 and 1b, as built from the population
+measured here, will disagree on night one. So
 will every scenario whose prediction relies on rules 1, 2 or 3 with seeders
 present or `max_active_torrents` binding. The brief says a disagreement here is
 expected to become a known disagreement in Task 5. That registry was not
@@ -307,7 +390,7 @@ created in this task.
 
 ## What `test_assumptions.py` pins
 
-Eleven `container` tests, 11 passed in 109 s (2026-11-13). The mutation round
+Eleven `container` tests, 11 passed in 189 s with the 35 s holds (2026-11-13). The mutation round
 went red as intended: flipping the exemption off in the download-limit test, and
 setting `max_ratio_act` from 3 to 0 in the remove test, each failed. Both were
 restored.
@@ -325,6 +408,10 @@ restored.
 - With `max_active_torrents=2` full of seeders, an added download reaches
   `stalledDL` and exactly one seeder goes `queuedUP`, exemption on and off (3b,
   3c, F1).
+
+Every "held" state is asserted on every poll for 35 s, not only at the end. That
+is longer than libtorrent's 30 s auto-manage interval, so a release driven by
+that tick would still turn the pin red.
 
 Item 4 is deliberately not pinned here. It is Task 5's scenario 1, and pinning
 it here would be a known-disagreement registry by another name.
