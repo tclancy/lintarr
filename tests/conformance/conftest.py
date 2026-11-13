@@ -24,6 +24,7 @@ import pytest
 
 from tests.conformance.image import QBT_IMAGE
 from tests.conformance.qbt import HarnessError, QbtHarness
+from tests.conformance.runner import EXC_TYPE_ATTR, RESULT_FILE, classify_report, write_result
 
 READY_TIMEOUT = 90.0
 
@@ -157,3 +158,30 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
         finally:
             if started:
                 _remove(container)
+
+
+# --- result file (spec "Failure alerting") ----------------------------------------
+
+_FAILURES = pytest.StashKey[list[tuple[str, str]]]()
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]):
+    """Classify setup, call and teardown alike, so a session-fixture HarnessError
+    (a setup error) is counted."""
+    report = yield
+    if call.excinfo is not None:
+        setattr(report, EXC_TYPE_ATTR, call.excinfo.type)
+    kind = classify_report(report)
+    if kind is not None:
+        item.config.stash.setdefault(_FAILURES, []).append((report.nodeid, kind))
+    return report
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Write the result file only when a `container` item was selected (M1)."""
+    items = getattr(session, "items", [])
+    if not any(item.get_closest_marker("container") for item in items):
+        return
+    failures = session.config.stash.get(_FAILURES, [])
+    write_result(session.config.rootpath / RESULT_FILE, failures, int(exitstatus))

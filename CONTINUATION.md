@@ -46,6 +46,27 @@ consistency.
 
 ## Open items
 
+- **F1 (P2 differential, 2026-11-13).** `trace()` rule 1 and the predicate's
+  absorbing-state claim ("seeders never release slots", `queue_liveness.py:9`)
+  are believed wrong for idle seeders on qBittorrent 5.2.3: with
+  `max_active_torrents` full of seeders, new downloads start and seeders yield
+  their slots (`queuedUP`). Seeders still count against the limit. Known in
+  scenarios 1-wedged-slow-off, 1b-*-slow-off and 7-*-slow-off
+  (`tests/conformance/known.py`). It leaves spec Goal 4 (a live test that a
+  seeder blocks a download) unmet; #393's wedge needs a mechanism F1 did not
+  reproduce (see the measurements doc).
+- **F2 (P2 differential, 2026-11-13).** `trace()` rule 2 (`max_active_uploads`
+  is not consulted, `seeding_queued` is always 0) is wrong: the upload limit
+  queues seeders (`queuedUP`) when the slow exemption is off. Known in
+  1-wedged-slow-off.
+- **F3 (P2 differential, 2026-11-13).** `trace()` rule 3 is wrong:
+  `dont_count_slow_torrents` frees `max_active_downloads` (and, observed in
+  1-wedged-slow-on, the upload limit) but NOT `max_active_torrents`. This is a
+  possible **false PASS** of the shipped predicate: its slow-exemption premise
+  (`qbt.slow_exempt_off`, `queue_liveness.py:1042`) treats the exemption as
+  rescuing a full `max_active_torrents`, and measured item 3e shows it does not.
+  Known in 1-wedged-slow-on, 1b-*-slow-on and 7-*-slow-on.
+
 - **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
   `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
   into it, so `state.json` sits beside the env file. It's harmless (0600 in a
