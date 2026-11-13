@@ -5,13 +5,22 @@ anti-goal "a green that proves nothing"); failing that is a HarnessError, not a
 disagreement. Needs Docker.
 """
 
+import os
+
 import pytest
 
 from tests.conformance.known import KNOWN_DISAGREEMENTS
 from tests.conformance.qbt import HarnessError, QbtHarness
-from tests.conformance.runner import Step, judge, observe_steps, with_one_retry
+from tests.conformance.runner import (
+    Step,
+    force_failure_scenario,
+    judge,
+    observe_steps,
+    with_one_retry,
+    wrong_prediction,
+)
 from tests.conformance.scenarios import SCENARIOS, Scenario
-from tests.model.queue import AddComplete, AddIncomplete, trace
+from tests.model.queue import AddComplete, AddIncomplete, Counts, trace
 
 pytestmark = pytest.mark.container
 
@@ -55,13 +64,24 @@ def _assert_complete_before_incomplete(s: Scenario, steps: list[Step]) -> None:
         )
 
 
+def _predicted(s: Scenario) -> list[Counts]:
+    """trace(), or, for the R8 alert drill (CONFORMANCE_FORCE_FAILURE=true), a
+    deliberately wrong trace for the first scenario no Known entry can absorb."""
+    predicted = trace(s.cfg, s.events)
+    if os.environ.get("CONFORMANCE_FORCE_FAILURE") == "true" and (
+        s is force_failure_scenario(SCENARIOS, KNOWN_DISAGREEMENTS)
+    ):
+        return wrong_prediction(predicted)
+    return predicted
+
+
 def _assert_scenario_matches_model(qbt: QbtHarness, s: Scenario) -> None:
     qbt.reset()
     qbt.set_prefs(s.prefs)
     steps = observe_steps(qbt, s, poll_s=POLL_S, settle_s=SETTLE_S, timeout_s=TIMEOUT_S)
     _assert_reached_target(s, steps)
     try:
-        judge(s.id, [st.counts for st in steps], trace(s.cfg, s.events), KNOWN_DISAGREEMENTS)
+        judge(s.id, [st.counts for st in steps], _predicted(s), KNOWN_DISAGREEMENTS)
     except AssertionError as exc:
         exc.add_note(f"cfg: {s.cfg}\nprefs: {s.prefs}\nevents: {s.events}")
         for i, step in enumerate(steps):

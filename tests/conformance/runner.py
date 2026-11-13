@@ -10,7 +10,7 @@ import itertools
 import json
 import time
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -206,6 +206,26 @@ def judge(
         _judge_known(scenario_id, observed, predicted, entry)
     elif observed != predicted:
         raise AssertionError("disagreement. " + _detail(scenario_id, observed, predicted, "model"))
+
+
+# --- R8 drill --------------------------------------------------------------------
+
+
+def force_failure_scenario(scenarios: Iterable[Scenario], known: Mapping[str, Known]) -> Scenario:
+    """The scenario the CONFORMANCE_FORCE_FAILURE drill corrupts: the first one with
+    no Known entry. A Known scenario passes while observed equals its recording and
+    differs from the prediction, so a wrong prediction there would be absorbed."""
+    for s in scenarios:
+        if s.id not in known:
+            return s
+    raise ValueError("every scenario is a known disagreement; the drill has no target")
+
+
+def wrong_prediction(predicted: list[Counts]) -> list[Counts]:
+    """`predicted` with one extra downloading torrent at the last step, which no
+    observation of the same scenario can equal."""
+    last = predicted[-1]
+    return [*predicted[:-1], replace(last, downloading=last.downloading + 1)]
 
 
 # --- retry ---------------------------------------------------------------------
