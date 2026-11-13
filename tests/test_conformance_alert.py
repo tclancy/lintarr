@@ -84,7 +84,11 @@ def test_unparseable_result_file_is_a_harness_error(tmp_path):
 
 
 def test_disagreement_result_sets_title_body_and_url(tmp_path):
-    result = {"kind": "disagreement", "failed": ["1-a", "2-b"]}
+    result = {
+        "kind": "disagreement",
+        "failed": ["1-a", "2-b"],
+        "kinds": {"1-a": "disagreement", "2-b": "disagreement"},
+    }
     proc, argv = _run(tmp_path, result=result)
     assert proc.returncode == 0, proc.stderr
     assert "disagreement" in _header(argv, "Title")
@@ -93,7 +97,7 @@ def test_disagreement_result_sets_title_body_and_url(tmp_path):
     assert "--config" in argv
     assert _header(argv, "Priority") == "Priority: high"
     assert _header(argv, "Click") == f"Click: {_URL}"
-    assert _body(argv).startswith("disagreement: 1-a,2-b")
+    assert _body(argv).startswith("disagreement: 1-a (disagreement),2-b (disagreement) — ")
     assert _URL in _body(argv)
     assert "--fail-with-body" in argv
     assert argv[-1] == "https://notifications.tomclancy.info/homelab-alerts"
@@ -107,11 +111,64 @@ def test_an_unknown_kind_is_a_harness_error(tmp_path, kind):
     assert "harness-error" in _header(argv, "Title")
 
 
-def test_failed_ids_are_capped_at_300_chars(tmp_path):
+def _listed(argv: list[str], kind: str) -> str:
+    return _body(argv).removeprefix(f"{kind}: ").split(" — ")[0]
+
+
+def test_each_failed_id_carries_its_own_kind(tmp_path):
+    result = {
+        "kind": "harness-error",
+        "failed": ["1-a", "2-b"],
+        "kinds": {"1-a": "disagreement", "2-b": "harness-error"},
+    }
+    _, argv = _run(tmp_path, result=result)
+    assert "harness-error" in _header(argv, "Title")
+    assert _listed(argv, "harness-error") == "1-a (disagreement),2-b (harness-error)"
+
+
+@pytest.mark.parametrize("kind", ["pass", "disagreement\nPriority: min", "", "DISAGREEMENT", 7])
+def test_an_unknown_per_id_kind_is_a_harness_error(tmp_path, kind):
+    result = {"kind": "disagreement", "failed": ["1-a"], "kinds": {"1-a": kind}}
+    _, argv = _run(tmp_path, result=result)
+    assert _listed(argv, "disagreement") == "1-a (harness-error)"
+
+
+@pytest.mark.parametrize("kinds", [None, "not-a-dict", {}])
+def test_a_missing_per_id_kind_is_a_harness_error(tmp_path, kinds):
+    result = {"kind": "disagreement", "failed": ["1-a"]}
+    if kinds is not None:
+        result["kinds"] = kinds
+    _, argv = _run(tmp_path, result=result)
+    assert _listed(argv, "disagreement") == "1-a (harness-error)"
+
+
+def test_failed_ids_are_capped_at_300_chars_on_a_pair_boundary(tmp_path):
     ids = [f"scenario-{i:03d}-{'x' * 20}" for i in range(40)]
-    _, argv = _run(tmp_path, result={"kind": "disagreement", "failed": ids})
-    listed = _body(argv).removeprefix("disagreement: ").split(" — ")[0]
+    kinds = dict.fromkeys(ids, "disagreement")
+    _, argv = _run(tmp_path, result={"kind": "disagreement", "failed": ids, "kinds": kinds})
+    listed = _listed(argv, "disagreement")
     assert 0 < len(listed) <= 300
+    assert listed.endswith(",…")
+    pairs = listed.removesuffix(",…").split(",")
+    assert pairs == [f"{i} (disagreement)" for i in ids[: len(pairs)]]
+    next_pair = f",{ids[len(pairs)]} (disagreement)"
+    assert len(listed.removesuffix(",…")) + len(next_pair) + len(",…") > 300, "trimmed too early"
+
+
+def test_a_list_that_fits_is_not_marked_as_trimmed(tmp_path):
+    ids = [f"s{i}" for i in range(3)]
+    kinds = dict.fromkeys(ids, "disagreement")
+    _, argv = _run(tmp_path, result={"kind": "disagreement", "failed": ids, "kinds": kinds})
+    assert "…" not in _listed(argv, "disagreement")
+
+
+def test_one_id_longer_than_the_cap_is_cut_and_marked(tmp_path):
+    long_id = "x" * 400
+    result = {"kind": "disagreement", "failed": [long_id], "kinds": {long_id: "disagreement"}}
+    _, argv = _run(tmp_path, result=result)
+    listed = _listed(argv, "disagreement")
+    assert len(listed) <= 300
+    assert listed.endswith("…")
 
 
 def test_non_2xx_from_curl_fails_the_script(tmp_path):

@@ -6,6 +6,7 @@ fake harness whose raw states are scripted, so these run in the default suite.
 
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -85,17 +86,42 @@ def _open_items() -> str:
     return text.split("## Open items", 1)[1].split("\n## ", 1)[0]
 
 
+def _assert_registry_entry(sid: str, entry: Known, open_items: str) -> None:
+    """R11(d): raise AssertionError unless `entry` is a usable registry entry."""
+    scenario = next((s for s in SCENARIOS if s.id == sid), None)
+    assert scenario is not None, f"{sid} is not a scenario"
+    assert entry.why.strip(), f"{sid}: empty why"
+    assert entry.tracked_in.strip(), f"{sid}: empty tracked_in"
+    finding = re.match(r"(F\d+)", entry.why)
+    assert finding, f"{sid}: why must open with the finding it is explained by"
+    assert f"**{finding.group(1)}" in open_items, f"{sid}: no Open items line for it"
+    assert len(entry.observed) == len(scenario.events), f"{sid}: one Counts per event"
+
+
 def test_every_registry_entry_has_why_and_tracked_in():
-    ids = {s.id for s in SCENARIOS}
     open_items = _open_items()
     for sid, entry in KNOWN_DISAGREEMENTS.items():
-        assert sid in ids, f"{sid} is not a scenario"
-        assert entry.why.strip(), sid
-        assert entry.tracked_in.strip(), sid
-        finding = re.match(r"(F\d+)", entry.why)
-        assert finding, f"{sid}: why must open with the finding it is explained by"
-        assert f"**{finding.group(1)}" in open_items, f"{sid}: no Open items line for it"
-        assert len(entry.observed) == len(next(s for s in SCENARIOS if s.id == sid).events)
+        _assert_registry_entry(sid, entry, open_items)
+
+
+_REAL_ID = "1b-wedged-uploads-unlimited-slow-off"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("why", "", "empty why"),
+        ("why", "  \n\t", "empty why"),
+        ("tracked_in", "", "empty tracked_in"),
+        ("tracked_in", "   ", "empty tracked_in"),
+    ],
+)
+def test_registry_check_rejects_a_blank_why_or_tracked_in(field, value, message):
+    real = KNOWN_DISAGREEMENTS[_REAL_ID]
+    _assert_registry_entry(_REAL_ID, real, _open_items())  # control: the base entry passes
+    blank = replace(real, **{field: value})
+    with pytest.raises(AssertionError, match=message):
+        _assert_registry_entry(_REAL_ID, blank, _open_items())
 
 
 _CFG_KEYS = (
@@ -318,6 +344,26 @@ def test_failure_kind_mapping(pytester: pytest.Pytester):
         "test_stale",
         "test_unmapped",
     ]
+    assert {i.rsplit("::", 1)[1]: k for i, k in result["kinds"].items()} == {
+        "test_setup_error": "harness-error",
+        "test_unmapped": "unmapped-state",
+        "test_disagreement": "disagreement",
+        "test_stale": "disagreement",
+    }
+    assert sorted(result["kinds"]) == result["failed"]
+
+
+def test_one_id_failing_twice_gets_the_higher_precedence_kind(tmp_path):
+    from tests.conformance.runner import write_result
+
+    failures = [("t::a", "disagreement"), ("t::a", "harness-error"), ("t::b", "disagreement")]
+    write_result(tmp_path / "r.json", failures, 1)
+    result = json.loads((tmp_path / "r.json").read_text())
+    assert result == {
+        "kind": "harness-error",
+        "failed": ["t::a", "t::b"],
+        "kinds": {"t::a": "harness-error", "t::b": "disagreement"},
+    }
 
 
 def test_nothing_classified_with_a_failing_exit_is_a_harness_error():

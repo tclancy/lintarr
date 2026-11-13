@@ -321,8 +321,18 @@ def result_kind(kinds: Iterable[str], exitstatus: int) -> str:
     return "harness-error" if exitstatus != 0 else "pass"
 
 
+def kinds_by_id(failures: list[tuple[str, str]]) -> dict[str, str]:
+    """One kind per failed nodeid, by the same precedence as the overall kind
+    (a test whose call and teardown both failed reports the higher one)."""
+    seen: dict[str, list[str]] = {}
+    for nodeid, kind in failures:
+        seen.setdefault(nodeid, []).append(kind)
+    return {nodeid: result_kind(kinds, 1) for nodeid, kinds in sorted(seen.items())}
+
+
 def write_result(path: Path, failures: list[tuple[str, str]], exitstatus: int) -> None:
     """`failures` holds one (nodeid, kind) per failed report."""
-    failed = sorted({nodeid for nodeid, _ in failures})
+    kinds = kinds_by_id(failures)
     kind = result_kind((k for _, k in failures), exitstatus)
-    path.write_text(json.dumps({"kind": kind, "failed": failed}, indent=2) + "\n")
+    result = {"kind": kind, "failed": sorted(kinds), "kinds": kinds}
+    path.write_text(json.dumps(result, indent=2) + "\n")
