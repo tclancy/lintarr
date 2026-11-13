@@ -213,7 +213,8 @@ def judge(
 
 def with_one_retry(attempt: Callable[[], None]) -> None:
     """Run `attempt`; on any failure run it once more. Only the second failure
-    propagates, carrying a note of the first."""
+    propagates, carrying the first one's repr and notes (its raw states), so the
+    log shows both attempts."""
     try:
         attempt()
         return
@@ -223,6 +224,8 @@ def with_one_retry(attempt: Callable[[], None]) -> None:
         attempt()
     except Exception as second:
         second.add_note(f"first attempt failed too: {first_failure!r}")
+        for note in getattr(first_failure, "__notes__", []):
+            second.add_note(f"first attempt: {note}")
         raise
 
 

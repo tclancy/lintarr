@@ -228,8 +228,20 @@ def test_one_retry_passes_when_the_second_attempt_does():
 
 
 def test_one_retry_fails_when_both_attempts_do():
-    with pytest.raises(AssertionError):
-        with_one_retry(lambda: judge("s", SEEN, PREDICTED, {}))
+    attempts = []
+
+    def attempt():
+        attempts.append(1)
+        exc = AssertionError(f"attempt {len(attempts)}")
+        exc.add_note(f"raw step 0: attempt {len(attempts)} states")
+        raise exc
+
+    with pytest.raises(AssertionError, match="attempt 2") as info:
+        with_one_retry(attempt)
+    notes = "\n".join(info.value.__notes__)
+    assert "raw step 0: attempt 2 states" in notes
+    assert "AssertionError('attempt 1')" in notes  # the first failure's message
+    assert "raw step 0: attempt 1 states" in notes  # and its diagnostics
 
 
 # --- result file --------------------------------------------------------------
@@ -314,6 +326,13 @@ def test_nothing_classified_with_a_failing_exit_is_a_harness_error():
 
 def test_no_result_file_without_a_container_item(pytester: pytest.Pytester):
     _inner_run(pytester, "def test_plain():\n    assert False\n")
+    assert not (pytester.path / "conformance-result.json").exists()
+
+
+def test_collect_only_writes_no_result_file(pytester: pytest.Pytester):
+    pytester.makeini("[pytest]\nmarkers =\n    container: inner\n")
+    pytester.makepyfile(test_inner=_INNER_TESTS)
+    pytester.inline_run("--collect-only", plugins=[conformance_conftest])
     assert not (pytester.path / "conformance-result.json").exists()
 
 

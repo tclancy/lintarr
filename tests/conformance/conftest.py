@@ -180,6 +180,8 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]):
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     """Write the result file only when a `container` item was selected (M1)."""
+    if session.config.option.collectonly:
+        return  # nothing ran, so there is no result to report
     items = getattr(session, "items", [])
     if not any(item.get_closest_marker("container") for item in items):
         return

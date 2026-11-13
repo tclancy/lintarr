@@ -11,7 +11,7 @@ from tests.conformance.known import KNOWN_DISAGREEMENTS
 from tests.conformance.qbt import HarnessError, QbtHarness
 from tests.conformance.runner import Step, judge, observe_steps, with_one_retry
 from tests.conformance.scenarios import SCENARIOS, Scenario
-from tests.model.queue import AddIncomplete, trace
+from tests.model.queue import AddComplete, AddIncomplete, trace
 
 pytestmark = pytest.mark.container
 
@@ -35,16 +35,24 @@ def _assert_reached_target(s: Scenario, steps: list[Step]) -> None:
 
 
 def _assert_complete_before_incomplete(s: Scenario, steps: list[Step]) -> None:
-    """Where incomplete torrents follow complete ones, the complete ones must have
-    finished checking (no download-side state) before the incompletes arrived."""
+    """Where incomplete torrents follow complete ones, every complete torrent must
+    be seeding (active or queuedUP) before the incompletes arrive, or LEFT when a
+    share limit is on."""
     first_incomplete = next(
         (i for i, e in enumerate(s.events) if isinstance(e, AddIncomplete)), None
     )
     if not first_incomplete:  # absent, or the very first event
         return
+    added = sum(e.n for e in s.events[:first_incomplete] if isinstance(e, AddComplete))
     before = steps[first_incomplete - 1].counts
-    if before.downloading or before.queued:
-        raise HarnessError(f"{s.id}: complete torrents not seeding before the adds: {before}")
+    done = before.seeding + before.seeding_queued
+    if s.cfg.share_limit_enabled:
+        done += before.left
+    if done != added:
+        raise HarnessError(
+            f"{s.id}: {added} complete torrents added, but not all seeding before the "
+            f"incomplete adds: {before}"
+        )
 
 
 def _assert_scenario_matches_model(qbt: QbtHarness, s: Scenario) -> None:

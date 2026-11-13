@@ -24,16 +24,24 @@ class Known:
 
 _MEASURED = "(measurements 2026-11-13)"
 _SEEDERS_IDLE = Counts(0, 0, 5, 0, 0)
-# 3 downloads start; 3 seeders yield their max_active_torrents slots (queuedUP).
+# 3 downloads start and 3 seeders end queuedUP. In 1b and the slow-on variants all
+# 5 seeders were active, so 3 yielded max_active_torrents slots. In
+# 1-wedged-slow-off the upload limit had already queued 2 (F2), so only 1 yielded.
 _DOWNLOADS_DISPLACE = Counts(3, 0, 2, 3, 0)
 # Scenario 7: 2 downloads displace 2 of 3 seeders; removing the one active seeder
-# lets one queuedUP seeder resume. No download was ever queued.
+# lets one queuedUP seeder resume. No download was ever queued. Step 2 (a queuedUP
+# seeder resuming after the delete) was first observed here, not in Task 4.
 _REMOVE_SEEDER = (Counts(0, 0, 3, 0, 0), Counts(2, 0, 1, 2, 0), Counts(2, 0, 1, 1, 0))
 
 _F1 = f"F1: seeders yield max_active_torrents slots to new downloads {_MEASURED}"
 _F3 = (
     "F3: slow exemption does not free max_active_torrents, so seeders past the "
     f"limit go queuedUP (with F1: the downloads take the slots) {_MEASURED}"
+)
+
+_STEP2_NEW = (
+    "; step 2, a queuedUP seeder resuming into the freed slot, was first observed "
+    "in this differential (2026-11-13), not measured in Task 4"
 )
 
 KNOWN_DISAGREEMENTS: dict[str, Known] = {
@@ -62,12 +70,12 @@ KNOWN_DISAGREEMENTS: dict[str, Known] = {
     ),
     "7-remove-seeder-slow-off": Known(
         observed=_REMOVE_SEEDER,
-        why=_F1,
+        why=_F1 + _STEP2_NEW,
         tracked_in="CONTINUATION.md, Open items: F1",
     ),
     "7-remove-seeder-slow-on": Known(
         observed=_REMOVE_SEEDER,
-        why=_F3,
+        why=_F3 + _STEP2_NEW,
         tracked_in="CONTINUATION.md, Open items: F3",
     ),
 }
