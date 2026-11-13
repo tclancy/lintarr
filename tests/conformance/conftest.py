@@ -33,11 +33,21 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _docker(*args: str) -> str:
-    r = subprocess.run(["docker", *args], capture_output=True, text=True)
+PULL_TIMEOUT = 300.0  # the first `docker run` may pull the image
+DOCKER_TIMEOUT = 30.0
+
+
+def _run(args: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        raise HarnessError(f"docker {' '.join(args[:2])} timed out after {timeout:.0f}s") from exc
+
+
+def _docker(*args: str, timeout: float = DOCKER_TIMEOUT) -> None:
+    r = _run(list(args), timeout)
     if r.returncode != 0:
         raise HarnessError(f"docker {' '.join(args[:2])} failed: {r.stderr.strip()}")
-    return r.stdout + r.stderr
 
 
 def _wait_ready(base_url: str) -> None:
@@ -54,7 +64,7 @@ def _wait_ready(base_url: str) -> None:
 
 def _temp_password(container: str) -> str:
     """Parse the temporary password the way tools/probe_qbt_ban.py:temp_password does."""
-    logs = subprocess.run(["docker", "logs", container], capture_output=True, text=True)
+    logs = _run(["logs", container], DOCKER_TIMEOUT)
     lines = (logs.stdout + logs.stderr).splitlines()
     hits = [ln.split(": ")[-1].strip() for ln in lines if "temporary password" in ln]
     if not hits:
@@ -68,17 +78,19 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
         raise HarnessError("docker not available")
     downloads = tmp_path_factory.mktemp("downloads")
     port = _free_port()
-    container = _docker(
-        "run", "-d", "--rm",
-        "-p", f"127.0.0.1:{port}:{port}",
-        "-e", f"WEBUI_PORT={port}",
-        "-e", f"PUID={os.getuid()}",
-        "-e", f"PGID={os.getgid()}",
-        "-v", f"{downloads}:/downloads",
-        QBT_IMAGE,
-    ).strip().splitlines()[-1]  # fmt: skip
+    container = f"lintarr-conformance-{port}"  # teardown keys on the name, not parsed output
     harness = None
     try:
+        _docker(
+            "run", "-d", "--rm", "--name", container,
+            "-p", f"127.0.0.1:{port}:{port}",
+            "-e", f"WEBUI_PORT={port}",
+            "-e", f"PUID={os.getuid()}",
+            "-e", f"PGID={os.getgid()}",
+            "-v", f"{downloads}:/downloads",
+            QBT_IMAGE,
+            timeout=PULL_TIMEOUT,
+        )  # fmt: skip
         base_url = f"http://127.0.0.1:{port}"
         _wait_ready(base_url)
         time.sleep(2)  # the WebUI answers a beat before auth is wired up (probe_qbt_ban.py)
@@ -86,6 +98,8 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
         harness.login()
         yield harness
     finally:
-        if harness is not None:
-            harness.close()
-        subprocess.run(["docker", "rm", "-f", container], capture_output=True)
+        try:
+            if harness is not None:
+                harness.close()
+        finally:
+            _run(["rm", "-f", container], DOCKER_TIMEOUT)

@@ -79,11 +79,13 @@ class QbtHarness:
         if hashes:
             self.delete(hashes, delete_files=True)
         deadline = time.monotonic() + timeout
+        last: dict[str, str] = {}
         while time.monotonic() < deadline:
-            if self.states() == {}:
+            last = self.states()
+            if last == {}:
                 return
             time.sleep(0.25)
-        raise HarnessError(f"client not empty after reset: {self.states()}")
+        raise HarnessError(f"client not empty after reset: {last}")
 
     @staticmethod
     def _checked(r: httpx.Response) -> httpx.Response:

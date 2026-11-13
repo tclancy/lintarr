@@ -45,8 +45,9 @@ def test_incomplete_torrent_downloads(qbt):
 
 
 def test_reset_empties_client(qbt):
+    qbt.reset()
     t = make_torrent("smoke-reset")
     qbt.add(t, complete=False)
-    assert qbt.states()
+    assert t.info_hash in qbt.states()
     qbt.reset()
     assert qbt.states() == {}
