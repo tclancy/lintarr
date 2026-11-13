@@ -24,6 +24,15 @@ def _await_bucket(qbt, info_hash: str, want: Bucket, timeout: float = 30.0) -> s
     pytest.fail(f"{info_hash} never reached {want}; last state {state!r}")
 
 
+def _await_present(qbt, info_hash: str, timeout: float = 10.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if info_hash in qbt.states():
+            return
+        time.sleep(0.25)
+    pytest.fail(f"{info_hash} never appeared in the client")
+
+
 def test_container_reports_expected_version(qbt):
     assert qbt.version().startswith("v5.2.3")
 
@@ -48,6 +57,6 @@ def test_reset_empties_client(qbt):
     qbt.reset()
     t = make_torrent("smoke-reset")
     qbt.add(t, complete=False)
-    assert t.info_hash in qbt.states()
+    _await_present(qbt, t.info_hash)
     qbt.reset()
     assert qbt.states() == {}

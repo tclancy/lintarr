@@ -15,6 +15,7 @@ import shutil
 import socket
 import subprocess
 import time
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -50,6 +51,24 @@ def _docker(*args: str, timeout: float = DOCKER_TIMEOUT) -> None:
         raise HarnessError(f"docker {' '.join(args[:2])} failed: {r.stderr.strip()}")
 
 
+def _sweep_stale() -> None:
+    """Remove leftovers from a crashed session or a timed-out `docker run`.
+
+    The name prefix is ours alone, so removing everything that matches is safe.
+    """
+    r = _run(["ps", "-aq", "--filter", "name=^lintarr-conformance-"], DOCKER_TIMEOUT)
+    for cid in r.stdout.split():
+        _run(["rm", "-f", cid], DOCKER_TIMEOUT)
+
+
+def _remove(container: str) -> None:
+    r = _run(["rm", "-f", container], DOCKER_TIMEOUT)
+    if r.returncode != 0:
+        warnings.warn(
+            f"docker rm -f {container} failed: {r.stderr.strip()}", RuntimeWarning, stacklevel=2
+        )
+
+
 def _wait_ready(base_url: str) -> None:
     """Unauthenticated GET; any HTTP answer (403 included) means the WebUI is up."""
     deadline = time.monotonic() + READY_TIMEOUT
@@ -81,6 +100,7 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
     container = f"lintarr-conformance-{port}"  # teardown keys on the name, not parsed output
     harness = None
     try:
+        _sweep_stale()
         _docker(
             "run", "-d", "--rm", "--name", container,
             "-p", f"127.0.0.1:{port}:{port}",
@@ -102,4 +122,4 @@ def qbt(tmp_path_factory: pytest.TempPathFactory) -> Iterator[QbtHarness]:
             if harness is not None:
                 harness.close()
         finally:
-            _run(["rm", "-f", container], DOCKER_TIMEOUT)
+            _remove(container)
