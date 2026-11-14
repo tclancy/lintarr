@@ -1,0 +1,64 @@
+name: Conformance
+
+# Nightly differential of the queue model against a real qBittorrent container
+# (P2). Failures push an ntfy alert; see tools/conformance_alert.sh.
+
+on:
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_failure:
+        description: "R8 drill: compare the first unregistered scenario against a deliberately wrong prediction"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    # Timeouts. The brief's formula (scenarios x events x (settle + 2 polls)
+    # x 2 retry + 3 min container start):
+    #   18 scenarios, 34 events in total; settle_s = 15, 2 polls ~ 4 s
+    #   34 x 19 s x 2 = 1292 s = 21.5 min; + 3 min start = 24.5 min.
+    # Measured: the full local container run (33 items) took 738 s = 12.3 min.
+    # But the formula ignores the per-event TIMEOUT_S = 45: worst case is
+    # 34 x 45 s x 2 = ~51 min, and a night where the harness stalls (every
+    # scenario fails its first event twice) takes ~27 min.
+    # A job-level timeout CANCELS the job, and failure() is false for a
+    # cancelled job, so the pytest step carries its own 35 min timeout: that
+    # fails the step, which turns any overrun into a harness-error page. The
+    # job's 40 min sits above it as a backstop, and the alert also runs on
+    # cancelled().
+    timeout-minutes: 40
+    env:
+      UV_PYTHON: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Run conformance differential
+        run: uv run --frozen pytest -m container -q
+        timeout-minutes: 35
+        env:
+          CONFORMANCE_FORCE_FAILURE: ${{ inputs.force_failure }}
+
+      # Runs only after a failure or cancellation, so a green run never exercises it.
+      - name: Alert on failure
+        if: failure() || cancelled()
+        run: tools/conformance_alert.sh
+        env:
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

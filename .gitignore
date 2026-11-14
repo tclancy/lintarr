@@ -5,3 +5,4 @@ __pycache__/
 .ruff_cache/
 .superpowers/
 .scratch/
+conformance-result.json
