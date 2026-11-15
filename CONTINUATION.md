@@ -1,11 +1,25 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-14 (UTC)
+**Last updated:** 2026-11-15 (UTC)
 **State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
-`trace()`) is merged to `main` (83e162e). Its nightly alert is not armed until
-Tom runs the R9/R8 drills and sets `NTFY_TOKEN`. It found F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
-homelab, hourly as an edge-triggered systemd timer (first PASS against the real
-stack 2026-10-07 21:40 UTC).
+`trace()`) is merged to `main` (83e162e) and its nightly alert is **armed**
+(2026-11-15). It found F1-F3 (Open items). P0b's `queue-liveness` check is
+unchanged and still live on homelab, hourly as an edge-triggered systemd timer
+(first PASS against the real stack 2026-10-07 21:40 UTC).
+
+## Conformance nightly: alert proven
+
+- **R9** (no token): run 43639901533 failed on the drill disagreement and the
+  alert step failed loudly with "NTFY_TOKEN secret is not set".
+- **R8** (token set): run 43664824051 failed on the drill disagreement and ntfy
+  accepted "lintarr conformance: disagreement" on `homelab-alerts`; Tom
+  confirmed it arrived on his phone.
+- **Plain run** 43666053096: green, 33 passed in 12m24s, alert step skipped.
+- Lesson: `gh secret set NAME` run through Claude Code's `!` has no TTY, reads
+  an empty stdin and stores `""` without complaint (run 43663689254). The
+  secret list then shows a fresh `updatedAt`, which proves nothing. An empty
+  secret logs as `NAME: ` where a real one logs `NAME: ***`. Set secrets from a
+  real terminal.
 
 ## What lintarr is, and why
 
