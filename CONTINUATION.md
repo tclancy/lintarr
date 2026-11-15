@@ -1,9 +1,9 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-13 (UTC)
+**Last updated:** 2026-11-14 (UTC)
 **State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
-`trace()`) is built on branch `claude/p2-differential`, awaiting merge. It found
-F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
+`trace()`) is merged to `main` (83e162e). Its nightly alert is not armed until
+Tom runs the R9/R8 drills and sets `NTFY_TOKEN`. It found F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
 homelab, hourly as an edge-triggered systemd timer (first PASS against the real
 stack 2026-10-07 21:40 UTC).
 
@@ -32,7 +32,10 @@ consistency.
 - **Deployed** per `docs/superpowers/specs/2026-10-05-deploy-scope.md`:
   - `lintarr.timer` fires `lintarr.service` at :17 each hour.
   - `--state-file` (`src/lintarr/edge.py`) means a problem pages once through
-    homelab's `unit-failure-alert-user@`, not every hour.
+    homelab's `unit-failure-alert-user@`, not every hour. That handler
+    (`/usr/local/bin/unit-failure-alert.sh`) pushes to ntfy topic
+    **`homelab-alerts`**, and escalates a repeating failure as `urgent` with a
+    copy to `claude`.
   - Units and env live in homelab `roles/native-apps` (homelab#542).
   - Sonarr/Radarr keys are read from each app's `config.xml` at deploy time.
 - **Operate it:** `itguy deploy lintarr`, `itguy logs lintarr --level info`.
@@ -113,18 +116,17 @@ consistency.
   a public repo after 60 days without repo activity; scheduled runs can be
   dropped or delayed; and a revoked or empty `NTFY_TOKEN` turns the alert step
   red, but nobody hears it.
-  `DECISION NEEDED:` (Tom) a dead-man's switch outside GitHub (e.g. a homelab
-  timer that checks the last successful conformance run is under 36 h old), or
-  explicit acceptance of the gap. Nothing is built yet.
+  **Accepted gap** (Tom, 2026-11-14): no dead-man's switch. If the nightly
+  matters later, the fix is a homelab timer that pages when the last successful
+  conformance run is over 36 h old.
 
-- **systemd 257 state-dir quirk.** `StateDirectory=lintarr` found
-  `~/.config/lintarr` and made `~/.local/state/lintarr` a compatibility symlink
-  into it, so `state.json` sits beside the env file. It's harmless (0600 in a
-  0700 dir), but it isn't what the unit's comments say. Fix it by renaming one
-  of the two directories.
 - **Known limits of edge-triggering:** a config/usage error exits 2 before
   state is read, so it pages every run. There's also no periodic re-page for a
   long-lived problem.
+
+The systemd state-dir quirk recorded here earlier is fixed: the unit uses
+`StateDirectory=lintarr-state`, a real 0700 dir holding `state.json`, and the
+old `~/.local/state/lintarr` symlink is gone (checked on the box 2026-11-12).
 
 ## The dogfooding asset nobody should lose
 
