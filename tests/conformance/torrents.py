@@ -46,16 +46,20 @@ def _pieces(data: bytes, piece_length: int) -> bytes:
     )
 
 
-def make_torrent(name: str, size: int = 16384, piece_length: int = 16384) -> HarnessTorrent:
-    """Single-file, private, announce-less torrent so nothing looks for peers."""
+def make_torrent(
+    name: str, size: int = 16384, piece_length: int = 16384, *, private: bool = True
+) -> HarnessTorrent:
+    """Single-file, announce-less torrent so nothing looks for peers. Private
+    unless `private` is False, which omits the key (DHT/PEX/LSD may then run)."""
     data = _content(name, size)
     info = {
         "name": name,
         "length": size,
         "piece length": piece_length,
         "pieces": _pieces(data, piece_length),
-        "private": 1,
     }
+    if private:
+        info["private"] = 1
     return HarnessTorrent(
         name=name,
         data=data,

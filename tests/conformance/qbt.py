@@ -5,6 +5,7 @@ These POSTs live under tests/ by design: src/ is read-only against the stack.
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
@@ -18,9 +19,28 @@ class HarnessError(Exception):
     """The harness could not set up or drive the container."""
 
 
+@dataclass(frozen=True)
+class Row:
+    """The fields of one torrents/info row the harness reads."""
+
+    hash: str
+    name: str
+    state: str
+    upspeed: int
+    dlspeed: int
+    num_leechs: int
+
+
 class QbtHarness:
-    def __init__(self, base_url: str, password: str, downloads: Path) -> None:
-        self._http = httpx.Client(base_url=base_url, timeout=10)
+    def __init__(
+        self,
+        base_url: str,
+        password: str,
+        downloads: Path,
+        *,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._http = httpx.Client(base_url=base_url, timeout=10, transport=transport)
         self._password = password
         self._downloads = downloads
 
@@ -61,9 +81,40 @@ class QbtHarness:
         )
         self._checked(r)
 
-    def states(self) -> dict[str, str]:
+    def rows(self) -> list[Row]:
         r = self._checked(self._http.get("/api/v2/torrents/info"))
-        return {row["hash"]: row["state"] for row in r.json()}
+        return [
+            Row(
+                hash=row["hash"],
+                name=row["name"],
+                state=row["state"],
+                upspeed=row["upspeed"],
+                dlspeed=row["dlspeed"],
+                num_leechs=row["num_leechs"],
+            )
+            for row in r.json()
+        ]
+
+    def states(self) -> dict[str, str]:
+        return {r.hash: r.state for r in self.rows()}
+
+    def add_peers(self, hashes: list[str], peers: list[str]) -> None:
+        """Tell the client about peers (`ip:port`) for these torrents."""
+        self._checked(
+            self._http.post(
+                "/api/v2/torrents/addPeers",
+                data={"hashes": "|".join(hashes), "peers": "|".join(peers)},
+            )
+        )
+
+    def set_download_limit(self, hashes: list[str], limit: int) -> None:
+        """Cap download speed for these torrents, in bytes per second."""
+        self._checked(
+            self._http.post(
+                "/api/v2/torrents/setDownloadLimit",
+                data={"hashes": "|".join(hashes), "limit": str(limit)},
+            )
+        )
 
     def delete(self, hashes: list[str], *, delete_files: bool) -> None:
         self._checked(
