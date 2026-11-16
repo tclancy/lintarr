@@ -1,14 +1,21 @@
 """Unit tests (no Docker) for the uploading slice's pure decision logic."""
 
+from collections.abc import Callable
+
 import pytest
 
 from tests.conformance.qbt import HarnessError, Row
 from tests.conformance.runner import EXC_TYPE_ATTR, classify_report
 from tests.conformance.uploading import (
+    UPLOAD_SCENARIOS,
+    Outcome,
     Poll,
+    Recording,
     UnstableWindow,
+    UploadScenario,
     before_counts,
     check_uploading,
+    judge,
     ready,
     settled,
     verdict,
@@ -140,3 +147,79 @@ def test_unstable_window_is_classified_disagreement():
     )
     setattr(report, EXC_TYPE_ATTR, UnstableWindow)  # what the conftest hook sets
     assert classify_report(report) == "disagreement"
+
+
+# --- judge -------------------------------------------------------------------
+
+
+def named(name: str, state: str, upspeed: int = 0) -> Row:
+    return Row(hash=f"h-{name}", name=name, state=state, upspeed=upspeed, dlspeed=0, num_leechs=0)
+
+
+def _window(rows_at: Callable[[float], tuple[Row, ...]]) -> list[Poll]:
+    return [Poll(float(t), rows_at(float(t))) for t in range(121)]
+
+
+def _scenario(sid: str) -> UploadScenario:
+    return next(sc for sc in UPLOAD_SCENARIOS if sc.id == sid)
+
+
+def test_judge_raises_harness_error_for_a_recorded_error():
+    rec = Recording(bringup=[], window=[], error="bring-up timed out")
+    with pytest.raises(HarnessError, match="bring-up timed out"):
+        judge(_scenario("U1-off"), rec)
+
+
+def test_judge_u1_yield():
+    seeds = [named(f"U1-off-r1-c{i}", "uploading", 65000) for i in range(3)]
+    bringup = [Poll(0.0, tuple(seeds))]
+
+    def rows_at(t: float) -> tuple[Row, ...]:
+        if t < 2:
+            return (*seeds, named("U1-off-r1-i0", "queuedDL"))
+        return (*seeds[:2], named("U1-off-r1-c2", "queuedUP"), named("U1-off-r1-i0", "stalledDL"))
+
+    o = judge(_scenario("U1-off"), Recording(bringup, _window(rows_at), None))
+    assert o == Outcome(Counts(0, 0, 3, 0, 0), Counts(1, 0, 2, 1, 0), 3, "yield")
+
+
+def test_judge_u0_does_not_require_uploading():
+    seeds = tuple(named(f"U0-off-r1-c{i}", "stalledUP") for i in range(3))
+    rec = Recording(
+        [Poll(0.0, seeds)], _window(lambda t: (*seeds, named("U0-off-r1-i0", "queuedDL"))), None
+    )
+    assert judge(_scenario("U0-off"), rec).after == Counts(0, 1, 3, 0, 0)
+
+
+def test_judge_u1_checks_uploading():
+    seeds = tuple(named(f"U1-off-r1-c{i}", "stalledUP") for i in range(3))
+    rec = Recording(
+        [Poll(0.0, seeds)], _window(lambda t: (*seeds, named("U1-off-r1-i0", "queuedDL"))), None
+    )
+    with pytest.raises(HarnessError, match="seeder stopped uploading"):
+        judge(_scenario("U1-off"), rec)
+
+
+def test_judge_counts_a_download_that_never_appears_as_harness_error():
+    seeds = tuple(named(f"U0-off-r1-c{i}", "stalledUP") for i in range(3))
+    rec = Recording([Poll(0.0, seeds)], _window(lambda t: seeds), None)
+    with pytest.raises(HarnessError, match="downloads"):
+        judge(_scenario("U0-off"), rec)
+
+
+def test_scenarios_match_the_global_constraints():
+    got = {
+        sc.id: (sc.cfg.max_active_downloads, sc.cfg.max_active_uploads,
+                sc.cfg.max_active_torrents, sc.cfg.dont_count_slow_torrents,
+                sc.n_seeders, sc.n_downloads, sc.leecher)
+        for sc in UPLOAD_SCENARIOS
+    }  # fmt: skip
+    assert got == {
+        "U0-off": (-1, -1, 3, False, 3, 1, False),
+        "U1-off": (-1, -1, 3, False, 3, 1, True),
+        "U1-on": (-1, -1, 3, True, 3, 1, True),
+        "W-off": (3, 3, 5, False, 5, 3, True),
+    }
+    assert all(
+        sc.cfg.queueing_enabled and not sc.cfg.share_limit_enabled for sc in UPLOAD_SCENARIOS
+    )

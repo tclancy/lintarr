@@ -5,16 +5,17 @@ caps each torrent's download so a 32 MiB torrent keeps the seeder uploading for
 the whole observation window.
 """
 
+import re
 import time
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 
 from tests.conformance.containers import Pair
 from tests.conformance.qbt import HarnessError, QbtHarness, Row
 from tests.conformance.runner import set_prefs_verified
 from tests.conformance.scenarios import SLOW_TIMER_S, prefs_for
 from tests.conformance.states import tally
-from tests.conformance.torrents import HarnessTorrent
+from tests.conformance.torrents import HarnessTorrent, make_torrent
 from tests.model.queue import Counts, QueueConfig
 
 PEER_PORT = 6881
@@ -193,3 +194,157 @@ def verdict(before: Counts, after: Counts, *, tot: int, n_downloads: int) -> str
     if after.seeding_queued == before.seeding_queued and after.queued == n_downloads - started:
         return "hold"
     return "other"
+
+
+# --- scenario driver -------------------------------------------------------------
+
+BRING_UP_S = 60.0
+WINDOW_S = 120.0
+POLL_S = 1.0
+READY_STREAK = 2
+
+
+@dataclass(frozen=True)
+class UploadScenario:
+    id: str
+    cfg: QueueConfig
+    n_seeders: int
+    n_downloads: int
+    leecher: bool
+
+
+def _limits(dl: int, ul: int, tot: int, *, slow: bool) -> QueueConfig:
+    return QueueConfig(True, dl, ul, tot, slow, False)
+
+
+UPLOAD_SCENARIOS: tuple[UploadScenario, ...] = (
+    # Control: the same seeders with no leecher, so idle (F1 inside this harness).
+    UploadScenario("U0-off", _limits(-1, -1, 3, slow=False), 3, 1, leecher=False),
+    UploadScenario("U1-off", _limits(-1, -1, 3, slow=False), 3, 1, leecher=True),
+    UploadScenario("U1-on", _limits(-1, -1, 3, slow=True), 3, 1, leecher=True),
+    # _WEDGED's real limits, uploading: decides the _WEDGED pin.
+    UploadScenario("W-off", _limits(3, 3, 5, slow=False), 5, 3, leecher=True),
+)
+
+
+@dataclass
+class Recording:
+    """Raw polls of one run. Bring-up t counts from the first bring-up poll's
+    start; window t counts from the downloads being added (the event)."""
+
+    bringup: list[Poll] = field(default_factory=list)
+    window: list[Poll] = field(default_factory=list)
+    error: str | None = None
+
+
+def _seeder_torrents(sc: UploadScenario, rep: int) -> list[HarnessTorrent]:
+    return [
+        make_torrent(f"{sc.id}-r{rep}-c{i}", size=UPLOAD_SIZE, piece_length=UPLOAD_PIECE_LENGTH)
+        for i in range(sc.n_seeders)
+    ]
+
+
+def _download_torrents(sc: UploadScenario, rep: int) -> list[HarnessTorrent]:
+    return [make_torrent(f"{sc.id}-r{rep}-i{i}") for i in range(sc.n_downloads)]
+
+
+def _poll(h: QbtHarness, t0: float) -> Poll:
+    rows = tuple(h.rows())
+    return Poll(round(time.monotonic() - t0, 2), rows)
+
+
+def _sleep_until(t: float) -> None:
+    time.sleep(max(0.0, t - time.monotonic()))
+
+
+def _bring_up(pair: Pair, sc: UploadScenario, seeds: list[HarnessTorrent], rec: Recording) -> None:
+    """Poll each second until readiness holds twice running; raise HarnessError after 60 s."""
+    is_ready = ready if sc.leecher else idle_ready
+    hashes = set(_hashes(seeds))
+    t0, streak = time.monotonic(), 0
+    for k in range(int(BRING_UP_S / POLL_S) + 1):
+        _sleep_until(t0 + k * POLL_S)
+        poll = _poll(pair.seeder, t0)
+        rec.bringup.append(poll)
+        streak = streak + 1 if is_ready(poll.rows, hashes) else 0
+        if streak == READY_STREAK:
+            return
+        if sc.leecher:
+            reconnect(pair, seeds)
+    raise HarnessError(f"{sc.id}: seeders not ready within {BRING_UP_S:.0f}s")
+
+
+def _watch(pair: Pair, downloads: list[HarnessTorrent], rec: Recording) -> None:
+    """Add the downloads to the seeder only, then poll it each second for 120 s."""
+    t0 = time.monotonic()
+    for t in downloads:
+        pair.seeder.add(t, complete=False)
+    for k in range(int(WINDOW_S / POLL_S) + 1):
+        _sleep_until(t0 + k * POLL_S)
+        rec.window.append(_poll(pair.seeder, t0))
+
+
+def _setup(pair: Pair, sc: UploadScenario, seeds: list[HarnessTorrent]) -> None:
+    pair.seeder.reset()
+    pair.leecher.reset()
+    apply_prefs(pair, sc.cfg)
+    add_seeders(pair.seeder, seeds)
+    if sc.leecher:
+        attach_leecher(pair, seeds)
+
+
+def _guarded(rec: Recording, step: Callable[[], None]) -> bool:
+    """Run `step`; record any failure in `rec.error` instead of raising."""
+    try:
+        step()
+    except Exception as exc:  # the recording must survive whatever happens
+        rec.error = f"{type(exc).__name__}: {exc}"
+        return False
+    return True
+
+
+def observe(pair: Pair, sc: UploadScenario, *, rep: int) -> Recording:
+    """Drive one run and keep its raw polls. Never judges and never raises."""
+    seeds, downloads = _seeder_torrents(sc, rep), _download_torrents(sc, rep)
+    rec = Recording()
+    steps = (
+        lambda: _setup(pair, sc, seeds),
+        lambda: _bring_up(pair, sc, seeds, rec),
+        lambda: _watch(pair, downloads, rec),
+    )
+    for step in steps:
+        if not _guarded(rec, step):
+            break  # the error is recorded; the polls so far are kept
+    return rec
+
+
+def _by_kind(sc: UploadScenario, rec: Recording, kind: str, want: int) -> set[str]:
+    """Hashes of this scenario's torrents of one kind ('c' complete, 'i' incomplete), by name."""
+    pattern = re.compile(rf"{re.escape(sc.id)}-r\d+-{kind}\d+")
+    found = {r.hash for p in rec.bringup + rec.window for r in p.rows if pattern.fullmatch(r.name)}
+    if len(found) != want:
+        label = "seeders" if kind == "c" else "downloads"
+        raise HarnessError(f"{sc.id}: saw {len(found)} {label}, expected {want}")
+    return found
+
+
+def judge(sc: UploadScenario, rec: Recording) -> Outcome:
+    """The run's Outcome; HarnessError for a recorded error or a seeder that stopped uploading."""
+    if rec.error is not None:
+        raise HarnessError(rec.error)
+    if not rec.bringup:
+        raise HarnessError(f"{sc.id}: no bring-up polls")
+    seeders = _by_kind(sc, rec, "c", sc.n_seeders)
+    downloads = _by_kind(sc, rec, "i", sc.n_downloads)
+    at_event = rec.bringup[-1].rows
+    before = before_counts(at_event, seeders)
+    if sc.leecher:
+        check_uploading(rec.window, seeders)
+    after = settled(rec.window, seeders, downloads)
+    tot = sc.cfg.max_active_torrents
+    return Outcome(
+        before,
+        after,
+        active_seeders(at_event, seeders),
+        verdict(before, after, tot=tot, n_downloads=sc.n_downloads),
+    )
