@@ -74,9 +74,9 @@ consistency.
   `_WEDGED`'s limits do not wedge through seeders on 5.2.3. The nightly now
   runs 38 items, ~21 min measured locally (worst case with retries ~29 min vs
   the 35 min step timeout). **Watch item:** a `missingFiles` on the first
-  seeder add after a fresh pair was seen once in ~60 adds (macOS Docker, cause
-  unknown, did not recur); seeder data is now fsynced before the add and the
-  one retry absorbs a single hit.
+  seeder add after a fresh pair was seen twice in ~60 adds, both on the first
+  add after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
+  fsynced before the add and the one retry absorbs a single hit.
   `DECISION NEEDED:` (Tom): the `_WEDGED` pin (`tests/test_check_cli.py`, exit
   1) rests on a config that does not wedge through seeders on 5.2.3, so #393's
   wedge needs another mechanism (leading candidate: stalled dead-swarm

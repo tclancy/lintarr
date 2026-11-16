@@ -271,6 +271,15 @@ of a harness bug, not because of anything qBittorrent did:
   so the cause is unknown. A plausible but unconfirmed one is the bind mount
   showing a just-written 32 MiB file late to the container. In the nightly,
   `with_one_retry` would retry such a run.
+- **A second occurrence, later (2026-11-16 UTC).** During the mutation run of
+  the U1-off container test (`-m container ... -k U1-off`), attempt 1 failed in
+  `add_seeders` with a `HarnessError` ("seeders not stalledUP/queuedUP within
+  15s"), one seeder in `missingFiles`, again on the first add after a fresh
+  pair. The retry ran normally. So it is 2 of about 60 seeder adds, both the
+  first add on a fresh pair. Since commit 02c921c `qbt.py` fsyncs the seeder
+  data before the add, as a mitigation. The cause is still unconfirmed, and
+  whether the fsync removes it is not yet known; the one retry absorbs a
+  single hit.
 
 ### Settle time and the nightly budget
 
