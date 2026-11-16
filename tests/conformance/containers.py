@@ -87,12 +87,19 @@ def sweep_expired() -> None:
     """
     fmt = '{{.ID}} {{.Label "' + EXPIRY_LABEL + '"}}'
     filt = f"label={EXPIRY_LABEL}"
-    r = _run(["ps", "-a", "--filter", filt, "--format", fmt], DOCKER_TIMEOUT)
-    for cid in _expired_ids(r.stdout):
-        _remove(cid)
-    r = _run(["network", "ls", "--filter", filt, "--format", fmt], DOCKER_TIMEOUT)
-    for nid in _expired_ids(r.stdout):
-        _remove_network(nid)
+    for listing, remove in (
+        (["ps", "-a"], _remove),
+        (["network", "ls"], _remove_network),
+    ):
+        try:
+            r = _run([*listing, "--filter", filt, "--format", fmt], DOCKER_TIMEOUT)
+        except HarnessError as exc:
+            warnings.warn(
+                f"docker {listing[0]} listing failed: {exc}", RuntimeWarning, stacklevel=2
+            )
+            continue
+        for rid in _expired_ids(r.stdout):
+            remove(rid)
 
 
 def _remove_network(network: str) -> None:
@@ -202,6 +209,14 @@ def container_ip(name: str, network: str) -> str:
     return ip
 
 
+def _stop_quietly(name: str, harness: QbtHarness) -> None:
+    """stop_qbt that only warns, so one failed teardown cannot skip the next or mask an error."""
+    try:
+        stop_qbt(name, harness)
+    except Exception as exc:
+        warnings.warn(f"stopping {name} failed: {exc}", RuntimeWarning, stacklevel=2)
+
+
 @contextmanager
 def qbt_pair(tmp: Path) -> Iterator[Pair]:
     """A seeder and a leecher, each with its own downloads dir, on a private network.
@@ -227,10 +242,8 @@ def qbt_pair(tmp: Path) -> Iterator[Pair]:
         leecher = start_qbt(tmp / "leecher", network=network)
         yield Pair(seeder[1], leecher[1], container_ip(seeder[0], network))
     finally:
-        try:
-            for started in (leecher, seeder):
-                if started is not None:
-                    stop_qbt(*started)
-        finally:
-            if created:
-                _remove_network(network)
+        for started in (leecher, seeder):
+            if started is not None:
+                _stop_quietly(*started)
+        if created:
+            _remove_network(network)

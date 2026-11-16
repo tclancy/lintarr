@@ -91,3 +91,55 @@ def test_pair_uses_separate_download_dirs(monkeypatch, tmp_path):
         assert pair.seeder_ip == "172.18.0.2"
     assert len(seen) == 2
     assert seen[0] != seen[1]
+
+
+def _fake_pair_env(monkeypatch, events, *, fail_start=(), fail_stop=()):
+    def fake_start(downloads, *, network=None):
+        name = downloads.name
+        if name in fail_start:
+            raise HarnessError(f"start {name}")
+        events.append(f"start {name}")
+        return name, object()
+
+    def fake_stop(name, harness):
+        events.append(f"stop {name}")
+        if name in fail_stop:
+            raise RuntimeError(f"stop {name}")
+
+    def fake_run(args, timeout):
+        events.append(" ".join(args[:2]))
+        return _done()
+
+    monkeypatch.setattr(containers, "start_qbt", fake_start)
+    monkeypatch.setattr(containers, "stop_qbt", fake_stop)
+    monkeypatch.setattr(containers, "container_ip", lambda n, net: "172.18.0.2")
+    monkeypatch.setattr(containers, "_run", fake_run)
+
+
+def test_leecher_start_failure_still_stops_seeder_then_removes_network(monkeypatch, tmp_path):
+    events: list[str] = []
+    _fake_pair_env(monkeypatch, events, fail_start=("leecher",))
+    with pytest.raises(HarnessError, match="start leecher"):
+        with containers.qbt_pair(tmp_path):
+            pass
+    assert events[-2:] == ["stop seeder", "network rm"]
+
+
+def test_teardown_failure_does_not_mask_body_exception_or_skip_cleanup(monkeypatch, tmp_path):
+    events: list[str] = []
+    _fake_pair_env(monkeypatch, events, fail_stop=("leecher",))
+    with pytest.warns(RuntimeWarning):
+        with pytest.raises(ValueError, match="body"):
+            with containers.qbt_pair(tmp_path):
+                raise ValueError("body")
+    assert events[-3:] == ["stop leecher", "stop seeder", "network rm"]
+
+
+def test_sweep_never_raises_on_docker_timeout(monkeypatch):
+    def boom(args, timeout):
+        raise HarnessError("timed out")
+
+    monkeypatch.setattr(containers, "_run", boom)
+    with pytest.warns(RuntimeWarning) as record:
+        containers.sweep_expired()
+    assert len(record) == 2  # one per listing, neither raised
