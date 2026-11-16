@@ -252,7 +252,8 @@ of a harness bug, not because of anything qBittorrent did:
 
 - Readiness then accepted `queuedUP` for idle seeders (`idle_ready` allowed
   `stalledUP` or `queuedUP`). A freshly added seeder sits in `queuedUP` for
-  about 1 s (the 2026-11-13 doc's transient table), so reps 2 and 3 passed
+  a few seconds (the 2026-11-13 doc's transient table; discarded U0 rep 2 stayed
+  `queuedUP` for at least 2 s), so reps 2 and 3 passed
   bring-up with all three seeders still in that transient and added the
   download while no seeder was active. They recorded `(0,0,0,3,0) →
   (1,0,2,1,0)`, verdict **other**; the `before` was the artifact. U0's limit
@@ -274,7 +275,7 @@ of a harness bug, not because of anything qBittorrent did:
 ### Settle time and the nightly budget
 
 Across the 12 valid runs (U0-off from the re-run), the counts reached their final value at
-t = 1.01 to 2.02 s after the downloads were added, and **no count changed
+t = 1.02 to 2.02 s after the downloads were added, and **no count changed
 after that in any run**, through t = 120 s. So every run was stable by
 t = 30 s, with a wide margin. If the full `-m container` run measures over
 30 min (Task 6), the budget rule's condition for shrinking the window to 60 s
@@ -289,7 +290,7 @@ Wall time per run was about 2 min 4 s (setup, bring-up of 1 to 6 s, and the
 `check_uploading` passed in all 9 leecher runs: every seeder that was never
 demoted was `uploading` above 2048 B/s at every window poll. The lowest such
 `upspeed` in any window poll was 12862 B/s (U1-on rep 1, t = 0.01 s, a
-ramp-up value). After ramp-up the seeders ran at about 45000 to 77000 B/s,
+ramp-up value). After ramp-up the seeders ran at about 35000 to 77000 B/s,
 near the leecher's 65536 B/s per-torrent cap.
 
 Two caveats about the `upspeed` field. Neither changes a verdict:
