@@ -4,6 +4,7 @@ These POSTs live under tests/ by design: src/ is read-only against the stack.
 """
 
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,9 +68,18 @@ class QbtHarness:
     def preferences(self) -> dict[str, object]:
         return self._checked(self._http.get("/api/v2/app/preferences")).json()
 
+    @staticmethod
+    def _write_durably(path: Path, data: bytes) -> None:
+        # flush + fsync so the data is on disk before the add: guards the missingFiles
+        # flake seen twice on the first add after a fresh pair.
+        with path.open("wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+
     def add(self, t: HarnessTorrent, *, complete: bool) -> None:
         if complete:
-            (self._downloads / t.name).write_bytes(t.data)
+            self._write_durably(self._downloads / t.name, t.data)
         r = self._http.post(
             "/api/v2/torrents/add",
             data={

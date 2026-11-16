@@ -31,10 +31,13 @@ jobs:
     # U1-on, W-off), each ~2 min 4 s (setup + bring-up + 120 s window); the
     # window is kept at 120 s since the total stays under the 30 min budget.
     # Measured 2026-11-16: the full local container run (38 items) took
-    # 1267 s = 21.1 min. Worst case for these four with a retry on each:
-    # 4 x 2 x ~2.1 min = ~17 min (bring-up capped at 60 s adds at most ~8 min),
-    # on top of the 12.3 min above, so a fully stalled night can exceed the
-    # 35 min step timeout, which then fails the step and pages as before.
+    # 1267 s = 21.1 min. Worst case, summed: 12.3 min (the 33 older items,
+    # measured) + 4 new tests x 2 attempts x ~2.1 min each (setup + bring-up +
+    # 120 s window, as measured) = 12.3 + 16.8 = ~29 min, under the 35 min step
+    # timeout. An attempt whose bring-up fails (60 s cap) never starts the
+    # window, so it costs ~1.5 min, not 2.1: that case is cheaper, not dearer.
+    # Only the old 27 min stalled-night case above, plus a stalled new suite,
+    # can pass 35 min; the step timeout then fails the step and pages as before.
     # A job-level timeout CANCELS the job, and failure() is false for a
     # cancelled job, so the pytest step carries its own 35 min timeout: that
     # fails the step, which turns any overrun into a harness-error page. The
