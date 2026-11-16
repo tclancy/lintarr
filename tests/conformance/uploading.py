@@ -136,9 +136,13 @@ def ready(rows: Sequence[Row], seeders: set[str]) -> bool:
 
 
 def idle_ready(rows: Sequence[Row], seeders: set[str]) -> bool:
-    """Every seeder is stalledUP or queuedUP (the U0 case: nobody uploads)."""
+    """Every seeder is stalledUP (the U0 case: nobody uploads).
+
+    queuedUP is not accepted: U0's limit fits every seeder, so queuedUP there is
+    only the ~1 s transient after a fresh add, before the slot is taken.
+    """
     mine = _of(rows, seeders)
-    return {r.hash for r in mine} == seeders and all(r.state in SEEDING_STATES for r in mine)
+    return {r.hash for r in mine} == seeders and all(r.state == "stalledUP" for r in mine)
 
 
 def active_seeders(rows: Sequence[Row], seeders: set[str]) -> int:

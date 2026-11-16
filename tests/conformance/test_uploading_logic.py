@@ -15,6 +15,7 @@ from tests.conformance.uploading import (
     UploadScenario,
     before_counts,
     check_uploading,
+    idle_ready,
     judge,
     ready,
     settled,
@@ -223,3 +224,11 @@ def test_scenarios_match_the_global_constraints():
     assert all(
         sc.cfg.queueing_enabled and not sc.cfg.share_limit_enabled for sc in UPLOAD_SCENARIOS
     )
+
+
+def test_idle_ready_requires_every_seeder_stalled_up():
+    assert idle_ready([row(h, "stalledUP") for h in "abc"], SEEDERS)
+    assert not idle_ready(
+        [row("a", "stalledUP"), row("b", "stalledUP"), row("c", "queuedUP")], SEEDERS
+    )
+    assert not idle_ready([row(h, "queuedUP") for h in "abc"], SEEDERS)
