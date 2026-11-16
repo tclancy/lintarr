@@ -3,7 +3,7 @@
 import pytest
 
 from tests.conformance.qbt import HarnessError, Row
-from tests.conformance.runner import classify_report
+from tests.conformance.runner import EXC_TYPE_ATTR, classify_report
 from tests.conformance.uploading import (
     Poll,
     UnstableWindow,
@@ -79,6 +79,28 @@ def test_settled_returns_the_stable_counts():
     assert settled(polls, set(), {"d0", "d1"}) == Counts(1, 1, 0, 0, 0)
 
 
+def test_vanished_seeder_is_harness_error():
+    polls = [Poll(0.0, (uploading("a"), uploading("b"))), Poll(7.0, (uploading("a"),))]
+    with pytest.raises(HarnessError, match="seeder stopped uploading") as exc:
+        check_uploading(polls, {"a", "b"})
+    assert "t=7.0" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "polls",
+    [
+        [],
+        [_poll(70.0, 1)],
+        [_poll(0.0, 1), _poll(70.0, 1)],
+        [_poll(45.0, 1), _poll(70.0, 1)],
+    ],
+    ids=["empty", "single-poll", "single-poll-in-window", "starts-late"],
+)
+def test_sparse_window_is_harness_error(polls):
+    with pytest.raises(HarnessError):
+        settled(polls, set(), {"d0", "d1"})
+
+
 def test_unstable_window_is_a_disagreement():
     polls = [_poll(40.0, 1), _poll(55.0, 1), _poll(60.0, 2), _poll(70.0, 1)]
     with pytest.raises(UnstableWindow) as exc:
@@ -116,5 +138,5 @@ def test_unstable_window_is_classified_disagreement():
         longrepr=None,
         when="call",
     )
-    report.conformance_exc_type = UnstableWindow  # what the conftest hook sets
+    setattr(report, EXC_TYPE_ATTR, UnstableWindow)  # what the conftest hook sets
     assert classify_report(report) == "disagreement"

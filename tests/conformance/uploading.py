@@ -33,6 +33,8 @@ LEECHER_CFG = QueueConfig(False, -1, -1, -1, False, False)
 UPLOAD_SIZE = 32 * 1024 * 1024
 UPLOAD_PIECE_LENGTH = 256 * 1024
 LEECHER_CAP = 65536  # bytes/s per torrent
+MIN_WINDOW_POLLS = 2
+MAX_WINDOW_GAP_S = 2.0  # the window's first poll may start at most this late
 UPLOAD_THRESHOLD = 2048  # bytes/s; a seeder must exceed this to count as uploading
 
 SEEDING_STATES = frozenset({"stalledUP", "queuedUP"})
@@ -151,19 +153,29 @@ def check_uploading(polls: Sequence[Poll], seeders: set[str]) -> None:
     """Raise HarnessError if a never-demoted seeder stops uploading in any poll."""
     demoted: set[str] = set()
     for poll in polls:
-        for r in _of(poll.rows, seeders):
-            if r.state == "queuedUP":
-                demoted.add(r.hash)
-            elif r.hash not in demoted and not _is_uploading(r):
-                raise HarnessError(f"seeder stopped uploading at t={poll.t}: {r}")
+        present = {r.hash: r for r in _of(poll.rows, seeders)}
+        for h in sorted(seeders):
+            r = present.get(h)
+            if r is not None and r.state == "queuedUP":
+                demoted.add(h)
+            elif h not in demoted and (r is None or not _is_uploading(r)):
+                raise HarnessError(
+                    f"seeder stopped uploading at t={poll.t}: {r or h + ' (absent)'}"
+                )
 
 
 def settled(
     polls: Sequence[Poll], seeders: set[str], downloads: set[str], *, stable_s: float = 30.0
 ) -> Counts:
     """The one tally shared by every poll in the final `stable_s` seconds."""
+    if not polls:
+        raise HarnessError("no polls to settle over")
     cutoff = polls[-1].t - stable_s
     window = [p for p in polls if p.t >= cutoff]
+    if len(window) < MIN_WINDOW_POLLS or window[0].t - cutoff > MAX_WINDOW_GAP_S:
+        raise HarnessError(
+            f"final {stable_s:.0f}s not covered: polls at {[p.t for p in window]}, cutoff {cutoff}"
+        )
     wanted = seeders | downloads
     tallies = [(p.t, tally({r.hash: r.state for r in p.rows}, wanted)) for p in window]
     if len({c for _, c in tallies}) != 1:
