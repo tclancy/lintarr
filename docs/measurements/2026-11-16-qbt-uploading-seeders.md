@@ -288,7 +288,8 @@ t = 1.02 to 2.02 s after the downloads were added, and **no count changed
 after that in any run**, through t = 120 s. So every run was stable by
 t = 30 s, with a wide margin. If the full `-m container` run measures over
 30 min (Task 6), the budget rule's condition for shrinking the window to 60 s
-is met.
+is met. The 30 min is the plan's shrink-the-window threshold, kept 5 min under
+the 35 min step timeout; it is not itself a timeout.
 
 Wall time per run was about 2 min 4 s (setup, bring-up of 1 to 6 s, and the
 120 s window). The four scenarios once each come to about 8.3 min, plus about

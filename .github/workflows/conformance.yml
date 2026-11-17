@@ -30,11 +30,15 @@ jobs:
     # Uploading seeders (P2 slice 2) add 4 container tests (U0-off, U1-off,
     # U1-on, W-off), each ~2 min 4 s (setup + bring-up + 120 s window); the
     # window is kept at 120 s since the total stays under the 30 min budget.
+    # (30 min is the plan's threshold for shrinking the window to 60 s, kept
+    # 5 min under the 35 min step timeout; it is not itself a timeout.)
     # Measured 2026-11-16: the full local container run (38 items) took
     # 1267 s = 21.1 min. Worst case, summed: 12.3 min (the 33 older items,
     # measured) + 4 new tests x 2 attempts x ~2.1 min each (setup + bring-up +
-    # 120 s window, as measured) = 12.3 + 16.8 = ~29 min, under the 35 min step
-    # timeout. An attempt whose bring-up fails (60 s cap) never starts the
+    # 120 s window, as measured) + the peer smoke test (~0.5 min x 2 attempts
+    # = 1) + the second pair start (~1.5 min) = 12.3 + 16.8 + 1 + 1.5 = ~31.6
+    # min, under the 35 min step timeout. An attempt whose bring-up fails
+    # (60 s cap) never starts the
     # window, so it costs ~1.5 min, not 2.1: that case is cheaper, not dearer.
     # Only the old 27 min stalled-night case above, plus a stalled new suite,
     # can pass 35 min; the step timeout then fails the step and pages as before.

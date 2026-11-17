@@ -72,16 +72,15 @@ consistency.
   `(0,0,3,2,0)->(3,0,2,3,0)`. Uploading seeders yield `max_active_torrents`
   slots exactly as idle ones do, the slow exemption made no difference, and
   `_WEDGED`'s limits do not wedge through seeders on 5.2.3. The nightly now
-  runs 38 items, ~21 min measured locally (worst case with retries ~29 min vs
+  runs 38 items, ~21 min measured locally (worst case with retries ~32 min vs
   the 35 min step timeout). **Watch item:** a `missingFiles` on the first
-  seeder add after a fresh pair was seen twice in ~60 adds, both on the first
-  add after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
+  seeder add was seen twice in ~60 adds, both after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
   fsynced before the add and the one retry absorbs a single hit.
   `DECISION NEEDED:` (Tom): the `_WEDGED` pin (`tests/test_check_cli.py`, exit
   1) rests on a config that does not wedge through seeders on 5.2.3, so #393's
   wedge needs another mechanism (leading candidate: stalled dead-swarm
   downloads, item 3e). And the F1/F3 change: the predicate premise,
-  `simulate()` and `trace()` must change together, keeping R3.
+  `simulate()` and `trace()` must change together, keeping R3 (`trace()` agrees with `simulate()`, tests/model/test_queue_trace.py:89).
 - **F1 (P2 differential, 2026-11-13; extended 2026-11-16).** `trace()` rule 1 and the predicate's
   absorbing-state claim ("seeders never release slots", `queue_liveness.py:9`)
   are believed wrong for idle seeders on qBittorrent 5.2.3: with

@@ -302,7 +302,8 @@ def _guarded(rec: Recording, step: Callable[[], None]) -> bool:
     try:
         step()
     except Exception as exc:  # the recording must survive whatever happens
-        rec.error = f"{type(exc).__name__}: {exc}"
+        # judge() re-raises a HarnessError, so keep its message undecorated.
+        rec.error = str(exc) if isinstance(exc, HarnessError) else f"{type(exc).__name__}: {exc}"
         return False
     return True
 
