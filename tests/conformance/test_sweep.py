@@ -1,6 +1,6 @@
 """The stale-container sweep selects only containers whose expiry has passed."""
 
-from tests.conformance.conftest import _expired
+from tests.conformance.containers import _expired
 
 
 def test_only_past_expiries_are_selected():

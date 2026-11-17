@@ -86,3 +86,15 @@ def test_every_scenario_sends_max_ratio_as_qbittorrent_reads_it_back(s):
     read-back never trips on that documented normalisation."""
     if not s.prefs["max_ratio_enabled"]:
         assert s.prefs["max_ratio"] == -1
+
+
+def test_extra_keys_are_read_back():
+    prefs = _PREFS | {"dht": True}
+
+    def ignore_dht(p):
+        p["dht"] = False
+        return p
+
+    set_prefs_verified(_FakePrefsHarness(ignore_dht), prefs)
+    with pytest.raises(HarnessError, match="dht"):
+        set_prefs_verified(_FakePrefsHarness(ignore_dht), prefs, extra_keys=frozenset({"dht"}))

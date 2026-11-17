@@ -1,11 +1,13 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-15 (UTC)
+**Last updated:** 2026-11-17 (UTC)
 **State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
 `trace()`) is merged to `main` (83e162e) and its nightly alert is **armed**
 (2026-11-15). It found F1-F3 (Open items). P0b's `queue-liveness` check is
 unchanged and still live on homelab, hourly as an edge-triggered systemd timer
-(first PASS against the real stack 2026-10-07 21:40 UTC).
+(first PASS against the real stack 2026-10-07 21:40 UTC). P2 slice 2 (uploading seeders against
+`max_active_torrents`) is merged to `main`; its Linux validation run
+43998520392 was green, 38 passed in 21m17s.
 
 ## Conformance nightly: alert proven
 
@@ -74,7 +76,26 @@ consistency.
 
 ## Open items
 
-- **F1 (P2 differential, 2026-11-13).** `trace()` rule 1 and the predicate's
+- **P2 slice 2 result (2026-11-16, merged to `main` 2026-11-17; Linux run
+  43998520392 green, 21m17s).** Measured in
+  `docs/measurements/2026-11-16-qbt-uploading-seeders.md`; all four scenarios
+  agreed 3 of 3 and every one is **yield**. Count tuples (before -> after) are
+  as the measurements doc defines them:
+  U0-off (idle control) and U1-off/U1-on (uploading, exemption off/on)
+  `(0,0,3,0,0)->(1,0,2,1,0)`; W-off (`_WEDGED`'s 3/3/5)
+  `(0,0,3,2,0)->(3,0,2,3,0)`. Uploading seeders yield `max_active_torrents`
+  slots exactly as idle ones do, the slow exemption made no difference, and
+  `_WEDGED`'s limits do not wedge through seeders on 5.2.3. The nightly now
+  runs 38 items, ~21 min measured locally (worst case with retries ~32 min vs
+  the 35 min step timeout). **Watch item:** a `missingFiles` on the first
+  seeder add was seen twice in ~60 adds, both after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
+  fsynced before the add and the one retry absorbs a single hit.
+  `DECISION NEEDED:` (Tom): the `_WEDGED` pin (`tests/test_check_cli.py`, exit
+  1) rests on a config that does not wedge through seeders on 5.2.3, so #393's
+  wedge needs another mechanism (leading candidate: stalled dead-swarm
+  downloads, item 3e). And the F1/F3 change: the predicate premise,
+  `simulate()` and `trace()` must change together, keeping R3 (`trace()` agrees with `simulate()`, tests/model/test_queue_trace.py:89).
+- **F1 (P2 differential, 2026-11-13; extended 2026-11-16).** `trace()` rule 1 and the predicate's
   absorbing-state claim ("seeders never release slots", `queue_liveness.py:9`)
   are believed wrong for idle seeders on qBittorrent 5.2.3: with
   `max_active_torrents` full of seeders, new downloads start and seeders yield
@@ -82,7 +103,9 @@ consistency.
   scenarios 1-wedged-slow-off, 1b-*-slow-off and 7-*-slow-off
   (`tests/conformance/known.py`). It leaves spec Goal 4 (a live test that a
   seeder blocks a download) unmet; #393's wedge needs a mechanism F1 did not
-  reproduce (see the measurements doc).
+  reproduce (see the measurements doc). Slice 2 extends F1 to actively
+  uploading seeders: they yield slots too (U1), so the absorbing-state claim is
+  wrong for them as well.
 - **F2 (P2 differential, 2026-11-13).** `trace()` rule 2 (`max_active_uploads`
   is not consulted, `seeding_queued` is always 0) is wrong: the upload limit
   queues seeders (`queuedUP`) when the slow exemption is off. Known in
@@ -108,9 +131,9 @@ consistency.
   treats the exemption as rescuing a full `max_active_torrents`. That is a false
   PASS for **seeder absorption** only if some seeder wedge exists, and F1 says
   idle seeders do not produce one. Actively uploading seeders are not "slow", so
-  the exemption would not free their slots: if they can wedge (unmeasured; the
-  next slice), the predicate PASSes that config wrongly, independently of F3.
-  That is a separate false-PASS candidate. A different route is real and
+  the exemption would not free their slots, so if they could wedge the predicate
+  would PASS that config wrongly, independently of F3. Slice 2 measured it: the seeder false-PASS route was **not observed**
+  (uploading seeders yield, U1-off/U1-on, W-off). A different route is real and
   separate: measurement item 3e, a stalled **download** holding
   `max_active_torrents=1` with the exemption on, keeps the next download
   `queuedDL` for the 120 s watched. The predicate does not model that route at

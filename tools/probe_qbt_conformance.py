@@ -54,7 +54,7 @@ from tempfile import TemporaryDirectory
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))  # the harness lives under tests/, not in the package
 
-from tests.conformance import conftest as fixture  # noqa: E402
+from tests.conformance import containers as fixture  # noqa: E402
 from tests.conformance.image import QBT_IMAGE  # noqa: E402
 from tests.conformance.qbt import QbtHarness  # noqa: E402
 from tests.conformance.states import tally  # noqa: E402
@@ -93,7 +93,7 @@ def conformance_container() -> Iterator[QbtHarness]:
         name = f"lintarr-conformance-{port}"
         started = False
         try:
-            fixture._sweep_expired()
+            fixture.sweep_expired()
             fixture._docker(
                 "run", "-d", "--rm", "--name", name,
                 "--label", f"{fixture.EXPIRY_LABEL}={int(time.time()) + fixture.LIFETIME_SECONDS}",

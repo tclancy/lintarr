@@ -63,8 +63,10 @@ def _same_pref(sent: object, got: object) -> bool:
     return sent == got
 
 
-def set_prefs_verified(h: PrefsHarness, prefs: dict[str, object]) -> None:
-    """Send `prefs`, then raise HarnessError unless every PREF_KEYS key reads back
+def set_prefs_verified(
+    h: PrefsHarness, prefs: dict[str, object], *, extra_keys: frozenset[str] = frozenset()
+) -> None:
+    """Send `prefs`, then raise HarnessError unless every PREF_KEYS | extra_keys key reads back
     from GET /api/v2/app/preferences equal to what was sent.
 
     setPreferences answers 200 and silently ignores a key it does not know, so
@@ -74,14 +76,15 @@ def set_prefs_verified(h: PrefsHarness, prefs: dict[str, object]) -> None:
     no special case, because prefs_for already sends -1 then; an override that
     sent anything else with the flag off would rightly fail here.
     """
-    unsent = sorted(PREF_KEYS - prefs.keys())
+    keys = PREF_KEYS | extra_keys
+    unsent = sorted(keys - prefs.keys())
     if unsent:
-        raise HarnessError(f"prefs do not set every PREF_KEYS key: {unsent}")
+        raise HarnessError(f"prefs do not set every checked key: {unsent}")
     h.set_prefs(prefs)
     got = h.preferences()
     wrong = {
         key: (prefs[key], got.get(key, "<absent>"))
-        for key in sorted(PREF_KEYS)
+        for key in sorted(keys)
         if key not in got or not _same_pref(prefs[key], got[key])
     }
     if wrong:
