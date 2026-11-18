@@ -139,6 +139,10 @@ A `Backend` (frozen dataclass or Protocol; builder's call) provides:
   `ServiceError` exactly as `collect_qbt` does today. Auth, ban avoidance and
   the read-only guarantee stay inside the backend and inside `ReadOnlyClient`.
 - `checks: tuple[Check, ...]`, the backend's own invariants.
+- `therefore: Mapping[tuple[str, str], str]`, the operator-facing "Therefore"
+  lines for its own `(invariant, conflict)` pairs (added after the plan
+  review: today's table lives in `cli.py`, which would make every new backend
+  edit `cli.py`, against G1).
 
 `ClientConfig` replaces `QbtConfig`: `name`, `kind`, `url`, and the three
 optional credentials, with the same secret-masking `__repr__`.
