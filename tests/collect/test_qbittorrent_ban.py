@@ -228,7 +228,12 @@ def test_a_ban_reaches_the_error_report_as_banned():
     from lintarr.collect.stack import collect_stack
     from lintarr.config import load_config
 
-    env = {"QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "pw"}
+    env = {
+        "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+        "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+        "DOWNLOAD_CLIENT_USER": "admin",
+        "DOWNLOAD_CLIENT_PASS": "pw",
+    }
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.path == AUTH_PATH, "collection must stop at the ban"

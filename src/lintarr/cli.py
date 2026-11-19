@@ -24,7 +24,7 @@ from lintarr.edge import (
 from lintarr.facts import Known, Unknown, is_known
 from lintarr.models import ClientInstance, StackFacts
 from lintarr.outcomes import Outcome, exit_code
-from lintarr.run import run_checks, run_outcome
+from lintarr.run import declared_services, run_checks, run_outcome
 
 
 def _config_from_env() -> LintarrConfig:
@@ -35,7 +35,7 @@ def _config_from_env() -> LintarrConfig:
     input mistakes, so they belong in click's usage-error channel: one line
     naming the variable, and exit 2. Handing ``os.environ`` straight to
     ``load_config`` let the ``ValueError`` reach the interpreter, so a single
-    typo (``QBIT_URLL``) printed a traceback.
+    typo (``DOWNLOAD_CLIENT_URLL``) printed a traceback.
 
     Exit 2 is the same code ``outcomes.exit_code`` gives ``Outcome.ERROR``, and
     that collision is intentional: both mean *lintarr could not look*, which is
@@ -350,7 +350,7 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool, state_file: P
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
-    findings = run_checks(facts, declared=cfg.declared)
+    findings = run_checks(facts, declared=declared_services(cfg, facts))
     if state_file is None:
         fresh = None
         code = exit_code((f.outcome for f in findings), strict=strict)

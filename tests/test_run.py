@@ -56,7 +56,7 @@ def test_an_unreachable_service_does_not_let_the_run_look_clean():
     facts = StackFacts(
         clients=(as_client(repaired_qbt()),),
         arrs=NO_GOALS,
-        errors=(ErrorRow("sonarr[main]", "unreachable", "/api/v3/system/status: ConnectError"),),
+        errors=(ErrorRow("arr[main]", "unreachable", "/api/v3/system/status: ConnectError"),),
     )
     assert run_outcome(run_checks(facts, declared=_QBT_AND_SONARR)) is Outcome.ERROR
 
@@ -81,7 +81,7 @@ def test_no_service_declared_and_none_collected_yields_no_findings():
 
 
 def test_a_declared_service_that_never_arrived_is_reported_by_name():
-    """ "SONARR_URL was never set" must not read as "sonarr is fine".
+    """ "ARR_URL was never set" must not read as "sonarr is fine".
 
     Nothing else in the run can see this: no instance was configured, so no
     request failed and no error was recorded. Without this finding the run is

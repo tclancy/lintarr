@@ -6,11 +6,12 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989",
-    "SONARR_API_KEY": "k",
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "pw",
+    "ARR_URL": "http://sonarr:8989",
+    "ARR_API_KEY": "k",
 }
 
 
@@ -25,7 +26,7 @@ def test_only_verb_other_than_get_is_the_qbittorrent_login():
             case "/api/v2/app/version":
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences" | "/api/v3/system/status":
-                return httpx.Response(200, json={"version": "4.0.0"})
+                return httpx.Response(200, json={"version": "4.0.0", "appName": "Sonarr"})
             # These two were once collapsed into one arm returning a list.
             # qBittorrent's categories endpoint returns an *object*; only the
             # arr indexer endpoint returns an array. Sharing an arm made the

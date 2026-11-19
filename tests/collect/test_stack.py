@@ -13,13 +13,14 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989",
-    "SONARR_API_KEY": "k",
-    "SONARR_URL__ANIME": "http://anime:8989",
-    "SONARR_API_KEY__ANIME": "k2",
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "pw",
+    "ARR_URL": "http://sonarr:8989",
+    "ARR_API_KEY": "k",
+    "ARR_URL__ANIME": "http://anime:8989",
+    "ARR_API_KEY__ANIME": "k2",
 }
 
 
@@ -50,7 +51,7 @@ def _transport(
             return httpx.Response(200, json=anime_indexers)
         match path:
             case "/api/v3/system/status":
-                return httpx.Response(200, json={"version": "4.0.0"})
+                return httpx.Response(200, json={"version": "4.0.0", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=[])
         return httpx.Response(404)
@@ -68,7 +69,7 @@ def test_collects_every_configured_instance():
 def test_unreachable_instance_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(sonarr_down=True))
     assert [a.name for a in facts.arrs] == ["main"]
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "unreachable")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[anime]", "unreachable")]
 
 
 def test_unexpected_json_shape_is_recorded_not_raised():
@@ -82,7 +83,7 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=transport)
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.clients, "the healthy qBittorrent instance must still report"
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[anime]", "bad-response")]
 
 
 def test_undecodable_body_is_recorded_not_raised():
@@ -102,7 +103,7 @@ def test_undecodable_body_is_recorded_not_raised():
     # blank lines before the next def.
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.clients, "the healthy qBittorrent instance must still report"
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[anime]", "bad-response")]
 
 
 def test_malformed_fields_entry_is_recorded_not_raised():
@@ -118,7 +119,7 @@ def test_malformed_fields_entry_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.clients, "the healthy qBittorrent instance must still report"
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[anime]", "bad-response")]
 
 
 def test_undecodable_version_text_is_recorded_not_raised():
@@ -154,4 +155,4 @@ def test_non_object_fields_payload_is_recorded_not_raised():
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
     assert facts.clients, "the healthy qBittorrent instance must still report"
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[anime]", "bad-response")]

@@ -7,7 +7,7 @@ either — failures are recorded so the outcome layer can report ERROR.
 import httpx
 
 from lintarr.clients import BACKENDS
-from lintarr.collect.arr import collect_arr
+from lintarr.collect.arr import ARR_LABEL_KIND, collect_arr
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.config import LintarrConfig
 from lintarr.models import ArrInstance, ClientInstance, ErrorRow, StackFacts
@@ -28,7 +28,10 @@ def collect_stack(
             errors.append(ErrorRow(label, exc.kind, exc.detail))
 
     for arr in cfg.arrs:
-        label = f"{arr.kind}[{arr.name}]"
+        # By name, never by kind: the kind is only known once the status call
+        # answers, and a label that flipped with the failure point would be a
+        # new alert key, re-paging on every flip.
+        label = f"{ARR_LABEL_KIND}[{arr.name}]"
         try:
             with ReadOnlyClient(
                 arr.url, transport=transport, headers={"X-Api-Key": arr.api_key}

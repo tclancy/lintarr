@@ -480,9 +480,11 @@ def test_a_snapshot_can_produce_findings_of_every_shape_the_property_loops_over(
     facts = StackFacts(
         clients=(as_client(wedged_qbt()),),
         arrs=NO_GOALS,
-        errors=(ErrorRow("sonarr[x]", "unreachable", "connection refused"),),
+        errors=(ErrorRow("arr[x]", "unreachable", "connection refused"),),
     )
-    findings = run_checks(facts, declared=frozenset({"radarr"}))
+    # Not an arr kind: a failed ``arr[...]`` counts as an attempt at every arr
+    # kind, so only a declared non-arr service is left to SKIP as never collected.
+    findings = run_checks(facts, declared=frozenset({"deluge"}))
     assert len(findings) >= 3, [f.invariant for f in findings]
 
 

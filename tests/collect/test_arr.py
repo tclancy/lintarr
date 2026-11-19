@@ -6,7 +6,7 @@ from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.config import ArrConfig
 from lintarr.facts import is_known
 
-CFG = ArrConfig(name="main", kind="sonarr", url="http://sonarr", api_key="k")
+CFG = ArrConfig(name="main", url="http://sonarr", api_key="k")
 
 _UNSET = object()
 
@@ -64,7 +64,7 @@ def _collect(indexers, version="4.0.15.2941", status=_UNSET):
     def handle(request: httpx.Request) -> httpx.Response:
         match request.url.path:
             case "/api/v3/system/status":
-                body = {"version": version} if status is _UNSET else status
+                body = {"version": version, "appName": "Sonarr"} if status is _UNSET else status
                 return httpx.Response(200, json=body)
             case "/api/v3/indexer":
                 return httpx.Response(200, json=indexers)
@@ -171,12 +171,37 @@ def test_indexer_without_a_usable_name_is_bad_response(name):
     assert e.value.kind == "bad-response"
 
 
-@pytest.mark.parametrize("status", [{}, {"version": None}, {"version": ""}, {"version": "  "}])
-def test_missing_or_null_version_is_bad_response(status):
+@pytest.mark.parametrize("version", [_UNSET, None, "", "  "], ids=repr)
+def test_missing_or_null_version_is_bad_response(version):
     """A fabricated version ('' or the literal 'None') would be stamped on every fact."""
+    status = {"appName": "Sonarr"}
+    if version is not _UNSET:
+        status["version"] = version
     with pytest.raises(ServiceError) as e:
         _collect([], status=status)
     assert e.value.kind == "bad-response"
+    assert "version" in e.value.detail
+
+
+@pytest.mark.parametrize(
+    ("app_name", "kind"), [("Sonarr", "sonarr"), ("sonarr", "sonarr"), ("RADARR", "radarr")]
+)
+def test_kind_is_detected_from_app_name(app_name, kind):
+    arr, _ = _collect([], status={"version": "4.0.0", "appName": app_name})
+    assert arr.kind == kind
+
+
+@pytest.mark.parametrize("app_name", ["Lidarr", _UNSET, 123], ids=repr)
+def test_an_unsupported_or_missing_app_name_is_bad_response_naming_it(app_name):
+    """Review Focus 3: never a guess — an arr whose kind is unread is an ERROR."""
+    status = {"version": "4.0.0"}
+    if app_name is not _UNSET:
+        status["appName"] = app_name
+    with pytest.raises(ServiceError) as e:
+        _collect([], status=status)
+    assert e.value.kind == "bad-response"
+    named = None if app_name is _UNSET else app_name
+    assert f"appName {named!r} is not a supported arr (radarr, sonarr)" in e.value.detail
 
 
 @pytest.mark.parametrize("status", [["not", "a", "dict"], "a string", 7])

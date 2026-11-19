@@ -33,15 +33,16 @@ from lintarr.outcomes import Outcome
 from lintarr.run import run_checks
 from tests.strategies import ERROR_KINDS
 
-_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_")
+_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": "pw",
-    "SONARR_URL": "http://sonarr:8989",
-    "SONARR_API_KEY": "k",
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "pw",
+    "ARR_URL": "http://sonarr:8989",
+    "ARR_API_KEY": "k",
 }
 
 #: Every value the error-row ``kind`` is allowed to be. Shared with the
@@ -89,7 +90,7 @@ def _transport(*, qbt_down=False, sonarr_down=False):
                 raise httpx.ConnectError("refused", request=request)
             match path:
                 case "/api/v3/system/status":
-                    return httpx.Response(200, json={"version": "4.0.0"})
+                    return httpx.Response(200, json={"version": "4.0.0", "appName": "Sonarr"})
                 case "/api/v3/indexer":
                     return httpx.Response(200, json=[])
         return httpx.Response(404)
@@ -113,7 +114,7 @@ def _only_row(facts):
     ("down", "label", "kind"),
     [
         ({"qbt_down": True}, "qbittorrent[main]", "unauthorised"),
-        ({"sonarr_down": True}, "sonarr[main]", "unreachable"),
+        ({"sonarr_down": True}, "arr[main]", "unreachable"),
     ],
     ids=["qbittorrent-arm", "arr-arm"],
 )
@@ -274,10 +275,12 @@ def test_attempted_still_recovers_the_service_kind_from_the_label():
     Widening the row changes that unpacking, and getting it wrong is silent:
     a declared service that errored would be reported twice, once as ERROR and
     once as "declared but never collected", which is the exact double-report
-    ``_absent_service_findings`` exists to prevent.
+    ``_absent_service_findings`` exists to prevent. A failed arr is labelled
+    ``arr[<name>]``, so its attempt must cover the declared ``sonarr`` too.
     """
     facts = _collect(sonarr_down=True)
     findings = run_checks(facts, declared=frozenset({"qbittorrent", "sonarr"}))
-    assert [(f.outcome, f.instance) for f in findings if f.instance.startswith("sonarr")] == [
-        (Outcome.ERROR, "sonarr[main]")
+    arr_findings = [
+        (f.outcome, f.instance) for f in findings if f.instance.startswith(("sonarr", "arr["))
     ]
+    assert arr_findings == [(Outcome.ERROR, "arr[main]")]

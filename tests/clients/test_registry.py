@@ -54,7 +54,7 @@ def test_a_failing_qbittorrent_keeps_its_error_label():
             ),
         ),
         arrs=(),
-        declared=frozenset({"qbittorrent"}),
+        declared_explicit=None,
     )
     facts = collect_stack(cfg, transport=httpx.MockTransport(refuse))
     assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "unreachable")]

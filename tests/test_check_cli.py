@@ -6,18 +6,19 @@ from click.testing import CliRunner
 
 from lintarr.cli import cli
 
-_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_")
+_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
 # Distinctive credentials: "pw" would match too much to prove anything about
 # what does not reach the output.
-QBIT_PASSWORD = "hunter2"
-SONARR_API_KEY = "sonarrkey"
+CLIENT_PASSWORD = "hunter2"
+ARR_API_KEY_VALUE = "sonarrkey"
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": QBIT_PASSWORD,
-    "SONARR_URL": "http://sonarr:8989",
-    "SONARR_API_KEY": SONARR_API_KEY,
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": CLIENT_PASSWORD,
+    "ARR_URL": "http://sonarr:8989",
+    "ARR_API_KEY": ARR_API_KEY_VALUE,
 }
 
 # A torrent indexer with no seed criteria at all — homelab#393's shape. Without
@@ -63,7 +64,7 @@ def _transport(prefs, indexers=WEDGED_INDEXERS):
             case "/api/v2/torrents/categories":
                 return httpx.Response(200, json={})
             case "/api/v3/system/status":
-                return httpx.Response(200, json={"version": "4.0.15.2941"})
+                return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=indexers)
         return httpx.Response(404)
@@ -257,7 +258,7 @@ def test_the_json_outcome_and_exit_code_may_disagree_and_both_are_reported():
     of the stack was examined. Emitting only the severity left the payload
     contradicting the process's own return value with no way to tell.
     """
-    env = {k: v for k, v in ENV.items() if not k.startswith("SONARR_")}
+    env = {k: v for k, v in ENV.items() if not k.startswith("ARR_")}
     result = _run(
         ["check", "--json"],
         prefs=STARVED_PREFS,
@@ -273,7 +274,7 @@ def test_the_json_outcome_and_exit_code_may_disagree_and_both_are_reported():
 
 def test_a_declared_service_that_never_arrived_is_named_in_the_output():
     """A qBittorrent-only run must say out loud that it never read Sonarr."""
-    env = {k: v for k, v in ENV.items() if not k.startswith("SONARR_")}
+    env = {k: v for k, v in ENV.items() if not k.startswith("ARR_")}
     result = _run(["check"], env={**env, "LINTARR_SERVICES": "qbittorrent,sonarr"})
     assert "sonarr" in result.output
     assert "declared but never collected" in result.output
@@ -295,8 +296,8 @@ def test_check_never_prints_credentials():
     output = _run(["check"]).output
     assert "queue-liveness" in output, "nothing was checked — the assertions below prove nothing"
     assert "arr.indexer_without_seed_criteria" in output, "the arr was never read"
-    assert QBIT_PASSWORD not in output
-    assert SONARR_API_KEY not in output
+    assert CLIENT_PASSWORD not in output
+    assert ARR_API_KEY_VALUE not in output
 
 
 # --- An unusable seed-criteria value, end to end (#10) ------------------------

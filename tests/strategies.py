@@ -188,7 +188,7 @@ ERRORS = st.builds(
     label=st.one_of(
         st.builds(
             "{}[{}]".format,
-            st.sampled_from(["sonarr", "radarr", "qbittorrent"]),
+            st.sampled_from(["arr", "qbittorrent"]),
             st.text(min_size=1, max_size=4),
         ),
         st.text(min_size=1, max_size=6),
@@ -200,7 +200,7 @@ ERRORS = st.builds(
     ),
 )
 
-DECLARED = st.frozensets(st.sampled_from(["qbittorrent", "sonarr", "radarr"]), max_size=3)
+DECLARED = st.frozensets(st.sampled_from(["qbittorrent", "sonarr", "radarr", "arr"]), max_size=4)
 
 
 STACK_FACTS = st.builds(

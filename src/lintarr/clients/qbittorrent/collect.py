@@ -68,7 +68,8 @@ def _is_ban_refusal(exc: ServiceError) -> bool:
 _LOGIN_401_DETAIL = (
     "qBittorrent refused the login with HTTP 401, and that refusal has two "
     "causes it does not distinguish: either the username or password is wrong, "
-    "or the port in QBIT_URL (QBIT_URL__<NAME> for a second instance) is not "
+    "or the port in DOWNLOAD_CLIENT_URL (DOWNLOAD_CLIENT_URL__<NAME> for a second "
+    "instance) is not "
     "the port the WebUI listens on "
     "(WebUI\\Port) — a reverse proxy in front of it, or a container published "
     "as -p 18080:8080 — which fails qBittorrent's host-header validation and is "

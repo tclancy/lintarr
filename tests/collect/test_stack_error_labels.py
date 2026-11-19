@@ -24,17 +24,19 @@ import pytest
 from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.outcomes import Outcome
-from lintarr.run import run_checks
+from lintarr.run import declared_services, run_checks
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": "pw",
-    "QBIT_URL__VPN": "http://vpnqbt:8080",
-    "QBIT_USER__VPN": "admin",
-    "QBIT_PASS__VPN": "pw",
-    "SONARR_URL": "http://sonarr:8989",
-    "SONARR_API_KEY": "k",
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "pw",
+    "DOWNLOAD_CLIENT_KIND__VPN": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL__VPN": "http://vpnqbt:8080",
+    "DOWNLOAD_CLIENT_USER__VPN": "admin",
+    "DOWNLOAD_CLIENT_PASS__VPN": "pw",
+    "ARR_URL": "http://sonarr:8989",
+    "ARR_API_KEY": "k",
 }
 
 
@@ -55,7 +57,7 @@ def _transport(*, down: frozenset[str] = frozenset()) -> httpx.MockTransport:
             case "/api/v2/torrents/categories":
                 return httpx.Response(200, json={})
             case "/api/v3/system/status":
-                return httpx.Response(200, json={"version": "4.0.0"})
+                return httpx.Response(200, json={"version": "4.0.0", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=[])
         return httpx.Response(404)
@@ -80,11 +82,14 @@ def test_the_label_names_the_instance_that_failed_and_not_its_healthy_sibling():
     assert [q.name for q in facts.clients] == ["main"]
 
 
-def test_an_arr_is_recorded_under_its_kind_not_the_word_arr():
-    """``sonarr[main]``, because ``run.py`` matches the label's kind against a
-    declaration, and nothing ever declares ``arr``."""
+def test_an_arr_is_recorded_under_the_word_arr_and_its_instance_name():
+    """``arr[main]``, never ``sonarr[main]``: an arr's kind is read from its own
+    status call, so an arr that failed may never have said which it was. A label
+    that flipped between ``arr[...]`` and ``sonarr[...]`` with the failure point
+    would be a new alert key on every flip. ``run.py`` treats the ``arr`` kind
+    as covering every arr kind a declaration can name."""
     facts = collect_stack(load_config(ENV), transport=_transport(down=frozenset({"sonarr"})))
-    assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[main]", "unreachable")]
+    assert [(e.label, e.kind) for e in facts.errors] == [("arr[main]", "unreachable")]
 
 
 @pytest.mark.parametrize(
@@ -106,7 +111,7 @@ def test_a_service_that_failed_is_not_also_reported_as_never_collected(down, lab
     """
     cfg = load_config(ENV)
     facts = collect_stack(cfg, transport=_transport(down=down))
-    findings = run_checks(facts, declared=cfg.declared)
+    findings = run_checks(facts, declared=declared_services(cfg, facts))
 
     skipped_as_absent = [
         f for f in findings if f.outcome is Outcome.SKIP and f.invariant == "collect"
@@ -127,6 +132,6 @@ def test_a_declared_service_that_was_never_attempted_still_skips():
     """
     cfg = load_config(ENV)
     facts = collect_stack(cfg, transport=_transport())
-    findings = run_checks(facts, declared=cfg.declared | {"radarr"})
+    findings = run_checks(facts, declared=declared_services(cfg, facts) | {"radarr"})
     absent = [f for f in findings if f.outcome is Outcome.SKIP and f.invariant == "collect"]
     assert [f.instance for f in absent] == ["radarr"]
