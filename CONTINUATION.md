@@ -22,7 +22,8 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
   share-limit helpers through `clients/qbittorrent/share_limits.py`.
   `Backend.arr_dependent` now tells `run.py` which checks SKIP when an arr
   failed, so `run.py` names no check.
-- **Live, strict, homelab, at 414494c:** exit 0, `orphan-inevitability` PASS,
+- **Live, strict, homelab, at 414494c and again at 7e78c92 (final check
+  logic, 2026-11-19 20:23 UTC):** exit 0, `orphan-inevitability` PASS,
   "qBittorrent removes files at the limit" for both arrs (action
   RemoveWithContent, ratio 1.5 and 14 days).
 - **Known limits:** indexer `downloadClientId` pinning; qBittorrent's parent
