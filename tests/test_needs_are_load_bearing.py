@@ -8,7 +8,7 @@ from the implementation.
 
 import pytest
 
-from lintarr.invariants.queue_liveness import NEEDS, check
+from lintarr.clients.qbittorrent.queue_liveness import NEEDS, check
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import (

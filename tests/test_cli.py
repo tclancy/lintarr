@@ -58,7 +58,7 @@ def test_dump_facts_json_marks_unread_fields_unknown():
     result = _run(["dump-facts", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    qbt = payload["qbits"][0]
+    qbt = payload["clients"][0]
     assert qbt["max_active_torrents"]["known"] is True
     assert qbt["max_active_torrents"]["value"] == 5
     assert qbt["max_ratio_enabled"]["known"] is False
@@ -67,7 +67,7 @@ def test_dump_facts_json_marks_unread_fields_unknown():
 
 def test_dump_facts_records_the_source_of_every_known_fact():
     payload = json.loads(_run(["dump-facts", "--json"]).output)
-    assert payload["qbits"][0]["max_active_torrents"]["source"] == "GET /api/v2/app/preferences"
+    assert payload["clients"][0]["max_active_torrents"]["source"] == "GET /api/v2/app/preferences"
 
 
 _ARR_ENV = {"SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "sonarrkey"}
@@ -119,7 +119,7 @@ def _run_both_services(args, *, collected):
     ("args", "collected"),
     [
         (["dump-facts"], ["qbittorrent[main]", "sonarr[main]", "1337x", "max_active_torrents"]),
-        (["dump-facts", "--json"], ['"qbits"', '"indexers"', '"1337x"', '"max_active_torrents"']),
+        (["dump-facts", "--json"], ['"clients"', '"indexers"', '"1337x"', '"max_active_torrents"']),
     ],
 )
 def test_dump_facts_never_prints_credentials(args, collected):
@@ -153,7 +153,7 @@ def test_dump_facts_json_emits_the_service_version_of_every_known_fact():
     payload = json.loads(
         _run(["dump-facts", "--json"], extra_env=_ARR_ENV, transport=transport).output
     )
-    assert payload["qbits"][0]["max_active_torrents"]["service_version"] == "v5.2.3"
+    assert payload["clients"][0]["max_active_torrents"]["service_version"] == "v5.2.3"
     indexer = payload["arrs"][0]["indexers"][0]
     assert indexer["seed_ratio"]["service_version"] == "4.0.15.2941"
 

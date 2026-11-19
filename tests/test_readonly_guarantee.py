@@ -41,7 +41,7 @@ def test_only_verb_other_than_get_is_the_qbittorrent_login():
     # The verb assertion below is only meaningful if collection actually
     # happened. Without these, a regression that silently dropped arr (or
     # qBittorrent) collection would still produce a passing test.
-    assert facts.qbits, "no qBittorrent instance was collected — verb assertion would be vacuous"
+    assert facts.clients, "no qBittorrent instance was collected — verb assertion would be vacuous"
     assert facts.arrs, "no arr instance was collected — verb assertion would be vacuous"
     assert facts.errors == (), f"expected a clean run, got errors: {facts.errors}"
 

@@ -50,7 +50,7 @@ the seeding-time preference and fails for the ratio alone.
 
 import pytest
 
-from lintarr.invariants.queue_liveness import (
+from lintarr.clients.qbittorrent.queue_liveness import (
     SEED_CRITERIA_CONFLICTS,
     STARVATION,
     check,

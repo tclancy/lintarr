@@ -77,7 +77,7 @@ def test_the_label_names_the_instance_that_failed_and_not_its_healthy_sibling():
     """
     facts = collect_stack(load_config(ENV), transport=_transport(down=frozenset({"vpnqbt"})))
     assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[vpn]", "unreachable")]
-    assert [q.name for q in facts.qbits] == ["main"]
+    assert [q.name for q in facts.clients] == ["main"]
 
 
 def test_an_arr_is_recorded_under_its_kind_not_the_word_arr():

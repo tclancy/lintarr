@@ -79,7 +79,14 @@ def test_both_services_render_with_exactly_one_v():
     pair rather than on either line.
     """
     payload = {
-        "qbits": [{"name": "main", "version": "v5.2.4", "queueing_enabled": _fact(True)}],
+        "clients": [
+            {
+                "name": "main",
+                "kind": "qbittorrent",
+                "version": "v5.2.4",
+                "queueing_enabled": _fact(True),
+            }
+        ],
         "arrs": [
             {"name": "main", "kind": "sonarr", "version": "4.0.0", "indexers": []},
         ],

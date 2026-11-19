@@ -26,12 +26,14 @@ rather than on either member.
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH, authenticate
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 from tests.collect.test_qbittorrent_ban import BAN_BODY
 
-CFG = QbtConfig(name="main", url="http://qbt:8081", username="admin", password="hunter2")
+CFG = ClientConfig(
+    name="main", kind="qbittorrent", url="http://qbt:8081", username="admin", password="hunter2"
+)
 
 #: Row A4/A6 off the wire. Both rows are this response.
 UNAUTHORIZED = ("Unauthorized", 401)
@@ -200,7 +202,7 @@ def test_identical_responses_produce_identical_details():
     """
     body, status = UNAUTHORIZED
 
-    def refuse(cfg: QbtConfig) -> str:
+    def refuse(cfg: ClientConfig) -> str:
         c = ReadOnlyClient(
             cfg.url,
             transport=httpx.MockTransport(lambda r: httpx.Response(status, text=body)),
@@ -211,7 +213,11 @@ def test_identical_responses_produce_identical_details():
         return excinfo.value.detail
 
     details = {
-        url: refuse(QbtConfig(name="main", url=url, username="admin", password="hunter2"))
+        url: refuse(
+            ClientConfig(
+                name="main", kind="qbittorrent", url=url, username="admin", password="hunter2"
+            )
+        )
         for url in EQUIVALENT_URLS
     }
     # Asserted against the first URL rather than via set(...) == 1: a set
@@ -224,8 +230,9 @@ def test_identical_responses_produce_identical_details():
 
     # And the credentials half, which is cheap to keep.
     other_credentials = refuse(
-        QbtConfig(
+        ClientConfig(
             name="main",
+            kind="qbittorrent",
             url=EQUIVALENT_URLS[0],
             username="operator",
             password="theRealOneAndItIsLonger",

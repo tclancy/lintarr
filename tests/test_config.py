@@ -13,8 +13,8 @@ def test_single_instance_of_each():
             "SONARR_API_KEY": "abc",
         }
     )
-    assert [q.name for q in cfg.qbits] == ["main"]
-    assert cfg.qbits[0].url == "http://gluetun:8080"
+    assert [q.name for q in cfg.clients] == ["main"]
+    assert cfg.clients[0].url == "http://gluetun:8080"
     assert [(a.name, a.kind) for a in cfg.arrs] == [("main", "sonarr")]
 
 

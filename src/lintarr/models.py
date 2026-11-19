@@ -33,6 +33,30 @@ class QbtInstance:
 
 
 @dataclass(frozen=True, slots=True)
+class ClientFacts:
+    """Client-neutral facts every backend reports.
+
+    Empty on purpose: a neutral field is added in the same change as the first
+    shared check that reads it, and populated by every registered backend then.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ClientInstance:
+    """One collected download client, whatever its kind.
+
+    ``specific`` is the backend's own facts object — a ``QbtInstance`` for
+    qBittorrent — and only that backend's checks read it.
+    """
+
+    name: str
+    kind: str
+    version: str
+    common: ClientFacts
+    specific: object
+
+
+@dataclass(frozen=True, slots=True)
 class IndexerFacts:
     name: str
     # A Fact, not a bare str: the flagship premise is "any enabled *torrent*
@@ -86,6 +110,6 @@ class ErrorRow:
 
 @dataclass(frozen=True, slots=True)
 class StackFacts:
-    qbits: tuple[QbtInstance, ...]
+    clients: tuple[ClientInstance, ...]
     arrs: tuple[ArrInstance, ...]
     errors: tuple[ErrorRow, ...] = ()

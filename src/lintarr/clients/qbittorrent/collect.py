@@ -21,7 +21,7 @@ forever is also the one that cannot ban anybody.
 """
 
 from lintarr.collect.http import ReadOnlyClient, ServiceError, decode_text
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 from lintarr.facts import read
 from lintarr.models import QbtInstance
 
@@ -81,7 +81,7 @@ _LOGIN_401_DETAIL = (
 )
 
 
-def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
+def authenticate(client: ReadOnlyClient, cfg: ClientConfig) -> None:
     """Log in once. Never retries — see module docstring.
 
     qBittorrent does not follow its own documented login protocol. Measured
@@ -225,7 +225,7 @@ def _json_object(client: ReadOnlyClient, path: str) -> dict[str, object]:
     return payload
 
 
-def collect_qbt(client: ReadOnlyClient, cfg: QbtConfig) -> QbtInstance:
+def collect_qbt(client: ReadOnlyClient, cfg: ClientConfig) -> QbtInstance:
     """Authenticate once, then read version, preferences and categories."""
     authenticate(client, cfg)
     version = _read_version(client)

@@ -60,7 +60,7 @@ def _transport(
 
 def test_collects_every_configured_instance():
     facts = collect_stack(load_config(ENV), transport=_transport())
-    assert [q.name for q in facts.qbits] == ["main"]
+    assert [q.name for q in facts.clients] == ["main"]
     assert sorted(a.name for a in facts.arrs) == ["anime", "main"]
     assert facts.errors == ()
 
@@ -81,7 +81,7 @@ def test_unexpected_json_shape_is_recorded_not_raised():
     transport = _transport(anime_indexers={"message": "Unauthorized"})
     facts = collect_stack(load_config(ENV), transport=transport)
     assert [a.name for a in facts.arrs] == ["main"]
-    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.clients, "the healthy qBittorrent instance must still report"
     assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
 
 
@@ -101,7 +101,7 @@ def test_undecodable_body_is_recorded_not_raised():
     # left ruff red on main: F841 for the unused `facts`, plus the two missing
     # blank lines before the next def.
     assert [a.name for a in facts.arrs] == ["main"]
-    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.clients, "the healthy qBittorrent instance must still report"
     assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
 
 
@@ -117,7 +117,7 @@ def test_malformed_fields_entry_is_recorded_not_raised():
     malformed = [{"name": "nzb", "fields": [{"value": 1.0}]}]
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
-    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.clients, "the healthy qBittorrent instance must still report"
     assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]
 
 
@@ -134,7 +134,7 @@ def test_undecodable_version_text_is_recorded_not_raised():
         )
     )
     facts = collect_stack(load_config(ENV), transport=transport)
-    assert facts.qbits == ()
+    assert facts.clients == ()
     assert sorted(a.name for a in facts.arrs) == ["anime", "main"], (
         "both healthy sonarr instances must still report"
     )
@@ -153,5 +153,5 @@ def test_non_object_fields_payload_is_recorded_not_raised():
     malformed = [{"name": "nzb", "fields": ["seedCriteria.seedRatio"]}]
     facts = collect_stack(load_config(ENV), transport=_transport(anime_indexers=malformed))
     assert [a.name for a in facts.arrs] == ["main"]
-    assert facts.qbits, "the healthy qBittorrent instance must still report"
+    assert facts.clients, "the healthy qBittorrent instance must still report"
     assert [(e.label, e.kind) for e in facts.errors] == [("sonarr[anime]", "bad-response")]

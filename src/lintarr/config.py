@@ -14,14 +14,23 @@ _SECRET = "***"
 
 
 @dataclass(frozen=True, slots=True)
-class QbtConfig:
+class ClientConfig:
+    """One download client. Which credentials it carries is its backend's contract."""
+
     name: str
+    kind: str
     url: str
-    username: str
-    password: str = field(repr=False)
+    username: str | None = None
+    password: str | None = field(default=None, repr=False)
+    api_key: str | None = field(default=None, repr=False)
 
     def __repr__(self) -> str:
-        return f"QbtConfig(name={self.name!r}, url={self.url!r}, password={_SECRET})"
+        password = None if self.password is None else _SECRET
+        api_key = None if self.api_key is None else _SECRET
+        return (
+            f"ClientConfig(name={self.name!r}, kind={self.kind!r}, url={self.url!r}, "
+            f"username={self.username!r}, password={password}, api_key={api_key})"
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,7 +49,7 @@ class ArrConfig:
 
 @dataclass(frozen=True, slots=True)
 class LintarrConfig:
-    qbits: tuple[QbtConfig, ...]
+    clients: tuple[ClientConfig, ...]
     arrs: tuple[ArrConfig, ...]
     declared: frozenset[str]
 
@@ -97,13 +106,21 @@ def load_config(env: Mapping[str, str]) -> LintarrConfig:
     for _kind in ("SONARR", "RADARR"):
         _reject_orphaned_credentials(env, f"{_kind}_URL", f"{_kind}_API_KEY")
 
-    qbits = []
+    clients = []
     for name, url in sorted(_instances(env, "QBIT").items()):
         s = _suffix(name)
         user, password = env.get(f"QBIT_USER{s}"), env.get(f"QBIT_PASS{s}")
         if user is None or password is None:
             raise ValueError(f"QBIT_URL{s} set but QBIT_USER{s}/QBIT_PASS{s} missing")
-        qbits.append(QbtConfig(name=name, url=url.rstrip("/"), username=user, password=password))
+        clients.append(
+            ClientConfig(
+                name=name,
+                kind="qbittorrent",
+                url=url.rstrip("/"),
+                username=user,
+                password=password,
+            )
+        )
 
     arrs = []
     for kind in ("sonarr", "radarr"):
@@ -115,7 +132,7 @@ def load_config(env: Mapping[str, str]) -> LintarrConfig:
                 raise ValueError(f"{prefix}_URL{s} set but {prefix}_API_KEY{s} missing")
             arrs.append(ArrConfig(name=name, kind=kind, url=url.rstrip("/"), api_key=api_key))
 
-    configured = {"qbittorrent"} if qbits else set()
+    configured = {c.kind for c in clients}
     configured |= {a.kind for a in arrs}
 
     raw = env.get("LINTARR_SERVICES")
@@ -124,4 +141,4 @@ def load_config(env: Mapping[str, str]) -> LintarrConfig:
         if raw
         else frozenset(configured)
     )
-    return LintarrConfig(qbits=tuple(qbits), arrs=tuple(arrs), declared=declared)
+    return LintarrConfig(clients=tuple(clients), arrs=tuple(arrs), declared=declared)

@@ -19,8 +19,8 @@ Kept out of ``test_http.py`` deliberately: that file is in flight on open PR
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH
 from lintarr.collect.http import ReadOnlyClient, ReadOnlyViolation
-from lintarr.collect.qbittorrent import AUTH_PATH
 
 _MUTATING_POSTS = (
     "/api/v2/torrents/delete",

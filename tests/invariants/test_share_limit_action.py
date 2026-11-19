@@ -33,8 +33,8 @@ denylist would read it as releasing and clear the conflict.
 
 import pytest
 
+from lintarr.clients.qbittorrent.queue_liveness import _RELEASING_ACTIONS, ACTION, check
 from lintarr.facts import Unknown
-from lintarr.invariants.queue_liveness import _RELEASING_ACTIONS, ACTION, check
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import NO_GOALS

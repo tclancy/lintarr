@@ -15,8 +15,9 @@ tells them apart.
 from collections.abc import Iterable
 from dataclasses import replace
 
-from lintarr.invariants import queue_liveness
-from lintarr.models import ErrorRow, StackFacts
+from lintarr import checks
+from lintarr.clients import BACKENDS
+from lintarr.models import ClientInstance, ErrorRow, StackFacts
 from lintarr.outcomes import Finding, Outcome, worst
 
 #: The services an ``arr.*`` premise can be read from.
@@ -49,7 +50,7 @@ def _error_detail(row: ErrorRow) -> str:
 
 def _collected(facts: StackFacts) -> frozenset[str]:
     """The services that actually produced usable facts."""
-    present = {"qbittorrent"} if facts.qbits else set()
+    present = {client.kind for client in facts.clients}
     return frozenset(present | {arr.kind for arr in facts.arrs})
 
 
@@ -113,6 +114,16 @@ def _resolve_missing_arrs(
     )
 
 
+def _client_findings(
+    instance: ClientInstance, facts: StackFacts, *, declared: frozenset[str]
+) -> list[Finding]:
+    """Every check that applies to *instance*: its backend's own, then the shared ones."""
+    return [
+        _resolve_missing_arrs(check(instance, facts.arrs), facts, declared=declared)
+        for check in (*BACKENDS[instance.kind].checks, *checks.SHARED_CHECKS)
+    ]
+
+
 def run_checks(facts: StackFacts, *, declared: frozenset[str]) -> tuple[Finding, ...]:
     """Every finding this snapshot supports.
 
@@ -121,8 +132,9 @@ def run_checks(facts: StackFacts, *, declared: frozenset[str]) -> tuple[Finding,
     vacuous PASS, so it has to say.
     """
     findings = [
-        _resolve_missing_arrs(queue_liveness.check(qbt, facts.arrs), facts, declared=declared)
-        for qbt in facts.qbits
+        finding
+        for instance in facts.clients
+        for finding in _client_findings(instance, facts, declared=declared)
     ]
     findings += _absent_service_findings(facts, declared)
     findings += [

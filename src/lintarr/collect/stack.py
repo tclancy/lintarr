@@ -6,25 +6,24 @@ either — failures are recorded so the outcome layer can report ERROR.
 
 import httpx
 
+from lintarr.clients import BACKENDS
 from lintarr.collect.arr import collect_arr
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, collect_qbt
 from lintarr.config import LintarrConfig
-from lintarr.models import ArrInstance, ErrorRow, QbtInstance, StackFacts
+from lintarr.models import ArrInstance, ClientInstance, ErrorRow, StackFacts
 
 
 def collect_stack(
     cfg: LintarrConfig, *, transport: httpx.BaseTransport | None = None
 ) -> StackFacts:
-    qbits: list[QbtInstance] = []
+    clients: list[ClientInstance] = []
     arrs: list[ArrInstance] = []
     errors: list[ErrorRow] = []
 
-    for qbt in cfg.qbits:
-        label = f"qbittorrent[{qbt.name}]"
+    for client_cfg in cfg.clients:
+        label = f"{client_cfg.kind}[{client_cfg.name}]"
         try:
-            with ReadOnlyClient(qbt.url, transport=transport, auth_path=AUTH_PATH) as client:
-                qbits.append(collect_qbt(client, qbt))
+            clients.append(BACKENDS[client_cfg.kind].collect(client_cfg, transport=transport))
         except ServiceError as exc:
             errors.append(ErrorRow(label, exc.kind, exc.detail))
 
@@ -38,4 +37,4 @@ def collect_stack(
         except ServiceError as exc:
             errors.append(ErrorRow(label, exc.kind, exc.detail))
 
-    return StackFacts(qbits=tuple(qbits), arrs=tuple(arrs), errors=tuple(errors))
+    return StackFacts(clients=tuple(clients), arrs=tuple(arrs), errors=tuple(errors))

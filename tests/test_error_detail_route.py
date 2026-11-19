@@ -262,7 +262,7 @@ def test_a_blank_detail_leaves_no_dangling_separator():
     nothing after the dash, which reads as truncated output and sends an
     operator looking for the rest of a message that does not exist.
     """
-    facts = StackFacts(qbits=(), arrs=(), errors=(_blank_detail_row(),))
+    facts = StackFacts(clients=(), arrs=(), errors=(_blank_detail_row(),))
     (finding,) = run_checks(facts, declared=frozenset({"qbittorrent"}))
     assert finding.detail.rstrip() == finding.detail
     assert not finding.detail.rstrip().endswith(("—", "-", ":"))
