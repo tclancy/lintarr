@@ -15,7 +15,8 @@ the shape): ``HasReachedSeedLimit`` and its siblings read the torrent's own
 limit when it is ``>= 0``, and only when the torrent's limit is ``-2`` do they
 read the **global** preferences. They never read a category's limits. Indexer
 seed criteria become the torrent's own limits when the arr adds it, and for a
-sonarr season pack ``seasonPackSeedTime`` is the seeding-time limit. So an arm
+sonarr season pack ``seasonPackSeedTime`` is the seeding-time limit, so season
+packs are an arm of their own. So an arm
 reached through an indexer goal or an inherited global is recognised, and an
 arm reached through a category's own limit is not.
 
@@ -104,6 +105,7 @@ def _category_action(body: dict[str, Any]) -> int | str | None:
     name = body.get("share_limit_action", DEFAULT_ACTION)
     if name == DEFAULT_ACTION:
         return DEFAULT_ACTION
+    # A non-string (null or a number) is deliberately unknown, not a value to map.
     return ACTION_BY_NAME.get(name) if isinstance(name, str) else None
 
 
@@ -131,13 +133,6 @@ def _criterion_reach(fact: Fact[Any]) -> Reach | None:
     if _is_a_readable_seed_criterion(fact) and fact.value != USE_GLOBAL:
         return Reach.BLOCKED
     return Reach.DEFER
-
-
-def _seed_time_criterion_reach(arr: ArrInstance, indexer: IndexerFacts) -> Reach | None:
-    """The seed-time criterion, where a sonarr season-pack goal is also a goal."""
-    if arr.kind == "sonarr" and _is_a_seed_goal(indexer.season_pack_seed_time):
-        return Reach.GOAL
-    return _criterion_reach(indexer.seed_time)
 
 
 def _category_limit_reach(body: dict[str, Any], key: str) -> Reach | None:
@@ -195,13 +190,33 @@ def _ratio_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach 
     return _through_category(qbt, category, "ratio_limit", _global_ratio_reachable)
 
 
-def _seed_time_arm(
-    qbt: QbtInstance, arr: ArrInstance, indexer: IndexerFacts, category: str
-) -> Reach | None:
-    criterion = _seed_time_criterion_reach(arr, indexer)
-    if criterion is not Reach.DEFER:
-        return criterion
+def _seed_time_through(qbt: QbtInstance, criterion: Fact[Any], category: str) -> Reach | None:
+    """A seed-time criterion, deferring to the category's seeding time then the global."""
+    reach = _criterion_reach(criterion)
+    if reach is not Reach.DEFER:
+        return reach
     return _through_category(qbt, category, "seeding_time_limit", _global_seed_time_reachable)
+
+
+def _seed_time_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
+    return _seed_time_through(qbt, indexer.seed_time, category)
+
+
+def _has_own_season_pack_seed_time(arr: ArrInstance, indexer: IndexerFacts) -> bool:
+    """Sonarr, with a season-pack seed time present and non-null.
+
+    Season packs are their own population of torrents: Sonarr gives them
+    ``seasonPackSeedTime`` as their seeding-time limit. When it is absent or
+    null, season packs are **assumed** to fall back to ``seedTime`` — that
+    fallback is not verified against Sonarr source — and the seed-time arm
+    already covers them.
+    """
+    fact = indexer.season_pack_seed_time
+    return arr.kind == "sonarr" and is_known(fact) and fact.value is not None
+
+
+def _season_pack_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
+    return _seed_time_through(qbt, indexer.season_pack_seed_time, category)
 
 
 def _inactive_arm(qbt: QbtInstance, category: str) -> Reach | None:
@@ -214,11 +229,15 @@ def _inactive_arm(qbt: QbtInstance, category: str) -> Reach | None:
 def _arms(
     qbt: QbtInstance, arr: ArrInstance, indexer: IndexerFacts, category: str
 ) -> tuple[Reach | None, ...]:
-    return (
+    """Every arm for this indexer's torrents; season packs add one for sonarr."""
+    arms = (
         _ratio_arm(qbt, indexer, category),
-        _seed_time_arm(qbt, arr, indexer, category),
+        _seed_time_arm(qbt, indexer, category),
         _inactive_arm(qbt, category),
     )
+    if not _has_own_season_pack_seed_time(arr, indexer):
+        return arms
+    return (*arms, _season_pack_arm(qbt, indexer, category))
 
 
 def _fires(reach: Reach | None) -> bool | None:

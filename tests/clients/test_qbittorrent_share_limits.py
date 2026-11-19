@@ -270,3 +270,38 @@ def test_an_unreadable_category_limit_leaves_unrecognised_unknown():
 
 def test_an_arr_with_no_indexers_has_no_unrecognised_limit():
     assert can_fire_unrecognised(_qbt(tv={"ratio_limit": 2}), _arr(), "tv") is False
+
+
+# --- season packs are their own seed-time population ------------------------
+
+_BLOCKING = {"seed_ratio": -1, "seed_time": -1}
+
+
+def test_a_junk_season_pack_with_blocking_criteria_is_unknown():
+    arr = _arr(_indexer(season_pack="60", **_BLOCKING))
+    assert can_fire(_qbt(**GLOBALS_OFF, max_ratio_act=1), arr, "tv") is None
+
+
+def test_a_deferring_season_pack_reaches_the_global_seed_time():
+    seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+    arr = _arr(_indexer(season_pack=-2, **_BLOCKING))
+    assert can_fire(_qbt(**seed_time), arr, "tv") is True
+
+
+def test_a_deferring_season_pack_reaches_the_categorys_own_seed_time():
+    qbt = _qbt(tv={"seeding_time_limit": 60}, **GLOBALS_OFF)
+    arr = _arr(_indexer(season_pack=-2, **_BLOCKING))
+    assert can_fire_unrecognised(qbt, arr, "tv") is True
+
+
+def test_a_blocking_season_pack_does_not_block_single_episodes():
+    seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+    arr = _arr(_indexer(season_pack=-1))
+    assert can_fire(_qbt(**seed_time), arr, "tv") is True
+
+
+@pytest.mark.parametrize("season_pack", ["60", -2])
+def test_radarr_ignores_the_season_pack(season_pack):
+    seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+    arr = _arr(_indexer(season_pack=season_pack, **_BLOCKING), kind="radarr")
+    assert can_fire(_qbt(**seed_time), arr, "tv") is False
