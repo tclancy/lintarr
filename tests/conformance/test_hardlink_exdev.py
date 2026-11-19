@@ -5,11 +5,12 @@ directories of one host filesystem; within one bind mount it succeeds.
 """
 
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from tests.conformance.docker_guard import require_docker
 
 pytestmark = pytest.mark.container
 
@@ -17,16 +18,9 @@ pytestmark = pytest.mark.container
 ALPINE_IMAGE = "alpine:3.20"
 
 
-def _docker_available() -> bool:
-    if shutil.which("docker") is None:
-        return False
-    return subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-
-
 @pytest.fixture(autouse=True)
 def _need_docker() -> None:
-    if not _docker_available():
-        pytest.skip("docker is not available")
+    require_docker()
 
 
 @pytest.fixture
