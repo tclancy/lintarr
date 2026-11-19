@@ -305,3 +305,21 @@ def test_radarr_ignores_the_season_pack(season_pack):
     seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
     arr = _arr(_indexer(season_pack=season_pack, **_BLOCKING), kind="radarr")
     assert can_fire(_qbt(**seed_time), arr, "tv") is False
+
+
+def test_an_absent_season_pack_defers_rather_than_using_seed_time():
+    """Sonarr v4 gives a season pack SeasonPackSeedTime only, never SeedTime."""
+    seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+    arr = _arr(_indexer(**_BLOCKING))
+    assert can_fire(_qbt(**seed_time), arr, "tv") is True
+
+
+def test_an_absent_season_pack_reaches_the_categorys_own_seed_time():
+    qbt = _qbt(tv={"seeding_time_limit": 60}, **GLOBALS_OFF)
+    assert can_fire_unrecognised(qbt, _arr(_indexer(**_BLOCKING)), "tv") is True
+
+
+def test_a_radarr_blocking_seed_time_has_no_season_pack_escape():
+    seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+    arr = _arr(_indexer(**_BLOCKING), kind="radarr")
+    assert can_fire(_qbt(**seed_time), arr, "tv") is False

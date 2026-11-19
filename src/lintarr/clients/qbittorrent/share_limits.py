@@ -15,9 +15,9 @@ the shape): ``HasReachedSeedLimit`` and its siblings read the torrent's own
 limit when it is ``>= 0``, and only when the torrent's limit is ``-2`` do they
 read the **global** preferences. They never read a category's limits. Indexer
 seed criteria become the torrent's own limits when the arr adds it, and for a
-sonarr season pack ``seasonPackSeedTime`` is the seeding-time limit, so season
-packs are an arm of their own. So an arm
-reached through an indexer goal or an inherited global is recognised, and an
+sonarr season pack ``seasonPackSeedTime`` alone is the seeding-time limit
+(never ``seedTime``; see ``_season_pack_arm``), so season packs are an arm of
+their own. So an arm reached through an indexer goal or an inherited global is recognised, and an
 arm reached through a category's own limit is not.
 
 **qBittorrent's side** is ``queue_liveness``'s measured semantics, imported
@@ -202,20 +202,19 @@ def _seed_time_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Re
     return _seed_time_through(qbt, indexer.seed_time, category)
 
 
-def _has_own_season_pack_seed_time(arr: ArrInstance, indexer: IndexerFacts) -> bool:
-    """Sonarr, with a season-pack seed time present and non-null.
-
-    Season packs are their own population of torrents: Sonarr gives them
-    ``seasonPackSeedTime`` as their seeding-time limit. When it is absent or
-    null, season packs are **assumed** to fall back to ``seedTime`` — that
-    fallback is not verified against Sonarr source — and the seed-time arm
-    already covers them.
-    """
-    fact = indexer.season_pack_seed_time
-    return arr.kind == "sonarr" and is_known(fact) and fact.value is not None
-
-
 def _season_pack_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
+    """A sonarr season pack's seed time, which is ``seasonPackSeedTime`` alone.
+
+    Verified in Sonarr ``main`` (v4) ``src/NzbDrone.Core/Indexers/SeedConfigProvider.cs``,
+    read 2026-11-19: ``var seedTime = fullSeason ? seedCriteria.SeasonPackSeedTime
+    : seedCriteria.SeedTime`` and the limit is set only ``if (seedTime.HasValue)``.
+    So a season pack never uses ``seedTime``: unset, the torrent keeps ``-2`` and
+    defers to the category and then the global, like any other criterion. Its
+    ratio is the ordinary ``seedRatio``, which ``_ratio_arm`` already covers.
+
+    Known limit: Sonarr ``v5-develop`` adds a ``SeasonPackSeedGoal`` toggle and a
+    ``SeasonPackSeedRatio``. Neither is modelled.
+    """
     return _seed_time_through(qbt, indexer.season_pack_seed_time, category)
 
 
@@ -235,7 +234,7 @@ def _arms(
         _seed_time_arm(qbt, indexer, category),
         _inactive_arm(qbt, category),
     )
-    if not _has_own_season_pack_seed_time(arr, indexer):
+    if arr.kind != "sonarr":
         return arms
     return (*arms, _season_pack_arm(qbt, indexer, category))
 
