@@ -1,35 +1,36 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-18 (UTC)
-**State:** The pluggable-backends seam (download clients behind a registry,
-client-neutral `DOWNLOAD_CLIENT_*` / `ARR_*` env names, a fake backend proving
-it) is on branch `claude/pluggable-backends`, not yet merged. P2 slice 1 (the
-nightly qBittorrent 5.2.3 container differential of `trace()`) is merged to
-`main` (83e162e) and its nightly alert is **armed** (2026-11-15). It found
-F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
-homelab, hourly as an edge-triggered systemd timer (first PASS against the real
-stack 2026-10-07 21:40 UTC). P2 slice 2 (uploading seeders against
-`max_active_torrents`) is merged to `main`; its Linux validation run
-43998520392 was green, 38 passed in 21m17s.
+**Last updated:** 2026-11-19 (UTC)
+**State:** Pluggable backends are merged (lintarr#56, main 4b9cc11) and
+deployed with the client-neutral env (homelab#692); the first run on the new
+code passed 2026-11-19 01:28 UTC. `IN PROGRESS:` the `hardlink-futility` slice
+on `claude/hardlink-futility` (spec and plan dated 2026-11-19), the first
+*shared* check. P2 slices 1 and 2 (nightly qBittorrent 5.2.3 differential and
+uploading seeders) are merged, and the nightly alert is armed.
 
-## Pluggable backends: before and at merge
+## `hardlink-futility`: the first shared check
 
-- **LOCKSTEP WARNING.** The new code rejects the old env names
-  (`QBIT_*`, `SONARR_*`, `RADARR_*`). Once `claude/pluggable-backends` is
-  merged, *any* native-apps deploy on homelab pulls lintarr `main`, and new
-  code with the old env exits 2 and pages. The homelab env PR must therefore
-  merge and deploy in the same sitting as the lintarr merge, started just after
-  a `:17` timer tick, with no other native-apps deploy in between. See the
-  spec's "Rollout (homelab)" and "Timing" sections
-  (`docs/superpowers/specs/2026-11-18-pluggable-backends-design.md`).
-- `BLOCKED ON:` one green manual `conformance.yml` run on the branch (B5).
-  This is a merge precondition, not a follow-up.
-- `BLOCKED ON:` the homelab env PR (`roles/native-apps/templates/lintarr.env.j2`)
-  rendering `DOWNLOAD_CLIENT_KIND=qbittorrent`, `DOWNLOAD_CLIENT_URL/USER/PASS`,
-  `ARR_URL__TV`/`ARR_API_KEY__TV`, `ARR_URL__MOVIES`/`ARR_API_KEY__MOVIES` and
-  `LINTARR_SERVICES=qbittorrent,sonarr,radarr`. It should say it uses
-  `__TV`/`__MOVIES`, not the `__SONARR`/`__RADARR` names the legacy-rename
-  message suggests, and that arr labels become `arr[tv]`/`arr[movies]`.
+- **What it catches:** an arr with hardlinks on, whose download folder and
+  library folder sit on different mounts *in the arr's own container*. Every
+  "hardlink" import is then silently a full copy.
+- **Why it can run from the host:** Sonarr/Radarr's `GET /api/v3/diskspace`
+  lists the arr's own mount points (homelab: `/`, `/config`, `/data`), which
+  catches the two-bind-mounts-one-disk case that host `stat`/`os.link()` cannot
+  see. The original design's free-space cross-check and host link probe are
+  dropped (spec, "What changed").
+- **First neutral client fact:** `ClientFacts.save_paths` (category -> save
+  dir, `""` = uncategorised), populated by qBittorrent and the test fake.
+- **Axiom pinned nightly:** `tests/conformance/test_hardlink_exdev.py`
+  (`link(2)` across bind mounts is `EXDEV`; within one it succeeds). Fails,
+  not skips, without Docker in CI.
+- **Live, strict, from a throwaway checkout on homelab (2026-11-19):**
+  `check --json` exit 0, `hardlink-futility` PASS, every new fact `Known`.
+- **Known limits:** mergerfs/btrfs-subvolume links inside one mount are not
+  detected; two same-kind clients sharing a category name can make the wrong
+  one claim an arr (a `Check` sees one instance; disambiguating needs a wider
+  signature).
+- **Next slices:** `orphan-inevitability` (link-count-aware sizing), then
+  `seed-goal-conflict` (informational).
 
 ## Conformance nightly: alert proven
 
@@ -112,7 +113,7 @@ consistency.
   the 35 min step timeout). **Watch item:** a `missingFiles` on the first
   seeder add was seen twice in ~60 adds, both after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
   fsynced before the add and the one retry absorbs a single hit.
-  `DECISION NEEDED:` (Tom): the `_WEDGED` pin (`tests/test_check_cli.py`, exit
+  Decided (Tom, 2026-11-17): leave the `_WEDGED` pin as it is. Still open: the `_WEDGED` pin (`tests/test_check_cli.py`, exit
   1) rests on a config that does not wedge through seeders on 5.2.3, so #393's
   wedge needs another mechanism (leading candidate: stalled dead-swarm
   downloads, item 3e). And the F1/F3 change: the predicate premise,
