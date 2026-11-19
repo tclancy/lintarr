@@ -155,11 +155,10 @@ def _stop_with_arr_removal_unknown(qbt: QbtInstance, arr: ArrInstance, pair: _Pa
     fires = can_fire(qbt, arr, pair.category)
     if fires is False:
         return _fires(pair, NOTHING_RECLAIMS, False, "")
-    return Verdict(
-        None,
-        (NOTHING_RECLAIMS,),
-        f"{pair.name}: the arr's Remove Completed setting could not be read",
-    )
+    unread = f"{pair.name}: the arr's Remove Completed setting could not be read"
+    if fires is None:
+        unread = f"{unread}; {_fires(pair, NOTHING_RECLAIMS, None, '').fragment}"
+    return Verdict(None, (NOTHING_RECLAIMS,), unread)
 
 
 def _stop(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -> Verdict:
@@ -226,7 +225,10 @@ def _fail(label: str, verdicts: list[Verdict]) -> Finding | None:
 
 
 def _skip(label: str, verdicts: list[Verdict]) -> Finding | None:
-    """Unknown premises, each once, for every question some pair could not answer."""
+    """Unknown premises, each once, for every question some pair could not answer.
+
+    The conflict is always ``nothing-reclaims``, like PASS and N/A.
+    """
     unknown = [c for c in CONFLICTS if any(v.state is None and c in v.conflicts for v in verdicts)]
     if not unknown:
         return None
@@ -236,7 +238,10 @@ def _skip(label: str, verdicts: list[Verdict]) -> Finding | None:
         outcome=Outcome.SKIP,
         premises=tuple(Premise(_PREMISE_OF[c], None) for c in unknown),
         detail="; ".join(_lines(verdicts, None)),
-        conflict=unknown[0],
+        # Fixed, not unknown[0]: the conflict is part of the edge key, and a
+        # SKIP that flipped between conflicts would re-page under --strict.
+        # The premises still say which questions went unanswered.
+        conflict=NOTHING_RECLAIMS,
     )
 
 

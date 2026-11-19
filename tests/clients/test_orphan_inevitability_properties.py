@@ -7,9 +7,10 @@ one outcome, so a hand-built control below proves that outcome is reachable,
 and one proves the strategy reaches the category actions the check reads.
 """
 
+from collections import Counter
 from dataclasses import replace
 
-from hypothesis import HealthCheck, find, given, settings
+from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 
 from lintarr.checks.arr_clients import is_well_formed
@@ -32,35 +33,65 @@ from tests.strategies import (
     ARR_DOWNLOAD_CLIENTS,
     ARR_INSTANCES,
     CATEGORY,
+    INDEXERS,
     MATCHABLE_CATEGORY_NAMES,
     known,
     qbt_instances,
 )
 
-#: The shared strategies, plus a weighted half that reaches the pairs this check
-#: decides. Measured: over the shared strategies alone, 5000 draws found no
-#: matched category with a named action and no remove-keeps-files FAIL, because
-#: a matched pair needs a readable download-client list *and* a readable
-#: category map holding that client's category. The weighted halves keep every
-#: shape the shared strategies draw and add those that line up.
-_MATCHABLE_CATEGORY_MAPS = known(
-    st.dictionaries(st.sampled_from(MATCHABLE_CATEGORY_NAMES), CATEGORY, min_size=1, max_size=2)
-)
-_READABLE_DOWNLOAD_CLIENTS = known(
-    st.lists(ARR_DOWNLOAD_CLIENTS, min_size=1, max_size=2).map(tuple)
-)
+#: The shared strategies alone almost never decide a pair: a review sampled
+#: 400 draws and got 218 N/A, 133 SKIP, 48 PASS, 1 nothing-reclaims FAIL, no
+#: remove-keeps-files FAIL and one matched category with a named action,
+#: because a decided pair needs a readable download-client list, a category
+#: map holding that client's category, a readable action and a torrent
+#: indexer, all at once. ``_LINED_UP`` builds exactly that, with every other
+#: field still drawn from the shared strategies, and ``STACKS`` mixes it with
+#: the shared draws so every shape they produce is still searched.
+_NAMED_ACTIONS = st.sampled_from(sorted(ACTION_BY_NAME))
 
-CLIENTS = st.one_of(
-    qbt_instances(),
-    st.builds(replace, qbt_instances(), categories=_MATCHABLE_CATEGORY_MAPS),
-).map(as_client)
-ARRS = st.lists(
-    st.one_of(
-        ARR_INSTANCES,
-        st.builds(replace, ARR_INSTANCES, download_clients=_READABLE_DOWNLOAD_CLIENTS),
+
+@st.composite
+def _lined_up(draw: st.DrawFn) -> tuple[ClientInstance, tuple[ArrInstance, ...]]:
+    category = draw(st.sampled_from(MATCHABLE_CATEGORY_NAMES))
+    # A readable ratio limit (inherit, unlimited, or reachable) so the pair is
+    # usually decidable; junk still reaches the other limits through CATEGORY.
+    body = draw(CATEGORY) | {
+        "share_limit_action": draw(_NAMED_ACTIONS),
+        "ratio_limit": draw(st.sampled_from([-2, -1, 0, 1.5])),
+    }
+    others = draw(st.dictionaries(st.text(min_size=1, max_size=4), CATEGORY, max_size=1))
+    qbt = replace(draw(qbt_instances()), categories=draw(known(st.just(others | {category: body}))))
+    d = replace(
+        draw(ARR_DOWNLOAD_CLIENTS),
+        name="qBittorrent",
+        implementation="QBittorrent",
+        enabled=True,
+        category=category,
+    )
+    torrent = replace(
+        draw(INDEXERS),
+        protocol=draw(known(st.just("torrent"))),
+        enable_rss=draw(known(st.just(True))),
+    )
+    arr = replace(
+        draw(ARR_INSTANCES),
+        indexers=(torrent, *draw(st.lists(INDEXERS, max_size=1))),
+        download_clients=draw(known(st.just((d,)))),
+    )
+    # A second arr with a readable client list, so it adds a pair rather than
+    # (as the shared arrs mostly do) an unreadable list that only SKIPs.
+    readable = known(st.lists(ARR_DOWNLOAD_CLIENTS, max_size=2).map(tuple))
+    rest = draw(st.lists(st.builds(replace, ARR_INSTANCES, download_clients=readable), max_size=1))
+    return as_client(qbt), (arr, *rest)
+
+
+STACKS = st.one_of(
+    st.tuples(
+        qbt_instances().map(as_client), st.lists(ARR_INSTANCES, min_size=1, max_size=3).map(tuple)
     ),
-    max_size=3,
-).map(tuple)
+    _lined_up(),
+    _lined_up(),
+)
 
 _PREMISE_OF = {REMOVE_KEEPS_FILES: PREMISE_FILES_STAY, NOTHING_RECLAIMS: PREMISE_NOTHING_RECLAIMS}
 
@@ -114,8 +145,9 @@ def _some_category_action_is_named(client: ClientInstance, arrs: tuple[ArrInstan
 
 
 @_SETTINGS
-@given(CLIENTS, ARRS)
-def test_the_check_never_raises_and_keeps_its_identity(client, arrs):
+@given(STACKS)
+def test_the_check_never_raises_and_keeps_its_identity(stack):
+    client, arrs = stack
     finding = check(client, arrs)
     assert finding.invariant == INVARIANT_ID
     assert finding.conflict in _PREMISE_OF
@@ -123,8 +155,9 @@ def test_the_check_never_raises_and_keeps_its_identity(client, arrs):
 
 
 @_SETTINGS
-@given(CLIENTS, ARRS)
-def test_every_fail_carries_exactly_its_one_premise_holding(client, arrs):
+@given(STACKS)
+def test_every_fail_carries_exactly_its_one_premise_holding(stack):
+    client, arrs = stack
     finding = check(client, arrs)
     if finding.outcome is Outcome.FAIL:
         assert finding.premises == (Premise(_PREMISE_OF[finding.conflict], True),)
@@ -132,8 +165,9 @@ def test_every_fail_carries_exactly_its_one_premise_holding(client, arrs):
 
 
 @_SETTINGS
-@given(CLIENTS, ARRS)
-def test_never_pass_while_a_matched_action_is_unknown(client, arrs):
+@given(STACKS)
+def test_never_pass_while_a_matched_action_is_unknown(stack):
+    client, arrs = stack
     if check(client, arrs).outcome is Outcome.PASS:
         assert not _some_action_is_unknown(client, arrs)
 
@@ -141,27 +175,34 @@ def test_never_pass_while_a_matched_action_is_unknown(client, arrs):
 # --- controls -----------------------------------------------------------------
 
 
-def test_control_strategy_reaches_a_matched_category_whose_action_is_not_default():
-    client, arrs = find(
-        st.tuples(CLIENTS, ARRS),
-        lambda pair: _some_category_action_is_named(*pair),
-        settings=settings(max_examples=5000, deadline=None),
-    )
-    assert _some_category_action_is_named(client, arrs)
+def _draws_under_the_property_settings() -> list[tuple[ClientInstance, tuple[ArrInstance, ...]]]:
+    """Exactly the draws a property sees: its strategy, its example count, a fixed seed."""
+    seen: list[tuple[ClientInstance, tuple[ArrInstance, ...]]] = []
+
+    @settings(_SETTINGS, derandomize=True, database=None, phases=[Phase.generate])
+    @given(STACKS)
+    def collect(stack):
+        seen.append(stack)
+
+    collect()
+    return seen
 
 
-def test_control_strategy_reaches_a_pass_and_a_fail_of_each_conflict():
-    pairs = st.tuples(CLIENTS, ARRS)
-    budget = settings(max_examples=5000, deadline=None)
-    passing = find(pairs, lambda p: check(*p).outcome is Outcome.PASS, settings=budget)
-    assert check(*passing).outcome is Outcome.PASS
-    for conflict in _PREMISE_OF:
-        failing = find(
-            pairs,
-            lambda p, c=conflict: (f := check(*p)).outcome is Outcome.FAIL and f.conflict == c,
-            settings=budget,
-        )
-        assert check(*failing).conflict == conflict
+def test_control_the_properties_reach_fail_of_both_conflicts_and_named_actions():
+    """Each property quantifies over one outcome; this proves the outcome is drawn.
+
+    At least 10% of draws FAIL, both conflicts occur, PASS and SKIP occur, and
+    a matched category with a named (non-Default) action is common.
+    """
+    draws = _draws_under_the_property_settings()
+    findings = [check(client, arrs) for client, arrs in draws]
+    fails = [f for f in findings if f.outcome is Outcome.FAIL]
+    assert len(draws) >= 300
+    assert len(fails) >= len(draws) // 10, Counter(f.outcome for f in findings)
+    assert {f.conflict for f in fails} == set(_PREMISE_OF)
+    assert {Outcome.PASS, Outcome.SKIP} <= {f.outcome for f in findings}
+    named = sum(_some_category_action_is_named(client, arrs) for client, arrs in draws)
+    assert named >= len(draws) // 10
 
 
 def test_control_oracle_rejects_pass_over_an_unknown_category_action():

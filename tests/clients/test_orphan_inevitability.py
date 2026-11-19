@@ -352,3 +352,51 @@ def test_module_exposes_the_names():
         "arr.limit_fires_and_files_stay",
         "arr.limit_fires_and_nothing_reclaims",
     )
+
+
+# --- fix round 1 --------------------------------------------------------------
+
+#: Ratio unreadable and every other arm off, so whether a limit can fire is unknown.
+_REACH_UNKNOWN = {
+    "max_ratio_enabled": Unknown("insufficient-permission", "max_ratio_enabled"),
+    "max_seeding_time_enabled": False,
+}
+
+
+@pytest.mark.parametrize(
+    "qbt",
+    [
+        _qbt(max_ratio_act=1, **_REACH_UNKNOWN),
+        _qbt(max_ratio_act=0, **_REACH_UNKNOWN),
+        _qbt({"tv": {"share_limit_action": "Pause"}}),
+    ],
+    ids=["files-stay-unknown", "nothing-reclaims-unknown", "both-unknown"],
+)
+def test_every_skip_carries_the_nothing_reclaims_conflict(qbt):
+    """The edge key must not flip between conflicts while the outcome stays SKIP."""
+    finding = check(qbt, (_arr(remove_completed=False),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.conflict == NOTHING_RECLAIMS
+
+
+def test_skip_premises_still_name_what_was_unknown():
+    files = check(
+        _qbt(max_ratio_act=1, **_REACH_UNKNOWN),
+        (_arr(),),
+    )
+    assert files.premises == (Premise(PREMISE_FILES_STAY, None),)
+    both = check(_qbt({"tv": {"share_limit_action": "Pause"}}), (_arr(),))
+    assert both.premises == (
+        Premise(PREMISE_FILES_STAY, None),
+        Premise(PREMISE_NOTHING_RECLAIMS, None),
+    )
+
+
+def test_unknown_remove_completed_and_unknown_reach_names_both():
+    qbt = _qbt(max_ratio_act=0, **_REACH_UNKNOWN)
+    finding = check(qbt, (_arr(remove_completed=None),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv] (category tv): the arr's Remove Completed setting could not be read; "
+        "sonarr[tv] (category tv): whether a seed limit can fire could not be read"
+    )
