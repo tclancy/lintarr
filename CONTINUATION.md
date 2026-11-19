@@ -1,7 +1,9 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-17 (UTC)
-**State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
+**Last updated:** 2026-11-18 (UTC)
+**State:** The pluggable-backends seam (download clients behind a registry,
+client-neutral `DOWNLOAD_CLIENT_*` / `ARR_*` env names, a fake backend proving it)
+is on branch `claude/pluggable-backends`, not yet merged. P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
 `trace()`) is merged to `main` (83e162e) and its nightly alert is **armed**
 (2026-11-15). It found F1-F3 (Open items). P0b's `queue-liveness` check is
 unchanged and still live on homelab, hourly as an edge-triggered systemd timer
@@ -58,7 +60,7 @@ consistency.
   `itguy restart lintarr` exits 1 by design, because nothing long-running
   exists.
 - **Alert path proven end to end** (2026-10-07). A drop-in pointed
-  SONARR_URL at a dead port. The run ERRORed with exit 2, OnFailure= fired,
+  ARR_URL at a dead port. The run ERRORed with exit 2, OnFailure= fired,
   and the ntfy arrived. Reverting returned it to PASS.
 - The former blockers are gone:
   - The qBittorrent password is vaulted (homelab#190).
