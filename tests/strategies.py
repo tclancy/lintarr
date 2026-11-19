@@ -191,6 +191,8 @@ ARR_DOWNLOAD_CLIENTS = st.builds(
     enabled=st.booleans(),
     host=st.one_of(st.none(), st.sampled_from(["gluetun", "other"])),
     category=st.sampled_from(["", "tv", "movies"]),
+    remove_completed=st.one_of(st.none(), st.booleans()),
+    imported_category=st.sampled_from(["", "tv-done"]),
 )
 
 

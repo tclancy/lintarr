@@ -20,4 +20,7 @@ SHARED_THEREFORE: dict[tuple[str, str], str] = {
     ),
 }
 
+#: Invariant id -> the premise label for the failed-arr SKIP (see ``run``).
+SHARED_ARR_DEPENDENT: dict[str, str] = {hardlink_futility.INVARIANT_ID: hardlink_futility.PREMISE}
+
 SHARED_INVARIANTS: frozenset[str] = frozenset(key[0] for key in SHARED_THEREFORE)

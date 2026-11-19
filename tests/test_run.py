@@ -178,3 +178,23 @@ def test_an_unreadable_qbt_preference_is_not_relabelled_as_a_missing_arr():
     )
     assert liveness.outcome is Outcome.SKIP
     assert [p.label for p in liveness.premises] == ["qbt.no_global_ratio"]
+
+
+def test_a_backend_arr_dependent_check_gets_the_failed_arr_skip(monkeypatch):
+    import dataclasses
+
+    from lintarr.clients import BACKENDS
+    from lintarr.config import ClientConfig
+    from tests.fakes.backend import FAKE, collect
+
+    fake = dataclasses.replace(FAKE, arr_dependent={"fake-check": "arr.fake_premise"})
+    monkeypatch.setitem(BACKENDS, "fake", fake)
+    cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
+    failed = ErrorRow("arr[radarr]", "unreachable", "connection refused")
+    facts = StackFacts(clients=(collect(cfg, transport=None),), arrs=(), errors=(failed,))
+    (finding,) = [
+        f for f in run_checks(facts, declared=frozenset({"fake"})) if f.invariant == "fake-check"
+    ]
+    assert finding.outcome is Outcome.SKIP
+    assert [p.label for p in finding.premises] == ["arr.fake_premise"]
+    assert finding.detail == "an arr could not be read, so its downloads could not be checked"

@@ -54,6 +54,7 @@ def download_clients(kind: str = "sonarr") -> list[dict[str, Any]]:
             "name": "qBittorrent",
             "implementation": "QBittorrent",
             "enable": True,
+            "removeCompletedDownloads": False,
             "priority": 1,
             "fields": [
                 {"name": "host", "value": "gluetun"},
@@ -112,6 +113,8 @@ def homelab_arr(kind: str = "sonarr", name: str = "tv") -> ArrInstance:
                     enabled=True,
                     host="gluetun",
                     category=category,
+                    remove_completed=False,
+                    imported_category="",
                 ),
             )
         ),
@@ -130,8 +133,16 @@ def arr_with(base: ArrInstance | None = None, **overrides: Any) -> ArrInstance:
 
 #: qBittorrent 5.2.3, measured 2026-11-19: ``/api/v2/torrents/categories``.
 QBT_CATEGORIES = {
-    "movies": {"name": "movies", "savePath": "/data/torrents/movies"},
-    "tv": {"name": "tv", "savePath": "/data/torrents/tv"},
+    name: {
+        "download_path": None,
+        "inactive_seeding_time_limit": -2,
+        "name": name,
+        "ratio_limit": -2,
+        "savePath": f"/data/torrents/{name}",
+        "seeding_time_limit": -2,
+        "share_limit_action": "Default",
+    }
+    for name in ("movies", "tv")
 }
 
 

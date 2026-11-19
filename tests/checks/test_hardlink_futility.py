@@ -44,7 +44,7 @@ def _split_arr(**overrides):
 
 
 def _qbt_client(category="tv", host="gluetun", enabled=True, implementation="QBittorrent"):
-    return ArrDownloadClient("qBittorrent", implementation, enabled, host, category)
+    return ArrDownloadClient("qBittorrent", implementation, enabled, host, category, False, "")
 
 
 def test_homelab_passes():
