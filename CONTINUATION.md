@@ -60,7 +60,7 @@ consistency.
   `itguy restart lintarr` exits 1 by design, because nothing long-running
   exists.
 - **Alert path proven end to end** (2026-10-07). A drop-in pointed
-  ARR_URL at a dead port. The run ERRORed with exit 2, OnFailure= fired,
+  SONARR_URL (now `ARR_URL`) at a dead port. The run ERRORed with exit 2, OnFailure= fired,
   and the ntfy arrived. Reverting returned it to PASS.
 - The former blockers are gone:
   - The qBittorrent password is vaulted (homelab#190).
