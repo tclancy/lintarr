@@ -19,11 +19,12 @@ from dataclasses import replace
 from itertools import combinations
 
 import pytest
-from hypothesis import HealthCheck, given, settings
+from hypothesis import HealthCheck, find, given, settings
 from hypothesis import strategies as st
 
 from lintarr.clients.qbittorrent import queue_liveness
 from lintarr.clients.qbittorrent.queue_liveness import NEEDS, check
+from lintarr.clients.qbittorrent.share_limits import ACTION_BY_NAME
 from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
 from lintarr.models import ErrorRow, StackFacts
@@ -40,12 +41,15 @@ from tests.invariants.test_share_limit_override import (
 )
 from tests.strategies import (
     ARR_INSTANCES,
+    CATEGORY_MAPS,
     DECLARED,
     ERROR_KINDS,
     ERRORS,
     MALFORMED_CATEGORY_MAPS,
     MALFORMED_SCALARS,
+    MATCHABLE_CATEGORY_NAMES,
     READ_AT,
+    SHARE_LIMIT_ACTION_NAMES,
     STACK_FACTS,
     qbt_instances,
 )
@@ -132,6 +136,28 @@ def test_the_strategies_still_generate_every_category_map_shape_they_claim():
     for shape in MALFORMED_CATEGORY_MAPS:
         outcome = check(qbt_with(categories=_as_fact(shape)), WITH_GOALS).outcome
         assert outcome is settled_by_shape[type(shape)], f"{shape!r} as a category map"
+
+    # orphan-inevitability reads a category's action and its inactive limit,
+    # under a name an arr's download client actually uses. Every action name
+    # qBittorrent reports, ``"Default"`` and one unknown name must stay drawn,
+    # and the map must reach a matchable category carrying both keys.
+    assert set(SHARE_LIMIT_ACTION_NAMES) - set(ACTION_BY_NAME) == {"Default", "Pause"}
+    assert set(ACTION_BY_NAME) <= set(SHARE_LIMIT_ACTION_NAMES)
+    assert set(MATCHABLE_CATEGORY_NAMES) == {"tv", "movies"}
+    reached = find(
+        CATEGORY_MAPS,
+        lambda m: (
+            isinstance(m, dict)
+            and any(
+                name in MATCHABLE_CATEGORY_NAMES
+                and isinstance(action := body.get("share_limit_action"), str)
+                and action in ACTION_BY_NAME
+                and "inactive_seeding_time_limit" in body
+                for name, body in m.items()
+            )
+        ),
+    )
+    assert reached
 
 
 # ---------------------------------------------------------------------------

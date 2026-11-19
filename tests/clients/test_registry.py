@@ -27,8 +27,11 @@ def test_qbittorrent_needs_user_and_pass():
     assert BACKEND.credentials == frozenset({"user", "pass"})
 
 
-def test_queue_liveness_is_qbittorrents_only_check():
-    assert len(BACKEND.checks) == 1
+def test_qbittorrent_runs_queue_liveness_then_orphan_inevitability():
+    from lintarr.clients.qbittorrent import orphan_inevitability
+
+    assert len(BACKEND.checks) == 2
+    assert BACKEND.checks[1] is orphan_inevitability.check
 
 
 def test_registry_is_patchable():
@@ -41,9 +44,13 @@ def test_a_wedged_qbittorrent_finding_keeps_its_labels():
     assert [(f.invariant, f.instance) for f in findings if f.invariant == "queue-liveness"] == [
         ("queue-liveness", "qbittorrent[main]")
     ]
-    assert [(f.invariant, f.instance) for f in findings if f.invariant != "queue-liveness"] == [
+    others = [f for f in findings if f.invariant not in {"queue-liveness", "orphan-inevitability"}]
+    assert [(f.invariant, f.instance) for f in others] == [
         ("hardlink-futility", "qbittorrent[main]")
     ]
+    assert [
+        (f.invariant, f.instance) for f in findings if f.invariant == "orphan-inevitability"
+    ] == [("orphan-inevitability", "qbittorrent[main]")]
 
 
 def test_a_failing_qbittorrent_keeps_its_error_label():

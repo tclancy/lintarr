@@ -3,7 +3,7 @@
 import httpx
 
 from lintarr.clients.base import Backend
-from lintarr.clients.qbittorrent import queue_liveness
+from lintarr.clients.qbittorrent import orphan_inevitability, queue_liveness
 from lintarr.clients.qbittorrent.collect import AUTH_PATH, collect_qbt
 from lintarr.clients.qbittorrent.save_paths import save_paths
 from lintarr.clients.qbittorrent.therefore import THEREFORE
@@ -23,6 +23,12 @@ BACKEND = Backend(
     kind="qbittorrent",
     credentials=frozenset({"user", "pass"}),
     collect=collect,
-    checks=(lambda inst, arrs: queue_liveness.check(inst.specific, arrs),),
+    checks=(
+        lambda inst, arrs: queue_liveness.check(inst.specific, arrs),
+        orphan_inevitability.check,
+    ),
     therefore=THEREFORE,
+    arr_dependent={
+        orphan_inevitability.INVARIANT_ID: orphan_inevitability.PREMISE_NOTHING_RECLAIMS
+    },
 )

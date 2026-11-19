@@ -5,7 +5,7 @@ make every new backend edit the CLI. ``cli`` looks a finding's line up through
 its backend's ``therefore``.
 """
 
-from lintarr.clients.qbittorrent import queue_liveness
+from lintarr.clients.qbittorrent import orphan_inevitability, queue_liveness
 
 # Keyed on (invariant, conflict), never on the invariant alone. One invariant
 # answers one operator question, but it can reach that answer through
@@ -67,5 +67,20 @@ THEREFORE: dict[tuple[str, str], str] = {
         "  consults your global one. The ratio limit is the only thing left that\n"
         "  could free the slot, and it is off everywhere. Either give that indexer\n"
         "  a seed time of 0 or more, or turn on a global ratio limit."
+    ),
+    # Spec "Therefore", verbatim. Keyed per conflict: remove-keeps-files is
+    # fixed on qBittorrent's side, nothing-reclaims may be fixed on the arr's.
+    (orphan_inevitability.INVARIANT_ID, orphan_inevitability.REMOVE_KEEPS_FILES): (
+        "when a seed limit is reached, qBittorrent drops the torrent but leaves its files, "
+        "and nothing else knows they exist. They stay until someone deletes them by hand. "
+        "Set the share-limit action to 'Remove torrent and its files', or use Stop and turn "
+        "on the arr's Remove Completed."
+    ),
+    (orphan_inevitability.INVARIANT_ID, orphan_inevitability.NOTHING_RECLAIMS): (
+        "torrents reach their seed limit and then keep their files forever. qBittorrent "
+        "stops or super-seeds them, and the arr either isn't set to remove completed "
+        "downloads, can't see them after a post-import category, or doesn't recognise the "
+        "limit that stopped them. Use 'Remove torrent and its files', or the Stop action "
+        "with Remove Completed on, global or indexer seed limits, and no post-import category."
     ),
 }

@@ -7,7 +7,16 @@ from click.testing import CliRunner
 from lintarr.cli import cli
 from tests.fixtures.homelab_paths import QBT_CATEGORIES, arr_bodies
 
-ARR_BODIES = arr_bodies()
+#: The measured bodies, but with Remove Completed on: these tests pin the exit
+#: code queue-liveness and hardlink-futility decide, and the repaired prefs use
+#: Stop, which orphan-inevitability FAILs unless the arr removes completed
+#: downloads. The qBittorrent prefs stay as they are.
+ARR_BODIES = arr_bodies() | {
+    "/api/v3/downloadclient": [
+        client | {"removeCompletedDownloads": True}
+        for client in arr_bodies()["/api/v3/downloadclient"]
+    ]
+}
 
 #: Tom's measured save-path preferences (``homelab_paths.homelab_qbt``), served
 #: beneath every test's own prefs so ``hardlink-futility`` reads the homelab's
