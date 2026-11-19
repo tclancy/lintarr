@@ -128,6 +128,83 @@ def test_following_the_renames_for_a_sonarr_and_a_radarr_keeps_both():
     ]
 
 
+def test_following_the_renames_for_a_4k_sonarr_and_radarr_keeps_both():
+    """The suffixed pair: ``__4K`` on both apps must still give two arrs."""
+    legacy = {
+        "SONARR_URL__4K": "http://sonarr4k:8989",
+        "SONARR_API_KEY__4K": "sk4",
+        "RADARR_URL__4K": "http://radarr4k:7878",
+        "RADARR_API_KEY__4K": "rk4",
+    }
+    renames = dict(_RENAME.findall(_message(legacy)))
+    assert renames.keys() == legacy.keys()
+
+    migrated = {renames[key]: value for key, value in legacy.items()}
+    cfg = load_config(migrated)
+    assert [(a.name, a.url, a.api_key) for a in cfg.arrs] == [
+        ("radarr_4k", "http://radarr4k:7878", "rk4"),
+        ("sonarr_4k", "http://sonarr4k:8989", "sk4"),
+    ]
+
+
+def _client(suffix: str, url: str) -> dict[str, str]:
+    return {
+        f"DOWNLOAD_CLIENT_KIND{suffix}": "qbittorrent",
+        f"DOWNLOAD_CLIENT_URL{suffix}": url,
+        f"DOWNLOAD_CLIENT_USER{suffix}": "admin",
+        f"DOWNLOAD_CLIENT_PASS{suffix}": "pw",
+    }
+
+
+#: Two variables in one family that name the same instance once normalised.
+#: Each used to load as one instance — the other silently dropped, or worse,
+#: one instance's URL paired with the other's key — and the run exited 0.
+_COLLISIONS = [
+    pytest.param(
+        {"ARR_URL__TV": "a", "ARR_API_KEY__TV": "k", "ARR_URL__tv": "b", "ARR_API_KEY__tv": "k2"},
+        ("ARR_URL__TV", "ARR_URL__tv"),
+        id="arr-case",
+    ),
+    pytest.param(
+        {"ARR_URL": "a", "ARR_API_KEY": "k", "ARR_URL__MAIN": "b", "ARR_API_KEY__MAIN": "k2"},
+        ("ARR_URL", "ARR_URL__MAIN"),
+        id="arr-main",
+    ),
+    pytest.param(
+        {"ARR_URL__TV": "a", "ARR_API_KEY__TV": "k", "ARR_API_KEY__tv": "k2"},
+        ("ARR_API_KEY__TV", "ARR_API_KEY__tv"),
+        id="arr-credential-case",
+    ),
+    pytest.param(
+        _client("__TV", "http://a") | _client("__tv", "http://b"),
+        ("DOWNLOAD_CLIENT_URL__TV", "DOWNLOAD_CLIENT_URL__tv"),
+        id="client-case",
+    ),
+    pytest.param(
+        _client("", "http://a") | _client("__MAIN", "http://b"),
+        ("DOWNLOAD_CLIENT_URL", "DOWNLOAD_CLIENT_URL__MAIN"),
+        id="client-main",
+    ),
+    pytest.param(
+        _client("", "http://a") | {"DOWNLOAD_CLIENT_PASS__MAIN": "pw2"},
+        ("DOWNLOAD_CLIENT_PASS", "DOWNLOAD_CLIENT_PASS__MAIN"),
+        id="client-credential-main",
+    ),
+    pytest.param(
+        _client("__TV", "http://a") | {"DOWNLOAD_CLIENT_USER__Tv": "other"},
+        ("DOWNLOAD_CLIENT_USER__TV", "DOWNLOAD_CLIENT_USER__Tv"),
+        id="client-credential-case",
+    ),
+]
+
+
+@pytest.mark.parametrize(("env", "named"), _COLLISIONS)
+def test_two_variables_naming_one_instance_are_an_error_naming_both(env, named):
+    message = _message(env)
+    for variable in named:
+        assert re.search(rf"\b{variable}\b", message), (variable, message)
+
+
 @pytest.mark.parametrize("suffix", ["", "__VPN"])
 def test_a_url_without_a_kind_is_an_error(suffix):
     env = {f"DOWNLOAD_CLIENT_URL{suffix}": "http://q", f"DOWNLOAD_CLIENT_USER{suffix}": "u"}
@@ -241,4 +318,12 @@ def test_legacy_names_through_the_cli_are_a_usage_error(env, named, command):
     result = CliRunner().invoke(cli, [command], env=_CLEARED | env)
     assert result.exit_code == 2, result.output
     assert named in result.output
+    assert "Traceback" not in result.output
+
+
+def test_an_instance_name_collision_through_the_cli_is_a_usage_error():
+    env = {"ARR_URL__TV": "a", "ARR_API_KEY__TV": "k", "ARR_URL__tv": "b", "ARR_API_KEY__tv": "k2"}
+    result = CliRunner().invoke(cli, ["check"], env=_CLEARED | env)
+    assert result.exit_code == 2, result.output
+    assert "ARR_URL__TV" in result.output and "ARR_URL__tv" in result.output
     assert "Traceback" not in result.output

@@ -80,14 +80,47 @@ _ARR_URL = "ARR_URL"
 _ARR_API_KEY = "ARR_API_KEY"
 
 
+def _instance_name(key: str, base: str) -> str | None:
+    """The instance *key* configures under *base*, or ``None`` if it is not *base*'s.
+
+    ``<BASE>`` and ``<BASE>__MAIN`` both name ``main``; any other suffix is
+    lower-cased, so ``__TV`` and ``__tv`` both name ``tv``.
+    """
+    if key == base:
+        return "main"
+    if key.startswith(f"{base}__"):
+        return key.removeprefix(f"{base}__").lower()
+    return None
+
+
+def _reject_name_collisions(env: Mapping[str, str], *bases: str) -> None:
+    """Fail when two variables of one base name the same instance.
+
+    Normalisation folds them together, so one would silently replace the other
+    — dropping a configured service, or pairing one instance's URL with the
+    other's credential — and the run would exit 0 over a service it never read.
+    """
+    for base in bases:
+        seen: dict[str, str] = {}
+        for key in sorted(env):
+            name = _instance_name(key, base)
+            if name is None:
+                continue
+            if name in seen:
+                raise ValueError(
+                    f"{seen[name]} and {key} both configure instance {name!r} — "
+                    f"set only one of them"
+                )
+            seen[name] = key
+
+
 def _instances(env: Mapping[str, str], base: str) -> dict[str, str]:
     """Map instance name -> value for ``<BASE>`` and ``<BASE>__<NAME>``."""
     out: dict[str, str] = {}
     for key, value in env.items():
-        if key == base:
-            out["main"] = value
-        elif key.startswith(f"{base}__"):
-            out[key.removeprefix(f"{base}__").lower()] = value
+        name = _instance_name(key, base)
+        if name is not None:
+            out[name] = value
     return out
 
 
@@ -226,6 +259,7 @@ def _client_credentials(
 def _load_clients(env: Mapping[str, str]) -> list[ClientConfig]:
     from lintarr.clients import BACKENDS
 
+    _reject_name_collisions(env, _CLIENT_URL, _CLIENT_KIND, *_CREDENTIAL_VARIABLES.values())
     _reject_orphaned_credentials(env, _CLIENT_URL, *_CREDENTIAL_VARIABLES.values())
     kinds = _client_kinds(env)
     clients = []
@@ -247,6 +281,7 @@ def _load_clients(env: Mapping[str, str]) -> list[ClientConfig]:
 
 
 def _load_arrs(env: Mapping[str, str]) -> list[ArrConfig]:
+    _reject_name_collisions(env, _ARR_URL, _ARR_API_KEY)
     _reject_orphaned_credentials(env, _ARR_URL, _ARR_API_KEY)
     arrs = []
     for name, url in sorted(_instances(env, _ARR_URL).items()):
