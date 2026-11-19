@@ -40,7 +40,7 @@ def test_a_registered_fake_loads(fake_backend):
 
 def test_the_fake_without_its_key_is_a_config_error(fake_backend):
     env = {k: v for k, v in FAKE_ENV.items() if k != "DOWNLOAD_CLIENT_API_KEY"}
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="DOWNLOAD_CLIENT_API_KEY"):
         load_config(env)
 
 
@@ -60,7 +60,9 @@ def test_a_fake_instance_yields_its_own_check_and_no_queue_liveness(fake_backend
 def test_a_broken_fake_fails_its_check(fake_backend):
     result, findings = _check(FAKE_ENV | {"DOWNLOAD_CLIENT_URL": "http://fake/broken"})
     assert result.exit_code == 1
-    assert findings[0]["outcome"] == "FAIL"
+    assert [(f["invariant"], f["instance"], f["outcome"]) for f in findings] == [
+        ("fake-check", "fake[main]", "FAIL")
+    ]
 
 
 def test_shared_checks_run_on_every_kind_and_own_checks_only_on_their_kind(
@@ -95,7 +97,7 @@ def test_an_unreachable_fake_is_an_error_and_exit_two(fake_backend):
 
 def test_without_registration_the_fake_is_an_unknown_kind():
     env = FAKE_ENV
-    with pytest.raises(ValueError, match="fake"):
+    with pytest.raises(ValueError, match="not a known download client"):
         load_config(env)
 
 
