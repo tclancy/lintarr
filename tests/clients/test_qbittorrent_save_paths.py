@@ -75,6 +75,8 @@ _UNKNOWN = Unknown("field-absent", "unread")
         {"categories": {"tv": {"name": "tv", "savePath": 5}}},
         {"save_path": 5},
         {"auto_tmm_enabled": "true"},
+        {"use_category_paths_in_manual_mode": None, "auto_tmm_enabled": False},
+        {"auto_tmm_enabled": None},
     ],
     ids=[
         "save_path-unknown",
@@ -86,6 +88,8 @@ _UNKNOWN = Unknown("field-absent", "unread")
         "savepath-not-a-string",
         "save_path-not-a-string",
         "auto_tmm-not-a-bool",
+        "manual-flag-known-none",
+        "auto_tmm-known-none",
     ],
 )
 def test_any_needed_unknown_input_makes_the_mapping_unknown(override):
@@ -116,3 +120,13 @@ def test_collect_reads_the_three_new_prefs():
     assert qbt.auto_tmm_enabled.value is True
     assert qbt.use_category_paths_in_manual_mode.value is False
     assert save_paths(qbt).value["tv"] == "/data/torrents/tv"
+
+
+def test_absolute_category_save_path_is_not_prefixed_with_the_default():
+    cats = {"tv": {"name": "tv", "savePath": "/mnt/other/tv"}}
+    assert _mapping(categories=cats)["tv"] == "/mnt/other/tv"
+
+
+def test_trailing_slash_in_a_category_save_path_is_normalised_away():
+    cats = {"tv": {"name": "tv", "savePath": "/data/torrents/tv/"}}
+    assert _mapping(categories=cats)["tv"] == "/data/torrents/tv"
