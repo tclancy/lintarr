@@ -15,8 +15,10 @@ from lintarr.facts import Known, Unknown
 from lintarr.models import (
     ArrDownloadClient,
     ArrInstance,
+    QbtInstance,
     RootFolder,
 )
+from tests.fixtures.homelab import qbt_with
 
 _VERSION = "4.0.20.3014"
 _SOURCE = "GET /api/v3 (measured 2026-11-19)"
@@ -124,3 +126,21 @@ def arr_with(base: ArrInstance | None = None, **overrides: Any) -> ArrInstance:
     """
     wrapped = {k: _wrap(v) if k in FACT_FIELDS else v for k, v in overrides.items()}
     return replace(base or homelab_arr(), **wrapped)
+
+
+#: qBittorrent 5.2.3, measured 2026-11-19: ``/api/v2/torrents/categories``.
+QBT_CATEGORIES = {
+    "movies": {"name": "movies", "savePath": "/data/torrents/movies"},
+    "tv": {"name": "tv", "savePath": "/data/torrents/tv"},
+}
+
+
+def homelab_qbt(name: str = "main") -> QbtInstance:
+    """Tom's qBittorrent as measured 2026-11-19: auto TMM on, categories under ``/data``."""
+    return qbt_with(
+        name,
+        save_path="/data/torrents",
+        auto_tmm_enabled=True,
+        use_category_paths_in_manual_mode=False,
+        categories=QBT_CATEGORIES,
+    )

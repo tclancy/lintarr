@@ -5,6 +5,7 @@ import httpx
 from lintarr.clients.base import Backend
 from lintarr.clients.qbittorrent import queue_liveness
 from lintarr.clients.qbittorrent.collect import AUTH_PATH, collect_qbt
+from lintarr.clients.qbittorrent.save_paths import save_paths
 from lintarr.clients.qbittorrent.therefore import THEREFORE
 from lintarr.collect.http import ReadOnlyClient
 from lintarr.config import ClientConfig
@@ -15,7 +16,7 @@ def collect(cfg: ClientConfig, *, transport: httpx.BaseTransport | None) -> Clie
     """Open a read-only session on *cfg* and collect it as a client instance."""
     with ReadOnlyClient(cfg.url, transport=transport, auth_path=AUTH_PATH) as client:
         qbt = collect_qbt(client, cfg)
-    return ClientInstance(cfg.name, "qbittorrent", qbt.version, ClientFacts(), qbt)
+    return ClientInstance(cfg.name, "qbittorrent", qbt.version, ClientFacts(save_paths(qbt)), qbt)
 
 
 BACKEND = Backend(

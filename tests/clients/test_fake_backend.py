@@ -144,3 +144,12 @@ def test_a_therefore_line_comes_from_the_producing_backend_only(fake_with_theref
 def test_a_label_whose_kind_is_not_a_backend_gets_no_therefore_line(fake_with_therefore):
     assert _therefore_line("arr[main]") is None
     assert _therefore_line("nosuch[main]") is None
+
+
+def test_fake_backend_populates_save_paths():
+    from lintarr.config import ClientConfig
+    from tests.fakes.backend import collect
+
+    cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
+    inst = collect(cfg, transport=None)
+    assert inst.common.save_paths.value == {"": "/data/torrents", "tv": "/data/torrents/tv"}

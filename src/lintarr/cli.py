@@ -90,10 +90,12 @@ def _instance_to_dict(instance: Any) -> dict[str, Any]:
 def _client_to_dict(client: ClientInstance) -> dict[str, Any]:
     """One client, flat: identity first, then its backend's own facts.
 
-    ``common`` is left out while ``ClientFacts`` has no fields.
+    The neutral facts sit under ``common``, apart from the backend's own.
     """
     identity = {"name": client.name, "kind": client.kind, "version": client.version}
-    return identity | _instance_to_dict(client.specific)
+    return (
+        identity | {"common": _instance_to_dict(client.common)} | _instance_to_dict(client.specific)
+    )
 
 
 def _to_dict(facts: StackFacts) -> dict[str, Any]:
@@ -184,7 +186,8 @@ def _render_human(payload: dict[str, Any]) -> str:
         for instance in payload[group]:
             kind = instance["kind"]
             lines.append(f"{kind}[{instance['name']}] {_version_label(instance['version'])}")
-            for key, value in sorted(instance.items()):
+            facts = {**instance.get("common", {}), **instance}
+            for key, value in sorted(facts.items()):
                 if isinstance(value, dict) and "known" in value:
                     lines.extend(_render_fact_lines(key, value, indent="    "))
                 elif isinstance(value, list) and value and isinstance(value[0], dict):

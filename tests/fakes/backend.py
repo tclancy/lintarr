@@ -5,10 +5,12 @@ for config, collection, checks and rendering to treat it as a first-class kind.
 """
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from lintarr.clients.base import Backend
 from lintarr.collect.http import ServiceError
 from lintarr.config import ClientConfig
+from lintarr.facts import Known
 from lintarr.models import ArrInstance, ClientFacts, ClientInstance
 from lintarr.outcomes import Finding, Outcome
 
@@ -25,7 +27,14 @@ def collect(cfg: ClientConfig, *, transport: object) -> ClientInstance:
         name=cfg.name,
         kind="fake",
         version="0",
-        common=ClientFacts(),
+        common=ClientFacts(
+            Known(
+                {"": "/data/torrents", "tv": "/data/torrents/tv"},
+                source="fake backend",
+                read_at=datetime.now(UTC),
+                service_version="0",
+            )
+        ),
         specific=FakeFacts(broken=cfg.url.endswith("/broken")),
     )
 

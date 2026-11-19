@@ -135,6 +135,9 @@ def qbt_instances(names: st.SearchStrategy | None = None) -> st.SearchStrategy:
         max_seeding_time=LIMIT_FACTS,
         max_inactive_seeding_time_enabled=BOOL_FACTS,
         categories=facts(CATEGORY_MAPS),
+        save_path=facts(st.one_of(st.sampled_from(["/data/torrents", "/dl/"]), JUNK_VALUES)),
+        auto_tmm_enabled=BOOL_FACTS,
+        use_category_paths_in_manual_mode=BOOL_FACTS,
     )
 
 

@@ -31,7 +31,7 @@ _LINTARR_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT
 _CLEARED = {k: None for k in os.environ if k.startswith(_LINTARR_PREFIXES)}
 
 
-def _transport(*, arr_indexers=None):
+def _transport(*, arr_indexers=None, qbt_extra_prefs=None, qbt_categories=None):
     def handle(request: httpx.Request) -> httpx.Response:
         match request.url.path:
             case "/api/v2/auth/login":
@@ -40,10 +40,12 @@ def _transport(*, arr_indexers=None):
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences":
                 return httpx.Response(
-                    200, json={"queueing_enabled": True, "max_active_torrents": 5}
+                    200,
+                    json={"queueing_enabled": True, "max_active_torrents": 5}
+                    | (qbt_extra_prefs or {}),
                 )
             case "/api/v2/torrents/categories":
-                return httpx.Response(200, json={})
+                return httpx.Response(200, json=qbt_categories or {})
             case "/api/v3/system/status":
                 return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
@@ -209,3 +211,28 @@ def test_dump_facts_shows_the_new_arr_facts():
     assert human.exit_code == 0, human.output
     for key in _NEW_ARR_FACTS:
         assert key in human.output
+    assert "/data/media/tv" in human.output
+
+
+_QBT_PATH_PREFS = {
+    "save_path": "/data/torrents",
+    "auto_tmm_enabled": True,
+    "use_category_paths_in_manual_mode": False,
+}
+
+
+def test_dump_facts_shows_the_client_save_paths():
+    transport = _transport(
+        qbt_extra_prefs=_QBT_PATH_PREFS,
+        qbt_categories={"tv": {"name": "tv", "savePath": "/data/torrents/tv"}},
+    )
+    result = _run(["dump-facts", "--json"], transport=transport)
+    assert result.exit_code == 0, result.output
+    (client,) = json.loads(result.output)["clients"]
+    assert client["common"]["save_paths"]["value"] == {
+        "": "/data/torrents",
+        "tv": "/data/torrents/tv",
+    }
+    human = _run(["dump-facts"], transport=transport)
+    assert "save_paths" in human.output
+    assert "/data/torrents/tv" in human.output
