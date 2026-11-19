@@ -21,7 +21,7 @@ forever is also the one that cannot ban anybody.
 """
 
 from lintarr.collect.http import ReadOnlyClient, ServiceError, decode_text
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 from lintarr.facts import read
 from lintarr.models import QbtInstance
 
@@ -68,7 +68,8 @@ def _is_ban_refusal(exc: ServiceError) -> bool:
 _LOGIN_401_DETAIL = (
     "qBittorrent refused the login with HTTP 401, and that refusal has two "
     "causes it does not distinguish: either the username or password is wrong, "
-    "or the port in QBIT_URL (QBIT_URL__<NAME> for a second instance) is not "
+    "or the port in DOWNLOAD_CLIENT_URL (DOWNLOAD_CLIENT_URL__<NAME> for a second "
+    "instance) is not "
     "the port the WebUI listens on "
     "(WebUI\\Port) — a reverse proxy in front of it, or a container published "
     "as -p 18080:8080 — which fails qBittorrent's host-header validation and is "
@@ -81,7 +82,7 @@ _LOGIN_401_DETAIL = (
 )
 
 
-def authenticate(client: ReadOnlyClient, cfg: QbtConfig) -> None:
+def authenticate(client: ReadOnlyClient, cfg: ClientConfig) -> None:
     """Log in once. Never retries — see module docstring.
 
     qBittorrent does not follow its own documented login protocol. Measured
@@ -225,7 +226,7 @@ def _json_object(client: ReadOnlyClient, path: str) -> dict[str, object]:
     return payload
 
 
-def collect_qbt(client: ReadOnlyClient, cfg: QbtConfig) -> QbtInstance:
+def collect_qbt(client: ReadOnlyClient, cfg: ClientConfig) -> QbtInstance:
     """Authenticate once, then read version, preferences and categories."""
     authenticate(client, cfg)
     version = _read_version(client)

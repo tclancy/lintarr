@@ -16,11 +16,13 @@
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH, authenticate
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 
-CFG = QbtConfig(name="main", url="http://qbt", username="admin", password="pw")
+CFG = ClientConfig(
+    name="main", kind="qbittorrent", url="http://qbt", username="admin", password="pw"
+)
 
 
 def _client(handler) -> ReadOnlyClient:

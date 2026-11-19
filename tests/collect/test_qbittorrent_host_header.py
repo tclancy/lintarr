@@ -26,12 +26,14 @@ rather than on either member.
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH, authenticate
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 from tests.collect.test_qbittorrent_ban import BAN_BODY
 
-CFG = QbtConfig(name="main", url="http://qbt:8081", username="admin", password="hunter2")
+CFG = ClientConfig(
+    name="main", kind="qbittorrent", url="http://qbt:8081", username="admin", password="hunter2"
+)
 
 #: Row A4/A6 off the wire. Both rows are this response.
 UNAUTHORIZED = ("Unauthorized", 401)
@@ -98,12 +100,12 @@ def test_the_401_names_the_credentials_cause():
 def test_the_401_names_the_host_header_port_cause():
     """The cause an operator cannot guess, with the config key they must check.
 
-    ``QBIT_URL`` by name because that is the only end of the mismatch lintarr
+    ``DOWNLOAD_CLIENT_URL`` by name because that is the only end of the mismatch lintarr
     can see; ``WebUI\\Port`` by name because that is the other end, and the
     operator has to go read it out of qBittorrent to compare.
     """
     detail = _refuse_401().detail
-    assert "QBIT_URL" in detail
+    assert "DOWNLOAD_CLIENT_URL" in detail
     assert "WebUI\\Port" in detail
 
 
@@ -200,7 +202,7 @@ def test_identical_responses_produce_identical_details():
     """
     body, status = UNAUTHORIZED
 
-    def refuse(cfg: QbtConfig) -> str:
+    def refuse(cfg: ClientConfig) -> str:
         c = ReadOnlyClient(
             cfg.url,
             transport=httpx.MockTransport(lambda r: httpx.Response(status, text=body)),
@@ -211,7 +213,11 @@ def test_identical_responses_produce_identical_details():
         return excinfo.value.detail
 
     details = {
-        url: refuse(QbtConfig(name="main", url=url, username="admin", password="hunter2"))
+        url: refuse(
+            ClientConfig(
+                name="main", kind="qbittorrent", url=url, username="admin", password="hunter2"
+            )
+        )
         for url in EQUIVALENT_URLS
     }
     # Asserted against the first URL rather than via set(...) == 1: a set
@@ -224,8 +230,9 @@ def test_identical_responses_produce_identical_details():
 
     # And the credentials half, which is cheap to keep.
     other_credentials = refuse(
-        QbtConfig(
+        ClientConfig(
             name="main",
+            kind="qbittorrent",
             url=EQUIVALENT_URLS[0],
             username="operator",
             password="theRealOneAndItIsLonger",
@@ -274,7 +281,7 @@ def test_the_host_header_prose_is_absent_from_the_ban_refusal():
     with pytest.raises(ServiceError) as excinfo:
         authenticate(c, CFG)
     assert excinfo.value.kind == "banned"
-    assert "QBIT_URL" not in excinfo.value.detail
+    assert "DOWNLOAD_CLIENT_URL" not in excinfo.value.detail
     assert "WebUI\\Port" not in excinfo.value.detail
 
 
@@ -284,7 +291,7 @@ def test_the_host_header_prose_is_absent_from_a_plain_forbidden():
     with pytest.raises(ServiceError) as excinfo:
         authenticate(c, CFG)
     assert excinfo.value.kind == "unauthorised"
-    assert "QBIT_URL" not in excinfo.value.detail
+    assert "DOWNLOAD_CLIENT_URL" not in excinfo.value.detail
 
 
 def test_exactly_one_login_attempt_on_a_401():

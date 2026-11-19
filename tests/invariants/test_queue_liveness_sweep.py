@@ -18,7 +18,7 @@ import itertools
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from lintarr.invariants.queue_liveness import check
+from lintarr.clients.qbittorrent.queue_liveness import check
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import NO_GOALS

@@ -17,6 +17,7 @@ from hypothesis import strategies as st
 from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
 from lintarr.models import ArrInstance, ErrorRow, IndexerFacts, QbtInstance, StackFacts
+from tests.fixtures.clients import as_client
 
 #: Fixed so a shrunk counterexample is reproducible; the predicates under test
 #: never read it.
@@ -187,7 +188,7 @@ ERRORS = st.builds(
     label=st.one_of(
         st.builds(
             "{}[{}]".format,
-            st.sampled_from(["sonarr", "radarr", "qbittorrent"]),
+            st.sampled_from(["arr", "qbittorrent"]),
             st.text(min_size=1, max_size=4),
         ),
         st.text(min_size=1, max_size=6),
@@ -199,12 +200,12 @@ ERRORS = st.builds(
     ),
 )
 
-DECLARED = st.frozensets(st.sampled_from(["qbittorrent", "sonarr", "radarr"]), max_size=3)
+DECLARED = st.frozensets(st.sampled_from(["qbittorrent", "sonarr", "radarr", "arr"]), max_size=4)
 
 
 STACK_FACTS = st.builds(
     StackFacts,
-    qbits=st.lists(qbt_instances(), max_size=2).map(tuple),
+    clients=st.lists(qbt_instances().map(as_client), max_size=2).map(tuple),
     arrs=st.lists(ARR_INSTANCES, max_size=2).map(tuple),
     errors=st.lists(ERRORS, max_size=2).map(tuple),
 )

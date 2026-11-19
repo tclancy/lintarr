@@ -183,20 +183,49 @@ def _single_value(name: str, values: list[Any]) -> Any:
     return first
 
 
-def _read_version(client: ReadOnlyClient) -> str:
+#: The arrs this adapter reads, by the kind their ``appName`` normalises to.
+ARR_KINDS = frozenset({"sonarr", "radarr"})
+
+#: The kind half of every arr error label, ``arr[<name>]``. A failed arr may
+#: never have said which arr it is, so its label names the instance instead.
+ARR_LABEL_KIND = "arr"
+
+
+def _status(client: ReadOnlyClient) -> dict[str, Any]:
+    payload = client.get_json(_STATUS)
+    if not isinstance(payload, dict):
+        raise ServiceError("bad-response", f"{_STATUS}: expected a JSON object")
+    return payload
+
+
+def _read_version(status: dict[str, Any]) -> str:
     """Read the instance version, or fail.
 
     The version is stamped onto every fact this instance produces and gates
     version-ranged axioms downstream, so a missing or null one is ERROR rather
     than a guess: ``str(None)`` would fabricate the literal version ``'None'``.
     """
-    payload = client.get_json(_STATUS)
-    if not isinstance(payload, dict):
-        raise ServiceError("bad-response", f"{_STATUS}: expected a JSON object")
-    version = payload.get("version")
+    version = status.get("version")
     if not isinstance(version, str) or not version.strip():
         raise ServiceError("bad-response", f"{_STATUS}: no usable 'version' string")
     return version.strip()
+
+
+def _read_kind(status: dict[str, Any]) -> str:
+    """Which arr this is, from its own ``appName``, or fail.
+
+    The kind is not configured, so this is the only place it is known. A
+    missing or unfamiliar ``appName`` is ERROR rather than a guess: reading a
+    Lidarr's indexers as a Sonarr's would be a fact about the wrong service.
+    """
+    value = status.get("appName")
+    kind = value.strip().lower() if isinstance(value, str) else None
+    if kind not in ARR_KINDS:
+        raise ServiceError(
+            "bad-response",
+            f"{_STATUS}: appName {value!r} is not a supported arr ({', '.join(sorted(ARR_KINDS))})",
+        )
+    return kind
 
 
 def _indexer_payloads(client: ReadOnlyClient) -> list[dict[str, Any]]:
@@ -243,6 +272,7 @@ def _indexer_facts(raw: dict[str, Any], *, version: str) -> IndexerFacts:
 
 
 def collect_arr(client: ReadOnlyClient, cfg: ArrConfig) -> ArrInstance:
-    version = _read_version(client)
+    status = _status(client)
+    version, kind = _read_version(status), _read_kind(status)
     indexers = tuple(_indexer_facts(raw, version=version) for raw in _indexer_payloads(client))
-    return ArrInstance(name=cfg.name, kind=cfg.kind, version=version, indexers=indexers)
+    return ArrInstance(name=cfg.name, kind=kind, version=version, indexers=indexers)

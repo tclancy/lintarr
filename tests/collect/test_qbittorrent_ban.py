@@ -24,12 +24,14 @@ indistinguishable rather than pretending otherwise — see
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH, authenticate
 from lintarr.collect.http import _ERROR_BODY_PEEK, ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, authenticate
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 
 SENTINEL_PASSWORD = "s3ntinel-appears-in-no-prose"
-CFG = QbtConfig(name="main", url="http://qbt", username="admin", password=SENTINEL_PASSWORD)
+CFG = ClientConfig(
+    name="main", kind="qbittorrent", url="http://qbt", username="admin", password=SENTINEL_PASSWORD
+)
 
 BAN_BODY = "Your IP address has been banned after too many failed authentication attempts."
 
@@ -226,14 +228,19 @@ def test_a_ban_reaches_the_error_report_as_banned():
     from lintarr.collect.stack import collect_stack
     from lintarr.config import load_config
 
-    env = {"QBIT_URL": "http://qbt:8080", "QBIT_USER": "admin", "QBIT_PASS": "pw"}
+    env = {
+        "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+        "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+        "DOWNLOAD_CLIENT_USER": "admin",
+        "DOWNLOAD_CLIENT_PASS": "pw",
+    }
 
     def handle(request: httpx.Request) -> httpx.Response:
         assert request.url.path == AUTH_PATH, "collection must stop at the ban"
         return httpx.Response(403, text=BAN_BODY)
 
     facts = collect_stack(load_config(env), transport=httpx.MockTransport(handle))
-    assert facts.qbits == ()
+    assert facts.clients == ()
     # Projected to (label, kind): the row also carries the recovery
     # instruction since #18, and that half is pinned in
     # tests/test_error_detail_route.py, where rewording it is the point.

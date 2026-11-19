@@ -28,12 +28,12 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from lintarr.facts import Fact, Known, Unknown
-from lintarr.invariants.queue_liveness import (
+from lintarr.clients.qbittorrent.queue_liveness import (
     _is_a_seed_goal,
     _is_an_unusable_seed_criterion,
     _overrides_the_share_limit,
 )
+from lintarr.facts import Fact, Known, Unknown
 from tests.model.share_limit import MAX_REACHABLE_RATIO, CriterionState, classify
 from tests.strategies import JUNK_VALUES, LIMIT_VALUES, READ_AT
 

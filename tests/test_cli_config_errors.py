@@ -15,15 +15,26 @@ from click.testing import CliRunner
 
 from lintarr.cli import cli
 
-_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_")
+_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
 
 # The typo in the issue: credentials present, URL misspelled, so the service
 # would be neither collected nor reported absent.
-ORPHANED = {"QBIT_USER": "admin", "QBIT_PASS": "hunter2", "QBIT_URLL": "http://qbt:8080"}
+ORPHANED = {
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "hunter2",
+    "DOWNLOAD_CLIENT_URLL": "http://qbt:8080",
+}
 # The other ValueError site in load_config, to prove the guard is at the
 # boundary rather than special-cased to the orphan check.
-URL_WITHOUT_CREDENTIALS = {"QBIT_URL": "http://qbt:8080"}
+URL_WITHOUT_CREDENTIALS = {
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+}
+
+
+_ORPHAN_NAMES = ("DOWNLOAD_CLIENT_PASS", "DOWNLOAD_CLIENT_USER", "DOWNLOAD_CLIENT_URL")
 
 
 def _run(args, extra_env):
@@ -41,15 +52,15 @@ def _assert_clean_usage_error(result, *expected_names):
 
 
 def test_dump_facts_reports_orphaned_credentials_as_a_usage_error():
-    _assert_clean_usage_error(_run(["dump-facts"], ORPHANED), "QBIT_PASS", "QBIT_USER", "QBIT_URL")
+    _assert_clean_usage_error(_run(["dump-facts"], ORPHANED), *_ORPHAN_NAMES)
 
 
 def test_check_reports_orphaned_credentials_as_a_usage_error():
-    _assert_clean_usage_error(_run(["check"], ORPHANED), "QBIT_PASS", "QBIT_USER", "QBIT_URL")
+    _assert_clean_usage_error(_run(["check"], ORPHANED), *_ORPHAN_NAMES)
 
 
 def test_a_url_without_credentials_is_also_a_usage_error():
-    _assert_clean_usage_error(_run(["dump-facts"], URL_WITHOUT_CREDENTIALS), "QBIT_USER")
+    _assert_clean_usage_error(_run(["dump-facts"], URL_WITHOUT_CREDENTIALS), "DOWNLOAD_CLIENT_USER")
 
 
 def test_the_usage_error_does_not_echo_the_credential_value():
@@ -63,7 +74,7 @@ def test_the_usage_error_does_not_echo_the_credential_value():
     """
     result = _run(["dump-facts"], ORPHANED)
     assert result.exit_code == 2, result.output
-    assert "QBIT_PASS" in result.output, result.output
+    assert "DOWNLOAD_CLIENT_PASS" in result.output, result.output
     assert "hunter2" not in result.output
 
 
@@ -78,7 +89,7 @@ def test_every_registered_command_refuses_the_environment_cleanly(name):
     configuration will fail it and need an explicit exemption here, which is
     the intended "come and look at this".
     """
-    _assert_clean_usage_error(_run([name], ORPHANED), "QBIT_URL")
+    _assert_clean_usage_error(_run([name], ORPHANED), "DOWNLOAD_CLIENT_URL")
 
 
 def test_a_real_process_prints_no_traceback():
@@ -101,4 +112,4 @@ def test_a_real_process_prints_no_traceback():
     combined = proc.stdout + proc.stderr
     assert "Traceback" not in combined, combined
     assert "ValueError" not in combined, combined
-    assert "QBIT_URL" in combined, combined
+    assert "DOWNLOAD_CLIENT_URL" in combined, combined

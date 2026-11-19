@@ -1,12 +1,14 @@
 import httpx
 import pytest
 
+from lintarr.clients.qbittorrent.collect import AUTH_PATH, collect_qbt
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, collect_qbt
-from lintarr.config import QbtConfig
+from lintarr.config import ClientConfig
 from lintarr.facts import is_known
 
-CFG = QbtConfig(name="main", url="http://qbt", username="admin", password="pw")
+CFG = ClientConfig(
+    name="main", kind="qbittorrent", url="http://qbt", username="admin", password="pw"
+)
 
 PREFS = {
     "queueing_enabled": True,

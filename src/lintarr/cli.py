@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from lintarr.clients import BACKENDS
 from lintarr.collect.stack import collect_stack
 from lintarr.config import LintarrConfig, load_config
 from lintarr.edge import (
@@ -21,10 +22,9 @@ from lintarr.edge import (
     save_current,
 )
 from lintarr.facts import Known, Unknown, is_known
-from lintarr.invariants import queue_liveness
-from lintarr.models import StackFacts
+from lintarr.models import ClientInstance, StackFacts
 from lintarr.outcomes import Outcome, exit_code
-from lintarr.run import run_checks, run_outcome
+from lintarr.run import declared_services, run_checks, run_outcome
 
 
 def _config_from_env() -> LintarrConfig:
@@ -35,7 +35,7 @@ def _config_from_env() -> LintarrConfig:
     input mistakes, so they belong in click's usage-error channel: one line
     naming the variable, and exit 2. Handing ``os.environ`` straight to
     ``load_config`` let the ``ValueError`` reach the interpreter, so a single
-    typo (``QBIT_URLL``) printed a traceback.
+    typo (``DOWNLOAD_CLIENT_URLL``) printed a traceback.
 
     Exit 2 is the same code ``outcomes.exit_code`` gives ``Outcome.ERROR``, and
     that collision is intentional: both mean *lintarr could not look*, which is
@@ -80,9 +80,18 @@ def _instance_to_dict(instance: Any) -> dict[str, Any]:
     return out
 
 
+def _client_to_dict(client: ClientInstance) -> dict[str, Any]:
+    """One client, flat: identity first, then its backend's own facts.
+
+    ``common`` is left out while ``ClientFacts`` has no fields.
+    """
+    identity = {"name": client.name, "kind": client.kind, "version": client.version}
+    return identity | _instance_to_dict(client.specific)
+
+
 def _to_dict(facts: StackFacts) -> dict[str, Any]:
     return {
-        "qbits": [_instance_to_dict(q) for q in facts.qbits],
+        "clients": [_client_to_dict(c) for c in facts.clients],
         "arrs": [_instance_to_dict(a) for a in facts.arrs],
         # ``detail`` is its own key, never folded into ``kind``: every
         # consumer compares the kind for equality, so prose inside it is a
@@ -164,9 +173,9 @@ def _render_error_row(err: dict[str, Any]) -> list[str]:
 
 def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
-    for group in ("qbits", "arrs"):
+    for group in ("clients", "arrs"):
         for instance in payload[group]:
-            kind = instance.get("kind", "qbittorrent")
+            kind = instance["kind"]
             lines.append(f"{kind}[{instance['name']}] {_version_label(instance['version'])}")
             for key, value in sorted(instance.items()):
                 if isinstance(value, dict) and "known" in value:
@@ -196,70 +205,6 @@ def dump_facts(ctx: click.Context, as_json: bool) -> None:
     click.echo(jsonlib.dumps(payload, indent=2) if as_json else _render_human(payload))
 
 
-# Keyed on (invariant, conflict), never on the invariant alone. One invariant
-# answers one operator question, but it can reach that answer through
-# structurally different conflicts with different remedies — and a "Therefore"
-# line that names the wrong one tells an operator to change a setting the code
-# itself has just established will not help.
-_THEREFORE = {
-    (queue_liveness.INVARIANT_ID, queue_liveness.SEEDING): (
-        "completed torrents hold every active slot and no queued\n"
-        "  download can start. Nothing releases a seeder: both global share\n"
-        "  limits are off and no category sets its own."
-    ),
-    # "at or below zero" was wrong: the predicate is `_binds(v) and v <= 0`,
-    # and -1 does not bind, so -1 never starves the queue. An operator reading
-    # `max_active_downloads = -1` alongside that sentence goes looking at the
-    # one limit the check has already cleared.
-    (queue_liveness.INVARIANT_ID, queue_liveness.STARVATION): (
-        "this client cannot start a first download even while\n"
-        "  nothing is running: max_active_downloads or max_active_torrents is zero,\n"
-        "  or negative but not -1 (the only value meaning unlimited). Share limits\n"
-        "  are not involved, so turning them on will not help."
-    ),
-    # The three override routes. Each one's remedy is on the *arr* side, which
-    # is what separates them from SEEDING: the sentence above sends an operator
-    # to qBittorrent's share limits, and here those are settings the torrent has
-    # already put out of reach. Measured in
-    # docs/measurements/2026-10-05-sonarr-seed-ratio-range.md.
-    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_BOTH): (
-        "an indexer sets both seed criteria to a negative value other\n"
-        "  than -2, which qBittorrent reads as 'no limit' and never redirects to\n"
-        "  your global or category setting. Seeders hold every active slot and no\n"
-        "  queued download can start. A global ratio or seeding-time limit will\n"
-        "  NOT help — the fix is that indexer's seed ratio and seed time in\n"
-        "  Sonarr/Radarr, or a global inactive-seeding-time limit, which is the\n"
-        "  one release gate no indexer can override and which this FAIL has\n"
-        "  already checked you have unset. A category may override that gate\n"
-        "  per-category, which lintarr does not yet read."
-    ),
-    (queue_liveness.INVARIANT_ID, queue_liveness.ACTION): (
-        "your share-limit action is set to something that does not free\n"
-        "  the slot. qBittorrent consults the action only AFTER a limit is\n"
-        "  reached, so this defeats the ratio, seeding-time and\n"
-        "  inactive-seeding-time limits at once and every limit you have set is\n"
-        "  decorative. Super seeding keeps the torrent running; so does any\n"
-        "  value matching no action branch. Set qBittorrent's share-limit\n"
-        "  action to Stop, Remove, or Remove-with-content."
-    ),
-    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_RATIO): (
-        "an indexer sets a negative seed ratio other than -2, so\n"
-        "  qBittorrent never enforces a ratio for its torrents and never consults\n"
-        "  your global ratio limit. The seeding-time limit is the only thing left\n"
-        "  that could free the slot, and it is off everywhere. Either give that\n"
-        "  indexer a seed ratio of 0 or more, or turn on a global seeding-time\n"
-        "  limit."
-    ),
-    (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_SEED_TIME): (
-        "an indexer sets a negative seed time other than -2, so\n"
-        "  qBittorrent never enforces a seeding time for its torrents and never\n"
-        "  consults your global one. The ratio limit is the only thing left that\n"
-        "  could free the slot, and it is off everywhere. Either give that indexer\n"
-        "  a seed time of 0 or more, or turn on a global ratio limit."
-    ),
-}
-
-
 def _finding_to_dict(finding, *, new: bool | None = None) -> dict[str, Any]:
     out = {
         "invariant": finding.invariant,
@@ -267,8 +212,8 @@ def _finding_to_dict(finding, *, new: bool | None = None) -> dict[str, Any]:
         "outcome": str(finding.outcome),
         # Which conflict inside the invariant decided this. A consumer that
         # branches on the invariant id alone cannot tell the two apart, which
-        # is the machine-readable form of the same defect the "Therefore" line
-        # above had.
+        # is the machine-readable form of the same defect the "Therefore"
+        # table (``clients/qbittorrent/therefore.py``) is keyed to avoid.
         "conflict": finding.conflict,
         "detail": finding.detail,
         "premises": [{"label": p.label, "state": p.state} for p in finding.premises],
@@ -321,6 +266,21 @@ def _premise_column_width(findings) -> int:
     return max((len(label) for label in labels), default=0)
 
 
+def _therefore(finding) -> str | None:
+    """The "Therefore" line for *finding*'s ``(invariant, conflict)`` in its own backend's table.
+
+    The backend is the kind in the finding's ``<kind>[<name>]`` label. Only that
+    backend's table is consulted: two backends may both name a check
+    ``queue-liveness`` with a ``seeding`` conflict, and a lookup across every
+    table would print the first backend's remedy under the second's finding. A
+    label whose kind is not a backend (an arr, say) has no "Therefore" line.
+    """
+    backend = BACKENDS.get(finding.instance.split("[", 1)[0])
+    if backend is None:
+        return None
+    return backend.therefore.get((finding.invariant, finding.conflict))
+
+
 def _render_findings(findings) -> str:
     lines: list[str] = []
     width = _premise_column_width(findings)
@@ -339,7 +299,7 @@ def _render_findings(findings) -> str:
                 lines.append(f"    {p.label:<{width}} {state}")
         if f.detail:
             lines.append(f"  {f.detail}")
-        therefore = _THEREFORE.get((f.invariant, f.conflict))
+        therefore = _therefore(f)
         if therefore and f.outcome is Outcome.FAIL:
             lines.append("")
             lines.append(f"  Therefore: {therefore}")
@@ -394,7 +354,7 @@ def check_command(ctx: click.Context, as_json: bool, strict: bool, state_file: P
     """
     cfg = _config_from_env()
     facts = collect_stack(cfg, transport=ctx.obj.get("transport"))
-    findings = run_checks(facts, declared=cfg.declared)
+    findings = run_checks(facts, declared=declared_services(cfg, facts))
     if state_file is None:
         fresh = None
         code = exit_code((f.outcome for f in findings), strict=strict)

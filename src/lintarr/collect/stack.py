@@ -6,30 +6,32 @@ either — failures are recorded so the outcome layer can report ERROR.
 
 import httpx
 
-from lintarr.collect.arr import collect_arr
+from lintarr.clients import BACKENDS
+from lintarr.collect.arr import ARR_LABEL_KIND, collect_arr
 from lintarr.collect.http import ReadOnlyClient, ServiceError
-from lintarr.collect.qbittorrent import AUTH_PATH, collect_qbt
 from lintarr.config import LintarrConfig
-from lintarr.models import ArrInstance, ErrorRow, QbtInstance, StackFacts
+from lintarr.models import ArrInstance, ClientInstance, ErrorRow, StackFacts
 
 
 def collect_stack(
     cfg: LintarrConfig, *, transport: httpx.BaseTransport | None = None
 ) -> StackFacts:
-    qbits: list[QbtInstance] = []
+    clients: list[ClientInstance] = []
     arrs: list[ArrInstance] = []
     errors: list[ErrorRow] = []
 
-    for qbt in cfg.qbits:
-        label = f"qbittorrent[{qbt.name}]"
+    for client_cfg in cfg.clients:
+        label = f"{client_cfg.kind}[{client_cfg.name}]"
         try:
-            with ReadOnlyClient(qbt.url, transport=transport, auth_path=AUTH_PATH) as client:
-                qbits.append(collect_qbt(client, qbt))
+            clients.append(BACKENDS[client_cfg.kind].collect(client_cfg, transport=transport))
         except ServiceError as exc:
             errors.append(ErrorRow(label, exc.kind, exc.detail))
 
     for arr in cfg.arrs:
-        label = f"{arr.kind}[{arr.name}]"
+        # By name, never by kind: the kind is only known once the status call
+        # answers, and a label that flipped with the failure point would be a
+        # new alert key, re-paging on every flip.
+        label = f"{ARR_LABEL_KIND}[{arr.name}]"
         try:
             with ReadOnlyClient(
                 arr.url, transport=transport, headers={"X-Api-Key": arr.api_key}
@@ -38,4 +40,4 @@ def collect_stack(
         except ServiceError as exc:
             errors.append(ErrorRow(label, exc.kind, exc.detail))
 
-    return StackFacts(qbits=tuple(qbits), arrs=tuple(arrs), errors=tuple(errors))
+    return StackFacts(clients=tuple(clients), arrs=tuple(arrs), errors=tuple(errors))

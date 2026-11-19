@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 
 import pytest
 
+from lintarr.clients.qbittorrent.queue_liveness import MAX_REACHABLE_SEED_RATIO, check
 from lintarr.facts import Known, Unknown
-from lintarr.invariants.queue_liveness import MAX_REACHABLE_SEED_RATIO, check
 from lintarr.models import ArrInstance, IndexerFacts
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
@@ -902,8 +902,8 @@ def test_the_note_stays_off_a_verdict_that_never_read_a_seed_criterion():
     Its "Therefore" line ends "Share limits are not involved, so turning them on
     will not help", and the premises it lists are the two active-limit ones. A
     seed-criteria sentence between those two is the coupling defect
-    ``Finding.conflict`` exists to prevent — see the comment above ``_THEREFORE``
-    in ``cli.py``.
+    ``Finding.conflict`` exists to prevent — see the comment above ``THEREFORE``
+    in ``clients/qbittorrent/therefore.py``.
     """
     junk = _arrs(_indexer(seed_ratio=_fact("not-a-number")))
     f = check(qbt_with(max_active_torrents=0), junk)

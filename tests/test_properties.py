@@ -22,13 +22,14 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from lintarr.clients.qbittorrent import queue_liveness
+from lintarr.clients.qbittorrent.queue_liveness import NEEDS, check
 from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
-from lintarr.invariants import queue_liveness
-from lintarr.invariants.queue_liveness import NEEDS, check
 from lintarr.models import ErrorRow, StackFacts
 from lintarr.outcomes import Finding, Outcome
 from lintarr.run import run_checks
+from tests.fixtures.clients import as_client
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
 from tests.invariants.test_queue_liveness import NO_GOALS, WITH_GOALS
 from tests.invariants.test_share_limit_override import (
@@ -444,7 +445,7 @@ def test_every_conflict_name_is_one_the_cli_explains():
     explanation on ``(invariant, conflict)``, so the set of conflicts a finding
     can carry has to stay in step with the set the CLI can explain.
     """
-    from lintarr.cli import _THEREFORE
+    from lintarr.clients.qbittorrent.therefore import THEREFORE as _THEREFORE
 
     explained = {c for inv, c in _THEREFORE if inv == queue_liveness.INVARIANT_ID}
     # Compared against the invariant's own published set, not a second
@@ -477,11 +478,13 @@ def test_a_snapshot_can_produce_findings_of_every_shape_the_property_loops_over(
     carry all three at once.
     """
     facts = StackFacts(
-        qbits=(wedged_qbt(),),
+        clients=(as_client(wedged_qbt()),),
         arrs=NO_GOALS,
-        errors=(ErrorRow("sonarr[x]", "unreachable", "connection refused"),),
+        errors=(ErrorRow("arr[x]", "unreachable", "connection refused"),),
     )
-    findings = run_checks(facts, declared=frozenset({"radarr"}))
+    # Not an arr kind: a failed ``arr[...]`` counts as an attempt at every arr
+    # kind, so only a declared non-arr service is left to SKIP as never collected.
+    findings = run_checks(facts, declared=frozenset({"deluge"}))
     assert len(findings) >= 3, [f.invariant for f in findings]
 
 

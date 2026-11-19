@@ -1285,8 +1285,8 @@ def _note_unreadable_seed_criteria(finding: Finding, arrs: tuple[ArrInstance, ..
     conflict does not consult a seed criterion at all, and its "Therefore" line
     ends "Share limits are not involved, so turning them on will not help" — a
     sentence about seed criteria printed directly above that is the exact
-    coupling defect ``Finding.conflict`` and the ``_THEREFORE`` keying in
-    ``cli.py`` were written to prevent. A PASS reaches an operator through
+    coupling defect ``Finding.conflict`` and the ``THEREFORE`` keying in
+    ``therefore.py`` were written to prevent. A PASS reaches an operator through
     ``_worst_of``'s starvation fall-through, so this excludes the clean runs too.
     """
     if finding.conflict not in SEED_CRITERIA_CONFLICTS:

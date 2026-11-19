@@ -30,8 +30,7 @@ the gate".
 
 import pytest
 
-from lintarr.facts import Unknown
-from lintarr.invariants.queue_liveness import (
+from lintarr.clients.qbittorrent.queue_liveness import (
     OVERRIDE_BOTH,
     OVERRIDE_RATIO,
     OVERRIDE_SEED_TIME,
@@ -39,6 +38,7 @@ from lintarr.invariants.queue_liveness import (
     SEEDING,
     check,
 )
+from lintarr.facts import Unknown
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with, wedged_qbt
 from tests.invariants.test_queue_liveness import _NO_RATIO, NO_GOALS, _arrs, _fact, _indexer

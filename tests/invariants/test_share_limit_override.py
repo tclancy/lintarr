@@ -29,7 +29,7 @@ not a single one.
 
 import pytest
 
-from lintarr.invariants.queue_liveness import check
+from lintarr.clients.qbittorrent.queue_liveness import check
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with
 from tests.invariants.test_queue_liveness import _NO_RATIO, _arrs, _fact, _indexer

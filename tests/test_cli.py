@@ -8,22 +8,23 @@ from click.testing import CliRunner
 from lintarr.cli import cli
 
 ENV = {
-    "QBIT_URL": "http://qbt:8080",
-    "QBIT_USER": "admin",
-    "QBIT_PASS": "hunter2",
+    "DOWNLOAD_CLIENT_KIND": "qbittorrent",
+    "DOWNLOAD_CLIENT_URL": "http://qbt:8080",
+    "DOWNLOAD_CLIENT_USER": "admin",
+    "DOWNLOAD_CLIENT_PASS": "hunter2",
 }
 
 # Click's CliRunner env parameter ADDS to the ambient environment rather than
 # replacing it, and the CLI reads os.environ. If the machine running these
 # tests happens to export any lintarr-relevant variable — including a named
-# instance like QBIT_URL__SECONDARY that no fixed list would anticipate — a
+# instance like DOWNLOAD_CLIENT_URL__SECONDARY that no fixed list would anticipate — a
 # test could try to collect from a service it never intended to, passing
 # locally but failing in CI or vice versa. Click treats a value of None in
 # the env mapping as "unset this variable", so clear every ambient variable
-# matching lintarr's prefixes (QBIT_URL__MAIN, for instance, *does* resolve
+# matching lintarr's prefixes (DOWNLOAD_CLIENT_URL__MAIN, for instance, *does* resolve
 # to a real "main" instance per config._instances(), so it is not a no-op to
 # clear it) and layer each test's own keys on top so they win.
-_LINTARR_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_")
+_LINTARR_PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_LINTARR_PREFIXES)}
 
 
@@ -41,7 +42,7 @@ def _transport(*, arr_indexers=None):
             case "/api/v2/torrents/categories":
                 return httpx.Response(200, json={})
             case "/api/v3/system/status":
-                return httpx.Response(200, json={"version": "4.0.15.2941"})
+                return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=arr_indexers or [])
         return httpx.Response(404)
@@ -58,7 +59,7 @@ def test_dump_facts_json_marks_unread_fields_unknown():
     result = _run(["dump-facts", "--json"])
     assert result.exit_code == 0
     payload = json.loads(result.output)
-    qbt = payload["qbits"][0]
+    qbt = payload["clients"][0]
     assert qbt["max_active_torrents"]["known"] is True
     assert qbt["max_active_torrents"]["value"] == 5
     assert qbt["max_ratio_enabled"]["known"] is False
@@ -67,10 +68,10 @@ def test_dump_facts_json_marks_unread_fields_unknown():
 
 def test_dump_facts_records_the_source_of_every_known_fact():
     payload = json.loads(_run(["dump-facts", "--json"]).output)
-    assert payload["qbits"][0]["max_active_torrents"]["source"] == "GET /api/v2/app/preferences"
+    assert payload["clients"][0]["max_active_torrents"]["source"] == "GET /api/v2/app/preferences"
 
 
-_ARR_ENV = {"SONARR_URL": "http://sonarr:8989", "SONARR_API_KEY": "sonarrkey"}
+_ARR_ENV = {"ARR_URL": "http://sonarr:8989", "ARR_API_KEY": "sonarrkey"}
 _INDEXERS = [
     {
         "id": 1,
@@ -119,7 +120,7 @@ def _run_both_services(args, *, collected):
     ("args", "collected"),
     [
         (["dump-facts"], ["qbittorrent[main]", "sonarr[main]", "1337x", "max_active_torrents"]),
-        (["dump-facts", "--json"], ['"qbits"', '"indexers"', '"1337x"', '"max_active_torrents"']),
+        (["dump-facts", "--json"], ['"clients"', '"indexers"', '"1337x"', '"max_active_torrents"']),
     ],
 )
 def test_dump_facts_never_prints_credentials(args, collected):
@@ -153,7 +154,7 @@ def test_dump_facts_json_emits_the_service_version_of_every_known_fact():
     payload = json.loads(
         _run(["dump-facts", "--json"], extra_env=_ARR_ENV, transport=transport).output
     )
-    assert payload["qbits"][0]["max_active_torrents"]["service_version"] == "v5.2.3"
+    assert payload["clients"][0]["max_active_torrents"]["service_version"] == "v5.2.3"
     indexer = payload["arrs"][0]["indexers"][0]
     assert indexer["seed_ratio"]["service_version"] == "4.0.15.2941"
 

@@ -1,13 +1,35 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-17 (UTC)
-**State:** P2 slice 1 (the nightly qBittorrent 5.2.3 container differential of
-`trace()`) is merged to `main` (83e162e) and its nightly alert is **armed**
-(2026-11-15). It found F1-F3 (Open items). P0b's `queue-liveness` check is
-unchanged and still live on homelab, hourly as an edge-triggered systemd timer
-(first PASS against the real stack 2026-10-07 21:40 UTC). P2 slice 2 (uploading seeders against
+**Last updated:** 2026-11-18 (UTC)
+**State:** The pluggable-backends seam (download clients behind a registry,
+client-neutral `DOWNLOAD_CLIENT_*` / `ARR_*` env names, a fake backend proving
+it) is on branch `claude/pluggable-backends`, not yet merged. P2 slice 1 (the
+nightly qBittorrent 5.2.3 container differential of `trace()`) is merged to
+`main` (83e162e) and its nightly alert is **armed** (2026-11-15). It found
+F1-F3 (Open items). P0b's `queue-liveness` check is unchanged and still live on
+homelab, hourly as an edge-triggered systemd timer (first PASS against the real
+stack 2026-10-07 21:40 UTC). P2 slice 2 (uploading seeders against
 `max_active_torrents`) is merged to `main`; its Linux validation run
 43998520392 was green, 38 passed in 21m17s.
+
+## Pluggable backends: before and at merge
+
+- **LOCKSTEP WARNING.** The new code rejects the old env names
+  (`QBIT_*`, `SONARR_*`, `RADARR_*`). Once `claude/pluggable-backends` is
+  merged, *any* native-apps deploy on homelab pulls lintarr `main`, and new
+  code with the old env exits 2 and pages. The homelab env PR must therefore
+  merge and deploy in the same sitting as the lintarr merge, started just after
+  a `:17` timer tick, with no other native-apps deploy in between. See the
+  spec's "Rollout (homelab)" and "Timing" sections
+  (`docs/superpowers/specs/2026-11-18-pluggable-backends-design.md`).
+- `BLOCKED ON:` one green manual `conformance.yml` run on the branch (B5).
+  This is a merge precondition, not a follow-up.
+- `BLOCKED ON:` the homelab env PR (`roles/native-apps/templates/lintarr.env.j2`)
+  rendering `DOWNLOAD_CLIENT_KIND=qbittorrent`, `DOWNLOAD_CLIENT_URL/USER/PASS`,
+  `ARR_URL__TV`/`ARR_API_KEY__TV`, `ARR_URL__MOVIES`/`ARR_API_KEY__MOVIES` and
+  `LINTARR_SERVICES=qbittorrent,sonarr,radarr`. It should say it uses
+  `__TV`/`__MOVIES`, not the `__SONARR`/`__RADARR` names the legacy-rename
+  message suggests, and that arr labels become `arr[tv]`/`arr[movies]`.
 
 ## Conformance nightly: alert proven
 
@@ -58,7 +80,7 @@ consistency.
   `itguy restart lintarr` exits 1 by design, because nothing long-running
   exists.
 - **Alert path proven end to end** (2026-10-07). A drop-in pointed
-  SONARR_URL at a dead port. The run ERRORed with exit 2, OnFailure= fired,
+  SONARR_URL (now `ARR_URL`) at a dead port. The run ERRORed with exit 2, OnFailure= fired,
   and the ntfy arrived. Reverting returned it to PASS.
 - The former blockers are gone:
   - The qBittorrent password is vaulted (homelab#190).
@@ -186,7 +208,7 @@ repaired live stack also PASSed for real.
 Per `docs/superpowers/specs/2026-08-26-lintarr-design.md`, all present:
 
 - the premise combinator (`invariants/combinator.py`)
-- `queue-liveness` over the three-limit queue model (`invariants/queue_liveness.py`)
+- `queue-liveness` over the three-limit queue model (`clients/qbittorrent/queue_liveness.py`)
 - the state-machine simulator (`tests/model/queue.py`)
 - the five-outcome lattice and exit codes (`outcomes.py`)
 
