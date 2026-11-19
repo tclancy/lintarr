@@ -140,8 +140,9 @@ def test_remote_path_mapping_for_another_host_is_not_applied():
     finding = check(qbt, (arr,))
     assert finding.outcome is Outcome.SKIP
     assert finding.detail == (
-        "sonarr[tv]: the arr reports no mount for /downloads/tv other than /, "
-        "so it cannot see the download"
+        "sonarr[tv]: the arr reports no mount other than / for /downloads/tv; "
+        "either it cannot see the download or that mount is not listed "
+        "(network mounts are not)"
     )
 
 
@@ -177,6 +178,12 @@ def test_inaccessible_root_folder_is_ignored_and_named():
         "downloads and library folders share a mount for sonarr[tv]; "
         "sonarr[tv]: root folder /tv/old is not accessible and was left out"
     )
+
+
+def test_an_arr_with_no_root_folders_passes_and_says_nothing_imports():
+    finding = check(as_client(homelab_qbt()), (arr_with(homelab_arr(), root_folders=()),))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == "sonarr[tv]: no root folders, so nothing imports"
 
 
 def test_root_folder_with_unstated_accessibility_counts():

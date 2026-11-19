@@ -131,6 +131,25 @@ def test_a_500_on_a_new_endpoint_errors_the_arr():
 
 
 @pytest.mark.parametrize(
+    ("fields", "host", "category"),
+    [
+        ([{"name": "host", "value": None}], None, ""),
+        ([{"name": "tvCategory", "value": None}], None, ""),
+        ([{"name": "tvCategory", "value": ""}], None, ""),
+        ([{"name": "tvCategory", "value": "tv"}], None, "tv"),
+    ],
+)
+def test_null_or_absent_host_and_category_are_read_not_rejected(fields, host, category):
+    arr = _collect(replace={"/api/v3/downloadclient": [_dc(fields=fields)]})
+    client = arr.download_clients.value[0]
+    assert (client.host, client.category) == (host, category)
+
+
+def _dc(**extra):
+    return {"name": "q", "implementation": "Q", "enable": True, **extra}
+
+
+@pytest.mark.parametrize(
     ("path", "body"),
     [
         ("/api/v3/config/mediamanagement", [{"copyUsingHardlinks": True}]),
@@ -145,6 +164,10 @@ def test_a_500_on_a_new_endpoint_errors_the_arr():
         ("/api/v3/downloadclient", [{"name": "q", "implementation": "QBittorrent"}]),
         ("/api/v3/downloadclient", [{"name": "q", "implementation": "Q", "enable": "true"}]),
         ("/api/v3/downloadclient", [{"implementation": "Q", "enable": True}]),
+        ("/api/v3/downloadclient", [_dc(fields=[{"name": "host", "value": 5}])]),
+        ("/api/v3/downloadclient", [_dc(fields=[{"name": "host", "value": ["h"]}])]),
+        ("/api/v3/downloadclient", [_dc(fields=[{"name": "tvCategory", "value": 5}])]),
+        ("/api/v3/downloadclient", [_dc(fields=[{"name": "movieCategory", "value": []}])]),
     ],
 )
 def test_wrong_shape_is_bad_response(path, body):

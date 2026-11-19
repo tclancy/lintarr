@@ -392,18 +392,28 @@ def _client_field(entry: dict[str, Any], names: tuple[str, ...]) -> Any:
     return None
 
 
+def _optional_str_field(entry: dict[str, Any], names: tuple[str, ...], absent: str | None):
+    """A client field that is a string, or *absent* when missing or null; junk is bad-response."""
+    value = _client_field(entry, names)
+    if value is None:
+        return absent
+    if not isinstance(value, str):
+        raise ServiceError("bad-response", f"{_DOWNLOAD_CLIENT}: {names[0]!r} is not a string")
+    return value
+
+
 def _download_client(entry: dict[str, Any]) -> ArrDownloadClient:
     enabled = entry.get("enable")
     if not isinstance(enabled, bool):
         raise ServiceError("bad-response", f"{_DOWNLOAD_CLIENT}: 'enable' is not a bool")
-    host = _client_field(entry, ("host",))
-    category = _client_field(entry, _CATEGORY_FIELDS)
+    host = _optional_str_field(entry, ("host",), None)
+    category = _optional_str_field(entry, _CATEGORY_FIELDS, "")
     return ArrDownloadClient(
         name=_required_str(entry, "name", _DOWNLOAD_CLIENT),
         implementation=_required_str(entry, "implementation", _DOWNLOAD_CLIENT),
         enabled=enabled,
-        host=host if isinstance(host, str) else None,
-        category=category if isinstance(category, str) else "",
+        host=host,
+        category=category,
     )
 
 

@@ -138,7 +138,10 @@ def _one_side_on_root(
 ) -> Verdict:
     """Spec: exactly one side only on ``/`` is unknown, and the detail says which."""
     if dm == _ROOT:
-        reason = f"no mount for {download} other than /, so it cannot see the download"
+        reason = (
+            f"no mount other than / for {download}; either it cannot see the download "
+            "or that mount is not listed (network mounts are not)"
+        )
     else:
         reason = f"no mount for root folder {root} other than /, so the library is not on a volume"
     return Verdict(None, f"{label}: the arr reports {reason}")
@@ -263,6 +266,8 @@ def _arr_verdicts(
         return [Verdict(None, f"{label}: could not read {', '.join(unreadable)}")], True
     view = _view(arr)
     notes = [Verdict(False, note) for note in _left_out_roots(view)]
+    if not _usable_roots(view):
+        notes.append(Verdict(False, f"{label}: no root folders, so nothing imports"))
     return [*notes, *_triples(view, clients, save_paths)], True
 
 
