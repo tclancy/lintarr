@@ -30,8 +30,13 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
   category fallback; older arrs not knowing `stoppedUP`; Sonarr v5's
   season-pack ratio/goal toggle; Cleanuparr-reliant stacks FAIL until
   suppression exists. No size is reported (runtime state).
-- **Follow-ups:** conformance-test the share-limit actions in the container
-  harness; then `seed-goal-conflict` (informational).
+- **Follow-ups** are GitHub issues labelled `action` (#59-#68, filed
+  2026-11-19): `gh issue list --repo tclancy/lintarr --label action`.
+  Correctness first: #59 (category inactive limit false-FAIL), #60 (`..` in
+  paths), #61 (queue-liveness ignores category actions). Then #62
+  (conformance-test share-limit actions), then wording/tidying #63-#68.
+  The last roadmap check, `seed-goal-conflict` (informational), is not yet
+  an issue.
 
 ## `hardlink-futility`: the first shared check
 
