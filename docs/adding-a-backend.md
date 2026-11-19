@@ -32,13 +32,18 @@ cycle.
 - `collect`: called as `collect(cfg, *, transport)`. It reads the client and
   returns a `ClientInstance`. It raises `ServiceError` for anything it cannot
   read, never a default. All HTTP goes through `ReadOnlyClient`, so the
-  read-only guarantee holds.
+  read-only guarantee holds. The returned `ClientInstance.kind` must equal
+  `BACKEND.kind`: checks are dispatched by looking that kind up in
+  `BACKENDS`, so a mismatch is a `KeyError`.
 - `checks`: this backend's own invariants. Each is a `Check`, a function
   `(ClientInstance, tuple[ArrInstance, ...]) -> Finding`. It runs only on
   instances of this kind, and reads `inst.specific`, the backend's own facts.
 - `therefore`: the operator-facing "Therefore" line for each
   `(invariant, conflict)` pair that this backend's checks can FAIL on. It may
-  be empty. It lives here so a new backend never edits `cli.py`.
+  be empty. It lives here so a new backend never edits `cli.py`. A finding's
+  line is looked up in the producing backend's table only (the kind in its
+  `<kind>[<name>]` label), so reusing another backend's invariant id or
+  conflict name cannot pick up that backend's text.
 
 ## Credential rules
 
@@ -69,7 +74,9 @@ only neutral facts and run on every backend.
 ## Labels
 
 Every finding and error about a client is labelled `<kind>[<name>]`, for
-example `qbittorrent[main]`. The label is part of the edge-trigger alert key.
+example `qbittorrent[main]`. Collection errors are labelled for you. Findings
+are not: each check builds its own label, `f"{inst.kind}[{inst.name}]"`, as
+`queue_liveness` and the fake backend's check do. The label is part of the edge-trigger alert key.
 Change one and every persisting finding pages again, so labels are stable once
 shipped.
 
