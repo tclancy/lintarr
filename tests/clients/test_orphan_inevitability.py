@@ -2,7 +2,8 @@
 
 The arr removes a download only when Remove Completed is on, it can still see
 the torrent (no post-import category), and the limit that stopped it is one it
-recognises: an indexer goal or an inherited global, never a category's own.
+recognises: an indexer goal or an inherited global, and a category's own only
+when the same-arm global is reachable at or below it.
 """
 
 from dataclasses import replace
@@ -125,8 +126,13 @@ def test_stop_with_arr_removal_and_global_limits_passes():
 
 
 def test_stop_with_arr_removal_but_category_own_limit_fails():
-    """Review focus 3: the arr never checks a category's limits."""
-    qbt = _qbt({"tv": {"ratio_limit": 2.0}}, max_ratio_act=0)
+    """Review focus 3: the arr never checks a category's limits.
+
+    It checks the global ratio instead, so the global must sit above the
+    category's 2.0 for the stopped torrent to be one it never removes. The
+    homelab's 1.5 would cover it (see the final-fix-wave tests below).
+    """
+    qbt = _qbt({"tv": {"ratio_limit": 2.0}}, max_ratio_act=0, max_ratio=3.0)
     finding = check(qbt, (_arr(remove_completed=True),))
     assert finding.outcome is Outcome.FAIL
     assert finding.conflict == NOTHING_RECLAIMS
@@ -399,4 +405,40 @@ def test_unknown_remove_completed_and_unknown_reach_names_both():
     assert finding.detail == (
         "sonarr[tv] (category tv): the arr's Remove Completed setting could not be read; "
         "sonarr[tv] (category tv): whether a seed limit can fire could not be read"
+    )
+
+
+# --- final fix wave -----------------------------------------------------------
+
+
+def test_stop_with_a_category_ratio_the_global_covers_passes():
+    """Sonarr reads the global ratio for a -2 torrent, so it removes this one."""
+    qbt = _qbt(
+        {"tv": {"ratio_limit": 2.0}},
+        max_ratio_act=0,
+        max_ratio_enabled=True,
+        max_ratio=1.0,
+    )
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == (
+        "sonarr[tv]: qBittorrent stops at the limit and the arr removes completed downloads"
+    )
+
+
+def test_stop_with_an_unreadable_global_ratio_beside_a_category_ratio_skips():
+    qbt = _qbt(
+        {"tv": {"ratio_limit": 2.0}},
+        max_ratio_act=0,
+        max_ratio=Unknown("insufficient-permission", "max_ratio"),
+    )
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.premises == (Premise(PREMISE_NOTHING_RECLAIMS, None),)
+
+
+def test_default_action_minus_one_is_named_in_the_detail():
+    finding = check(_qbt(max_ratio_act=-1), (_arr(remove_completed=True),))
+    assert finding.detail == (
+        "sonarr[tv] (category tv): a limit can fire; action is Default, which removes nothing"
     )

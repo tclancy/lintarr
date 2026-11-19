@@ -102,8 +102,13 @@ Read from Sonarr `v5-develop` on 2026-11-19. Radarr shares the code shape.
 - `HasReachedSeedLimit` and its seeding-time and inactive siblings read the
   **torrent's own** limit when it is `>= 0`. When the torrent's limit is `-2`,
   they read the **global** preference instead. They never read a category's
-  limits. So a torrent that qBittorrent stops at a *category* limit is never
-  removable by the arr.
+  limits. A torrent that qBittorrent stops at a *category* limit still has
+  `-2` as its own limit, so the arr checks the same-arm global. At the stop it
+  has exactly the category's ratio or seeding time, and a stopped torrent's
+  counters stop accruing. So the arr removes it only when the same-arm global
+  (`max_ratio_enabled` + `max_ratio`, or `max_seeding_time_enabled` +
+  `max_seeding_time`) is reachable and at or below the category's value.
+  Otherwise it is never removable by the arr.
 - `QBittorrentProxyV2.GetTorrents` lists only torrents in `tvCategory`. After
   import, a post-import category (`tvImportedCategory`, `movieImportedCategory`)
   re-labels the torrent, so the arr can no longer see it or remove it. From then
@@ -163,10 +168,17 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
    or `nan`) blocks its arm. An arr with no enabled torrent indexer can't fire.
    This reuses `queue-liveness`'s helpers by import.
 4. **`can_fire_unrecognised`:** like `can_fire`, but it counts only arms the arr
-   does **not** recognise. That is an arm reached through a category's own
-   limit. An indexer goal or an inherited global is recognised. Concretely: some
-   enabled torrent indexer has an arm that is reached through the category's
-   own `ratio_limit`, `seeding_time_limit` or `inactive_seeding_time_limit`.
+   does **not** recognise. An indexer goal or an inherited global is
+   recognised. An arm reached through the category's own `ratio_limit` or
+   `seeding_time_limit` (including the season-pack arm) is **unrecognised**
+   unless the same-arm global is reachable and its value is at or below the
+   category's value; then it is recognised. An unreadable global flag or value
+   makes that arm's recognition unknown, which makes `can_fire_unrecognised`
+   unknown unless another arm settles it (`can_fire` is unaffected: the arm
+   fires either way). An arm reached through the category's own
+   `inactive_seeding_time_limit` is always unrecognised (see Known limits).
+   Concretely: some enabled torrent indexer has an arm reached through a
+   category's own limit that the global does not cover.
 
 **Aggregation** (one finding per client, built like `hardlink-futility`'s):
 
@@ -215,6 +227,13 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
   Stop path never reclaims there. That isn't modelled.
 - **Stacks relying on Cleanuparr** with a keep-files action FAIL honestly, until
   suppression (P1) exists.
+- **Global inactive value.** The global inactive-seeding-time *value* is not
+  collected, so a category's own inactive limit is always unrecognised, even
+  when the global inactive limit is armed at or below it. That case is a
+  possible false FAIL.
+- **Arrs without top-level `removeCompletedDownloads`.** An arr too old to
+  report it reads Remove Completed as unknown, so a Stop action with a
+  reachable limit SKIPs on every strict run.
 
 ## Model changes
 
@@ -230,7 +249,7 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
 |---|---|
 | `ShareLimitAction` values; `Default` matches no branch | measured from source (existing `_RELEASING_ACTIONS`) |
 | Category `share_limit_action` strings and the `Default` redirect to the global | assumed from qBittorrent 5.x source |
-| The arr removes a torrent only when it is stopped and has reached a torrent-level or global limit, never a category limit | read from Sonarr source, 2026-11-19 |
+| The arr removes a torrent only when it is stopped and has reached a torrent-level or global limit, never a category limit (a category stop counts only when the same-arm global is at or below it) | read from Sonarr source, 2026-11-19 |
 | A post-import category hides the torrent from the arr | read from Sonarr source, 2026-11-19 |
 | Remove (1) deletes the torrent and keeps its files | qBittorrent semantics; not conformance-tested |
 

@@ -3,7 +3,8 @@
 The arr only ever recognises an indexer goal or an inherited global limit
 (Sonarr's ``HasReachedSeedLimit`` reads the torrent's own limit, else the
 global prefs when it is ``-2``, never a category's). A limit reached through a
-category's own value is the one it does not recognise.
+category's own value is the one it does not recognise, unless the same-arm
+global is reachable at or below that value.
 """
 
 from datetime import UTC, datetime
@@ -323,3 +324,82 @@ def test_a_radarr_blocking_seed_time_has_no_season_pack_escape():
     seed_time = GLOBALS_OFF | {"max_seeding_time_enabled": True}
     arr = _arr(_indexer(**_BLOCKING), kind="radarr")
     assert can_fire(_qbt(**seed_time), arr, "tv") is False
+
+
+# --- a category's own limit the same-arm global already covers --------------
+#
+# Sonarr reads the global pref for an arm when the torrent's own limit is -2,
+# whatever the category. A torrent qBittorrent stops at the category's value
+# has exactly that ratio or seeding time and stops accruing, so the arr
+# recognises it when the same-arm global is reachable at or below that value.
+
+_RATIO_ONLY = GLOBALS_OFF | {"max_ratio_enabled": True}
+_SEED_TIME_ONLY = GLOBALS_OFF | {"max_seeding_time_enabled": True}
+
+
+@pytest.mark.parametrize("global_ratio", [1.0, 2.0])
+def test_a_category_ratio_the_global_covers_is_recognised(global_ratio):
+    qbt = _qbt(tv={"ratio_limit": 2.0}, **_RATIO_ONLY | {"max_ratio": global_ratio})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is False
+    assert can_fire(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_a_category_ratio_below_the_global_is_unrecognised():
+    qbt = _qbt(tv={"ratio_limit": 2.0}, **_RATIO_ONLY | {"max_ratio": 3.0})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreachable_global_ratio_covers_nothing():
+    qbt = _qbt(tv={"ratio_limit": 2.0}, **_RATIO_ONLY | {"max_ratio": float("inf")})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreadable_global_ratio_value_leaves_recognition_unknown():
+    unreadable = Unknown("insufficient-permission", "max_ratio")
+    qbt = _qbt(tv={"ratio_limit": 2.0}, **_RATIO_ONLY | {"max_ratio": unreadable})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
+    # Whether a limit fires at all is still settled: the category's own one does.
+    assert can_fire(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreadable_global_ratio_flag_leaves_recognition_unknown():
+    unreadable = Unknown("insufficient-permission", "max_ratio_enabled")
+    qbt = _qbt(tv={"ratio_limit": 2.0}, **GLOBALS_OFF | {"max_ratio_enabled": unreadable})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
+
+
+def test_a_category_seed_time_the_global_covers_is_recognised():
+    qbt = _qbt(tv={"seeding_time_limit": 20160}, **_SEED_TIME_ONLY | {"max_seeding_time": 10080})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is False
+
+
+def test_a_category_seed_time_with_the_global_off_is_unrecognised():
+    qbt = _qbt(tv={"seeding_time_limit": 20160}, **GLOBALS_OFF | {"max_seeding_time": 10080})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_a_category_seed_time_below_the_global_is_unrecognised():
+    qbt = _qbt(tv={"seeding_time_limit": 10080}, **_SEED_TIME_ONLY | {"max_seeding_time": 20160})
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreadable_global_seed_time_value_leaves_recognition_unknown():
+    unreadable = Unknown("insufficient-permission", "max_seeding_time")
+    qbt = _qbt(
+        tv={"seeding_time_limit": 20160}, **_SEED_TIME_ONLY | {"max_seeding_time": unreadable}
+    )
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
+
+
+def test_a_season_pack_category_seed_time_the_global_covers_is_recognised():
+    qbt = _qbt(tv={"seeding_time_limit": 60}, **_SEED_TIME_ONLY | {"max_seeding_time": 30})
+    arr = _arr(_indexer(season_pack=-2, **_BLOCKING))
+    assert can_fire_unrecognised(qbt, arr, "tv") is False
+    assert can_fire(qbt, arr, "tv") is True
+
+
+def test_a_category_inactive_limit_stays_unrecognised_even_with_the_global_armed():
+    """Known limit: the global inactive value is not collected, so it cannot cover."""
+    armed = GLOBALS_OFF | {"max_inactive_seeding_time_enabled": True}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **armed)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True

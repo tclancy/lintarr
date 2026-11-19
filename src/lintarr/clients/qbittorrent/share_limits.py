@@ -17,8 +17,20 @@ read the **global** preferences. They never read a category's limits. Indexer
 seed criteria become the torrent's own limits when the arr adds it, and for a
 sonarr season pack ``seasonPackSeedTime`` alone is the seeding-time limit
 (never ``seedTime``; see ``_season_pack_arm``), so season packs are an arm of
-their own. So an arm reached through an indexer goal or an inherited global is recognised, and an
-arm reached through a category's own limit is not.
+their own. So an arm reached through an indexer goal or an inherited global is
+recognised.
+
+An arm reached through a category's own limit is recognised only when the
+**same-arm global covers it**. The torrent's own limit is still ``-2``, so the
+arr checks the global for that arm; a torrent qBittorrent stops at the
+category's value has that ratio or seeding time, and a stopped torrent's
+counters stop accruing. So the arr removes it exactly when the same-arm global
+is reachable and at or below the category's value (``_global_covers``). An
+unreadable global flag or value leaves that arm's recognition unknown
+(``Reach.OWN_UNSURE``), which only ``can_fire_unrecognised`` reads. Known
+limit: the global inactive-seeding-time *value* is not collected, so a
+category's own inactive limit is always unrecognised — possibly a false FAIL
+when the global inactive limit is armed at or below it.
 
 **qBittorrent's side** is ``queue_liveness``'s measured semantics, imported
 rather than re-derived: ``-2`` alone redirects (torrent → category → global),
@@ -35,6 +47,7 @@ input it did not need.
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Any
 
@@ -43,6 +56,7 @@ from lintarr.clients.qbittorrent.queue_liveness import (
     _all_of,
     _any_of,
     _as_limit,
+    _as_number,
     _can_be_reached,
     _is_a_readable_seed_criterion,
     _is_a_seed_goal,
@@ -68,8 +82,14 @@ class Reach(Enum):
 
     #: The indexer's own criterion is reachable. The arr recognises it.
     GOAL = auto()
-    #: The category's own limit is reachable. The arr does not recognise it.
+    #: The category's own limit is reachable and the same-arm global does not
+    #: cover it. The arr does not recognise it.
     OWN = auto()
+    #: The category's own limit is reachable and the same-arm global, reachable
+    #: at or below it, is what the arr checks. The arr recognises it.
+    COVERED = auto()
+    #: The category's own limit is reachable; whether the global covers it is unknown.
+    OWN_UNSURE = auto()
     #: The inherited global limit is reachable. The arr recognises it.
     GLOBAL = auto()
     #: Nothing on this arm can ever be reached.
@@ -78,7 +98,7 @@ class Reach(Enum):
     DEFER = auto()
 
 
-_FIRING = frozenset({Reach.GOAL, Reach.OWN, Reach.GLOBAL})
+_FIRING = frozenset({Reach.GOAL, Reach.OWN, Reach.COVERED, Reach.OWN_UNSURE, Reach.GLOBAL})
 
 
 def _category_body(qbt: QbtInstance, category: str) -> dict[str, Any] | None:
@@ -167,27 +187,69 @@ def _global_inactive_reachable(qbt: QbtInstance) -> bool | None:
     return None if no_gate is None else not no_gate
 
 
-def _through_category(
-    qbt: QbtInstance,
-    category: str,
-    key: str,
-    global_reachable: Callable[[QbtInstance], bool | None],
-) -> Reach | None:
-    """The category's own limit, else (only when it inherits) the global."""
+def _global_covers(reachable: bool | None, value: float | None, own: float) -> bool | None:
+    """A reachable global at or below the category's *own* value; ``None`` if unread.
+
+    The value is read only when the global is reachable, so a global that is
+    off settles the answer without it.
+    """
+    if reachable is not True:
+        return reachable
+    if value is None:
+        return None
+    return _can_be_reached(value) and value <= own
+
+
+def _global_ratio_covers(qbt: QbtInstance, own: float) -> bool | None:
+    return _global_covers(_global_ratio_reachable(qbt), _as_number(qbt.max_ratio), own)
+
+
+def _global_seed_time_covers(qbt: QbtInstance, own: float) -> bool | None:
+    return _global_covers(_global_seed_time_reachable(qbt), _as_number(qbt.max_seeding_time), own)
+
+
+def _global_inactive_covers(qbt: QbtInstance, own: float) -> bool | None:
+    """Never: the global inactive value is not collected (a known limit)."""
+    return False
+
+
+def _own_reach(covered: bool | None) -> Reach:
+    if covered is None:
+        return Reach.OWN_UNSURE
+    return Reach.COVERED if covered else Reach.OWN
+
+
+@dataclass(frozen=True, slots=True)
+class _GlobalArm:
+    """How the global preference for one arm is read."""
+
+    reachable: Callable[[QbtInstance], bool | None]
+    covers: Callable[[QbtInstance, float], bool | None]
+
+
+_RATIO = _GlobalArm(_global_ratio_reachable, _global_ratio_covers)
+_SEED_TIME = _GlobalArm(_global_seed_time_reachable, _global_seed_time_covers)
+_INACTIVE = _GlobalArm(_global_inactive_reachable, _global_inactive_covers)
+
+
+def _through_category(qbt: QbtInstance, category: str, key: str, arm: _GlobalArm) -> Reach | None:
+    """The category's own limit (covered or not), else (only when it inherits) the global."""
     body = _category_body(qbt, category)
     if body is None:
         return None
     own = _category_limit_reach(body, key)
+    if own is Reach.OWN:
+        return _own_reach(arm.covers(qbt, body[key]))
     if own is not Reach.DEFER:
         return own
-    return _global_reach(global_reachable(qbt))
+    return _global_reach(arm.reachable(qbt))
 
 
 def _ratio_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
     criterion = _criterion_reach(indexer.seed_ratio)
     if criterion is not Reach.DEFER:
         return criterion
-    return _through_category(qbt, category, "ratio_limit", _global_ratio_reachable)
+    return _through_category(qbt, category, "ratio_limit", _RATIO)
 
 
 def _seed_time_through(qbt: QbtInstance, criterion: Fact[Any], category: str) -> Reach | None:
@@ -195,7 +257,7 @@ def _seed_time_through(qbt: QbtInstance, criterion: Fact[Any], category: str) ->
     reach = _criterion_reach(criterion)
     if reach is not Reach.DEFER:
         return reach
-    return _through_category(qbt, category, "seeding_time_limit", _global_seed_time_reachable)
+    return _through_category(qbt, category, "seeding_time_limit", _SEED_TIME)
 
 
 def _seed_time_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
@@ -220,9 +282,7 @@ def _season_pack_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> 
 
 def _inactive_arm(qbt: QbtInstance, category: str) -> Reach | None:
     """No indexer criterion: the arr sets no per-torrent inactive limit."""
-    return _through_category(
-        qbt, category, "inactive_seeding_time_limit", _global_inactive_reachable
-    )
+    return _through_category(qbt, category, "inactive_seeding_time_limit", _INACTIVE)
 
 
 def _arms(
@@ -244,7 +304,9 @@ def _fires(reach: Reach | None) -> bool | None:
 
 
 def _fires_unrecognised(reach: Reach | None) -> bool | None:
-    return None if reach is None else reach is Reach.OWN
+    if reach is None or reach is Reach.OWN_UNSURE:
+        return None
+    return reach is Reach.OWN
 
 
 def _some_torrent_indexer(
@@ -262,7 +324,10 @@ def can_fire(qbt: QbtInstance, arr: ArrInstance, category: str) -> bool | None:
 
 
 def can_fire_unrecognised(qbt: QbtInstance, arr: ArrInstance, category: str) -> bool | None:
-    """Some limit *arr* does not recognise — a category's own — can be reached."""
+    """Some limit *arr* does not recognise can be reached.
+
+    That is a category's own limit the same-arm global does not cover.
+    """
     return _some_torrent_indexer(
         arr, lambda i: _any_of(_fires_unrecognised(r) for r in _arms(qbt, arr, i, category))
     )

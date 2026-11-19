@@ -9,7 +9,9 @@ what ``A`` does about it, leaves the files on disk. See the spec's "The check".
 How the arr removes a download (Sonarr ``v5-develop``, read 2026-11-19; Radarr
 shares the shape): only with Remove Completed on, only for torrents still in its
 own category, and only when the limit that stopped the torrent is the torrent's
-own (an indexer goal) or an inherited global. Never a category's own limit.
+own (an indexer goal) or an inherited global. A category's own limit counts only
+when the same-arm global, which the arr checks for a ``-2`` torrent, is
+reachable at or below it (``share_limits``).
 
 The decision reads the action first. Action 3 (RemoveWithContent) settles the
 pair without reading reachability, so an input only reachability needs can
@@ -18,7 +20,10 @@ never turn it into a SKIP.
 Known limits (spec "Known limits"): an indexer pinned to another client is still
 counted; parent categories are not followed; older arr builds that miss
 qBittorrent 5's ``stoppedUP`` are not modelled; Cleanuparr-style external
-cleanup is not seen and FAILs honestly.
+cleanup is not seen and FAILs honestly; an arr too old to report top-level
+``removeCompletedDownloads`` reads Remove Completed as unknown, so a Stop action
+with a reachable limit SKIPs on every strict run; a category's own inactive
+limit is never counted as covered by the global (its value is not collected).
 
 The "an arr failed to collect" SKIP lives in ``run.py``, keyed by
 ``BACKEND.arr_dependent``: this check sees no collection errors.
@@ -51,7 +56,7 @@ _PREMISE_OF = {REMOVE_KEEPS_FILES: PREMISE_FILES_STAY, NOTHING_RECLAIMS: PREMISE
 _STOP = ACTION_BY_NAME["Stop"]
 _REMOVE = ACTION_BY_NAME["Remove"]
 _REMOVE_WITH_CONTENT = ACTION_BY_NAME["RemoveWithContent"]
-_NAME_OF = {value: name for name, value in ACTION_BY_NAME.items()}
+_NAME_OF = {value: name for name, value in ACTION_BY_NAME.items()} | {-1: "Default"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +140,7 @@ def _stop_without_arr_removal(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -
 
 
 def _stop_with_arr_removal(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -> Verdict:
-    """Only a category's own limit, which the arr never checks, leaves files."""
+    """Only a category's own limit the global does not cover leaves files."""
     fires = can_fire_unrecognised(qbt, arr, pair.category)
     if fires is False:
         return Verdict(
