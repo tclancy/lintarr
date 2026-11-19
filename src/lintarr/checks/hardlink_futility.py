@@ -38,8 +38,15 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import PurePosixPath
 
+from lintarr.checks.arr_clients import (
+    NO_ARR_SENDS_HERE,
+    arr_label,
+    clients_that_are,
+    save_paths_of,
+    tuple_of,
+)
 from lintarr.checks.paths import mount_of, posix_abs, translate
-from lintarr.facts import Fact, is_known
+from lintarr.facts import is_known
 from lintarr.invariants.combinator import conflict_if, premise
 from lintarr.models import (
     ArrDownloadClient,
@@ -55,7 +62,6 @@ CROSS_MOUNT = "cross-mount"
 PREMISE = "arr.hardlink_import_crosses_a_mount"
 
 _ROOT = PurePosixPath("/")
-NO_ARR_SENDS_HERE = "no collected arr sends downloads to this client"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,64 +74,9 @@ class Verdict:
     shared_by: str = ""
 
 
-def _tuple_of[T](fact: Fact[object], kind: type[T]) -> tuple[T, ...] | None:
-    """*fact*'s value when it is a readable tuple of *kind*, else ``None``."""
-    if not is_known(fact) or not isinstance(fact.value, tuple):
-        return None
-    if not all(isinstance(item, kind) for item in fact.value):
-        return None
-    return fact.value
-
-
-def _save_paths(instance: ClientInstance) -> Mapping[str, object] | None:
-    fact = instance.common.save_paths
-    if not is_known(fact) or not isinstance(fact.value, Mapping):
-        return None
-    return fact.value
-
-
 def _hardlinks(arr: ArrInstance) -> bool | None:
     fact = arr.copy_using_hardlinks
     return fact.value if is_known(fact) and isinstance(fact.value, bool) else None
-
-
-def _arr_label(arr: ArrInstance) -> str:
-    return f"{arr.kind}[{arr.name}]"
-
-
-def _is_this_client(
-    d: ArrDownloadClient, instance: ClientInstance, save_paths: Mapping[str, object] | None
-) -> bool:
-    """Spec step 1. With ``save_paths`` unread, any enabled ``D`` of this kind may be ``C``."""
-    if not d.enabled:
-        return False
-    if d.implementation.lower() != instance.kind:
-        return False
-    return save_paths is None or d.category in save_paths
-
-
-def _is_well_formed(d: ArrDownloadClient) -> bool:
-    """Every field ``_is_this_client`` and ``translate`` read has the type they assume."""
-    return (
-        isinstance(d.enabled, bool)
-        and isinstance(d.implementation, str)
-        and isinstance(d.category, str)
-        and (d.host is None or isinstance(d.host, str))
-    )
-
-
-def _clients_that_are_this(
-    arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
-) -> tuple[ArrDownloadClient, ...] | str:
-    """The arr's download clients that are this client, or why they can't be told."""
-    label = _arr_label(arr)
-    clients = _tuple_of(arr.download_clients, ArrDownloadClient)
-    if clients is None:
-        return f"{label}: its download clients could not be read"
-    malformed = [d.name for d in clients if not _is_well_formed(d)]
-    if malformed:
-        return f"{label}: download client {malformed[0]!r} has fields that could not be read"
-    return tuple(d for d in clients if _is_this_client(d, instance, save_paths))
 
 
 def _mount_or_reason(path: PurePosixPath, mounts: tuple[str, ...]) -> PurePosixPath | str:
@@ -184,20 +135,20 @@ class _ArrView:
 
 def _unreadable_arr_inputs(arr: ArrInstance) -> list[str]:
     fields = {
-        "root folders": _tuple_of(arr.root_folders, RootFolder),
-        "mounts": _tuple_of(arr.mounts, str),
-        "remote path mappings": _tuple_of(arr.remote_path_mappings, RemotePathMapping),
+        "root folders": tuple_of(arr.root_folders, RootFolder),
+        "mounts": tuple_of(arr.mounts, str),
+        "remote path mappings": tuple_of(arr.remote_path_mappings, RemotePathMapping),
     }
     return [name for name, value in fields.items() if value is None]
 
 
 def _view(arr: ArrInstance) -> _ArrView:
     return _ArrView(
-        label=_arr_label(arr),
+        label=arr_label(arr),
         hardlinks=_hardlinks(arr),
-        roots=_tuple_of(arr.root_folders, RootFolder) or (),
-        mounts=_tuple_of(arr.mounts, str) or (),
-        mappings=_tuple_of(arr.remote_path_mappings, RemotePathMapping) or (),
+        roots=tuple_of(arr.root_folders, RootFolder) or (),
+        mounts=tuple_of(arr.mounts, str) or (),
+        mappings=tuple_of(arr.remote_path_mappings, RemotePathMapping) or (),
     )
 
 
@@ -251,8 +202,8 @@ def _arr_verdicts(
     arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
 ) -> tuple[list[Verdict], bool]:
     """One arr's verdicts, and whether it (or, unreadably, may) send downloads to this client."""
-    label = _arr_label(arr)
-    clients = _clients_that_are_this(arr, instance, save_paths)
+    label = arr_label(arr)
+    clients = clients_that_are(arr, instance, save_paths)
     if clients == ():
         return [], False
     if _hardlinks(arr) is False:
@@ -306,7 +257,7 @@ def check(instance: ClientInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
     label = f"{instance.kind}[{instance.name}]"
     if not arrs:
         return _not_applicable(label)
-    save_paths = _save_paths(instance)
+    save_paths = save_paths_of(instance)
     verdicts: list[Verdict] = []
     involved = False
     for arr in arrs:

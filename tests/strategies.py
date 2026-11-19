@@ -90,13 +90,40 @@ def facts(values: st.SearchStrategy) -> st.SearchStrategy:
 BOOL_FACTS = facts(st.one_of(st.booleans(), JUNK_VALUES))
 LIMIT_FACTS = facts(st.one_of(LIMIT_VALUES, JUNK_VALUES))
 
-#: A category entry. ``ratio_limit`` / ``seeding_time_limit`` may be absent
-#: (a client too old to expose them), present and numeric, or present and junk
-#: — three cases ``_own_share_limit`` answers differently and on purpose.
-CATEGORY = st.dictionaries(
-    st.sampled_from(["ratio_limit", "seeding_time_limit", "savePath"]),
-    st.one_of(LIMIT_VALUES, st.floats(min_value=-3, max_value=5, width=32), JUNK_VALUES),
-    max_size=3,
+#: The ``share_limit_action`` strings a category is drawn with: every name
+#: qBittorrent reports, ``"Default"``, and one it does not (``"Pause"``). Named so
+#: ``test_the_strategies_still_generate_every_category_map_shape_they_claim``
+#: can compare it with ``share_limits.ACTION_BY_NAME``.
+SHARE_LIMIT_ACTION_NAMES: tuple[str, ...] = (
+    "Stop",
+    "Remove",
+    "EnableSuperSeeding",
+    "RemoveWithContent",
+    "Default",
+    "Pause",
+)
+
+#: The category names the arr fixtures and ``ARR_DOWNLOAD_CLIENTS`` use, drawn
+#: as category-map keys so a generated arr can match a generated category.
+MATCHABLE_CATEGORY_NAMES: tuple[str, ...] = ("tv", "movies")
+
+_CATEGORY_LIMIT = st.one_of(
+    LIMIT_VALUES, st.floats(min_value=-3, max_value=5, width=32), JUNK_VALUES
+)
+
+#: A category entry. Each limit may be absent (a client too old to expose it),
+#: present and numeric, or present and junk — three cases ``_own_share_limit``
+#: answers differently and on purpose. ``share_limit_action`` is likewise
+#: absent, a name from ``SHARE_LIMIT_ACTION_NAMES``, or junk.
+CATEGORY = st.fixed_dictionaries(
+    {},
+    optional={
+        "ratio_limit": _CATEGORY_LIMIT,
+        "seeding_time_limit": _CATEGORY_LIMIT,
+        "inactive_seeding_time_limit": _CATEGORY_LIMIT,
+        "savePath": _CATEGORY_LIMIT,
+        "share_limit_action": st.one_of(st.sampled_from(SHARE_LIMIT_ACTION_NAMES), JUNK_VALUES),
+    },
 )
 
 #: Category-map shapes that are not a map of categories. Named for the same
@@ -111,7 +138,11 @@ CATEGORY = st.dictionaries(
 MALFORMED_CATEGORY_MAPS: tuple[Any, ...] = (None, [{"ratio_limit": -2}], "categories")
 
 CATEGORY_MAPS = st.one_of(
-    st.dictionaries(st.text(min_size=1, max_size=4), CATEGORY, max_size=3),
+    st.dictionaries(
+        st.one_of(st.sampled_from(MATCHABLE_CATEGORY_NAMES), st.text(min_size=1, max_size=4)),
+        CATEGORY,
+        max_size=3,
+    ),
     st.sampled_from(MALFORMED_CATEGORY_MAPS),
     st.lists(CATEGORY, max_size=2),
     st.text(max_size=5),
@@ -191,6 +222,9 @@ ARR_DOWNLOAD_CLIENTS = st.builds(
     enabled=st.booleans(),
     host=st.one_of(st.none(), st.sampled_from(["gluetun", "other"])),
     category=st.sampled_from(["", "tv", "movies"]),
+    remove_completed=st.one_of(st.none(), st.booleans()),
+    # "tv" as well: an imported category equal to the category is no re-label.
+    imported_category=st.sampled_from(["", "tv-done", "tv"]),
 )
 
 

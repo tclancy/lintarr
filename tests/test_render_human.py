@@ -219,3 +219,49 @@ def test_a_cross_mount_skip_has_no_therefore_line():
 
     skip = replace(_cross_mount_fail(), outcome=Outcome.SKIP)
     assert "Therefore:" not in _render_findings([skip])
+
+
+# ---------------------------------------------------------------------------
+# orphan-inevitability: one "Therefore" line per conflict, from qBittorrent's table.
+# ---------------------------------------------------------------------------
+
+_ORPHAN_THEREFORE = {
+    "remove-keeps-files": (
+        "when a seed limit is reached, qBittorrent drops the torrent but leaves its files, "
+        "and nothing else knows they exist. They stay until someone deletes them by hand. "
+        "Set the share-limit action to 'Remove torrent and its files', or use Stop and turn "
+        "on the arr's Remove Completed."
+    ),
+    "nothing-reclaims": (
+        "torrents reach their seed limit and then keep their files forever. qBittorrent "
+        "stops or super-seeds them, and the arr either isn't set to remove completed "
+        "downloads, can't see them after a post-import category, or doesn't recognise the "
+        "limit that stopped them. Use 'Remove torrent and its files', or the Stop action "
+        "with Remove Completed on, global or indexer seed limits, and no post-import category."
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    ("conflict", "premise"),
+    [
+        ("remove-keeps-files", "arr.limit_fires_and_files_stay"),
+        ("nothing-reclaims", "arr.limit_fires_and_nothing_reclaims"),
+    ],
+)
+def test_render_shows_each_therefore_line(conflict, premise):
+    from lintarr.cli import _render_findings
+    from lintarr.outcomes import Finding, Outcome, Premise
+
+    fail = Finding(
+        invariant="orphan-inevitability",
+        instance="qbittorrent[main]",
+        outcome=Outcome.FAIL,
+        premises=(Premise(premise, True),),
+        detail="sonarr[tv] (category tv): a limit can fire",
+        conflict=conflict,
+    )
+    rendered = _render_findings([fail])
+    assert f"  Therefore: {_ORPHAN_THEREFORE[conflict]}" in rendered
+    others = [text for name, text in _ORPHAN_THEREFORE.items() if name != conflict]
+    assert all(text not in rendered for text in others)

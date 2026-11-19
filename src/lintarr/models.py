@@ -105,6 +105,12 @@ class ArrDownloadClient:
     #: ``tvCategory`` or ``movieCategory``, whichever the arr carries. ``""``
     #: when absent or empty: both mean "the client's default save path".
     category: str
+    #: Top-level ``removeCompletedDownloads``. ``None`` when absent, null or not
+    #: a bool: a junk value must not ERROR the whole arr.
+    remove_completed: bool | None
+    #: ``tvImportedCategory`` or ``movieImportedCategory``. ``""`` when absent,
+    #: empty or not a string; only consulted when non-empty.
+    imported_category: str
 
 
 @dataclass(frozen=True, slots=True)

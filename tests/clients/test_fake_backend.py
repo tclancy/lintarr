@@ -193,7 +193,7 @@ def test_shared_check_runs_for_the_fake_backend_too(fake_backend):
     split = arr_with(
         mounts=("/", "/data", "/tv"),
         root_folders=(RootFolder("/tv/shows", True),),
-        download_clients=(ArrDownloadClient("Fake", "Fake", True, "fake", "tv"),),
+        download_clients=(ArrDownloadClient("Fake", "Fake", True, "fake", "tv", False, ""),),
     )
     facts = StackFacts(clients=(collect(cfg, transport=None),), arrs=(split,))
     findings = run_checks(facts, declared=frozenset({"fake", "sonarr"}))

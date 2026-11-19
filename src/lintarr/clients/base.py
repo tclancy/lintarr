@@ -6,7 +6,7 @@ out of here is a cycle waiting for the second backend.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from lintarr.models import ArrInstance, ClientInstance
@@ -25,7 +25,9 @@ class Backend:
     ``collect`` is called as ``collect(cfg, *, transport)`` with a
     ``ClientConfig`` and raises ``ServiceError`` for anything it cannot read.
     ``therefore`` holds the "Therefore" line for each ``(invariant, conflict)``
-    this backend's checks can FAIL on, and may be empty.
+    this backend's checks can FAIL on, and may be empty. ``arr_dependent`` maps
+    each of this backend's invariant ids that needs arr data to the premise
+    label its failed-arr SKIP carries; it defaults to empty.
     """
 
     kind: str
@@ -33,3 +35,4 @@ class Backend:
     collect: Callable[..., ClientInstance]
     checks: tuple[Check, ...]
     therefore: Mapping[tuple[str, str], str]
+    arr_dependent: Mapping[str, str] = field(default_factory=dict)

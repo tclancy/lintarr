@@ -84,7 +84,9 @@ def test_reads_remote_path_mappings_verbatim_in_order():
 @pytest.mark.parametrize(("kind", "category"), [("sonarr", "tv"), ("radarr", "movies")])
 def test_reads_download_client_category_for_sonarr_and_radarr(kind, category):
     clients = _collect(kind).download_clients.value
-    assert clients == (ArrDownloadClient("qBittorrent", "QBittorrent", True, "gluetun", category),)
+    assert clients == (
+        ArrDownloadClient("qBittorrent", "QBittorrent", True, "gluetun", category, False, ""),
+    )
 
 
 @pytest.mark.parametrize(
@@ -174,3 +176,41 @@ def test_wrong_shape_is_bad_response(path, body):
     with pytest.raises(ServiceError) as exc:
         _collect(replace={path: body})
     assert exc.value.kind == "bad-response"
+
+
+def _with_top_level(**extra):
+    body = hp.download_clients()
+    body[0].update(extra)
+    return _collect(replace={"/api/v3/downloadclient": body}).download_clients.value[0]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(True, True), (False, False), ("absent", None), (None, None), ("yes", None), (1, None)],
+)
+def test_reads_remove_completed(raw, expected):
+    body = hp.download_clients()
+    body[0].pop("removeCompletedDownloads", None)
+    if raw != "absent":
+        body[0]["removeCompletedDownloads"] = raw
+    arr = _collect(replace={"/api/v3/downloadclient": body})
+    assert arr.download_clients.value[0].remove_completed is expected
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ({"name": "tvImportedCategory", "value": "tv-done"}, "tv-done"),
+        ({"name": "tvImportedCategory"}, ""),
+        ({"name": "tvImportedCategory", "value": ""}, ""),
+        ({"name": "tvImportedCategory", "value": 5}, ""),
+        ({"name": "movieImportedCategory", "value": "m-done"}, "m-done"),
+        (None, ""),
+    ],
+)
+def test_reads_imported_category(field, expected):
+    body = hp.download_clients()
+    if field is not None:
+        body[0]["fields"].append(field)
+    arr = _collect(replace={"/api/v3/downloadclient": body})
+    assert arr.download_clients.value[0].imported_category == expected

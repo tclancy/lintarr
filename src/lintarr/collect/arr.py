@@ -402,6 +402,19 @@ def _optional_str_field(entry: dict[str, Any], names: tuple[str, ...], absent: s
     return value
 
 
+_IMPORTED_CATEGORY_FIELDS = ("tvImportedCategory", "movieImportedCategory")
+
+
+def _remove_completed(entry: dict[str, Any]) -> bool | None:
+    value = entry.get("removeCompletedDownloads")
+    return value if isinstance(value, bool) else None
+
+
+def _imported_category(entry: dict[str, Any]) -> str:
+    value = _client_field(entry, _IMPORTED_CATEGORY_FIELDS)
+    return value if isinstance(value, str) and value else ""
+
+
 def _download_client(entry: dict[str, Any]) -> ArrDownloadClient:
     enabled = entry.get("enable")
     if not isinstance(enabled, bool):
@@ -414,6 +427,8 @@ def _download_client(entry: dict[str, Any]) -> ArrDownloadClient:
         enabled=enabled,
         host=host,
         category=category,
+        remove_completed=_remove_completed(entry),
+        imported_category=_imported_category(entry),
     )
 
 
