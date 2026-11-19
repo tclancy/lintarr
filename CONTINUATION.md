@@ -1,12 +1,36 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-19 (UTC)
-**State:** Pluggable backends are merged (lintarr#56, main 4b9cc11) and
-deployed with the client-neutral env (homelab#692); the first run on the new
-code passed 2026-11-19 01:28 UTC. `IN PROGRESS:` the `hardlink-futility` slice
-on `claude/hardlink-futility` (spec and plan dated 2026-11-19), the first
-*shared* check. P2 slices 1 and 2 (nightly qBittorrent 5.2.3 differential and
-uploading seeders) are merged, and the nightly alert is armed.
+**State:** `hardlink-futility` is merged (lintarr#57, main 2f664da) and
+deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:` the
+`orphan-inevitability` slice on `claude/orphan-inevitability` (spec and plan
+dated 2026-11-19). Pluggable backends are merged and deployed (lintarr#56,
+homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
+
+## `orphan-inevitability`: does anything remove finished downloads?
+
+- **What it catches:** a seed limit can fire for an arr's torrents, but no
+  configured setting removes their files. `remove-keeps-files`: the
+  share-limit action is "Remove" (keep files). `nothing-reclaims`: Stop
+  without the arr removing it, or super seeding / `Default`.
+- **Verified arr behaviour** (Sonarr source, 2026-11-19): the arr removes a
+  torrent only when it is stopped *and* has reached a torrent-level or global
+  limit, never a category limit; a post-import category hides the torrent from
+  the arr; Sonarr v4 season packs use `seasonPackSeedTime` only (unset defers,
+  never falls back to `seedTime`).
+- **A qBittorrent backend check**, not shared: it reuses `queue_liveness`'s
+  share-limit helpers through `clients/qbittorrent/share_limits.py`.
+  `Backend.arr_dependent` now tells `run.py` which checks SKIP when an arr
+  failed, so `run.py` names no check.
+- **Live, strict, homelab, at 414494c:** exit 0, `orphan-inevitability` PASS,
+  "qBittorrent removes files at the limit" for both arrs (action
+  RemoveWithContent, ratio 1.5 and 14 days).
+- **Known limits:** indexer `downloadClientId` pinning; qBittorrent's parent
+  category fallback; older arrs not knowing `stoppedUP`; Sonarr v5's
+  season-pack ratio/goal toggle; Cleanuparr-reliant stacks FAIL until
+  suppression exists. No size is reported (runtime state).
+- **Follow-ups:** conformance-test the share-limit actions in the container
+  harness; then `seed-goal-conflict` (informational).
 
 ## `hardlink-futility`: the first shared check
 
@@ -32,8 +56,7 @@ uploading seeders) are merged, and the nightly alert is armed.
   detected; two same-kind clients sharing a category name can make the wrong
   one claim an arr (a `Check` sees one instance; disambiguating needs a wider
   signature).
-- **Next slices:** `orphan-inevitability` (link-count-aware sizing), then
-  `seed-goal-conflict` (informational).
+- **Merged** as lintarr#57 and deployed 2026-11-19.
 
 ## Conformance nightly: alert proven
 
