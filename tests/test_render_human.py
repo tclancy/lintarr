@@ -170,3 +170,52 @@ def test_the_parenthetical_excludes_facts_and_nested_lists():
     )
     assert lines[1] == "      1337x  (id=7)"
     assert any("protocol" in line and "torrent" in line for line in lines[2:])
+
+
+# ---------------------------------------------------------------------------
+# hardlink-futility: a shared check's "Therefore" line.
+# ---------------------------------------------------------------------------
+
+
+def _cross_mount_fail(instance="qbittorrent[main]"):
+    from lintarr.checks.hardlink_futility import CROSS_MOUNT, INVARIANT_ID, PREMISE
+    from lintarr.outcomes import Finding, Outcome, Premise
+
+    return Finding(
+        invariant=INVARIANT_ID,
+        instance=instance,
+        outcome=Outcome.FAIL,
+        premises=(Premise(PREMISE, True),),
+        detail="sonarr[tv]: downloads in /downloads/tv are on mount /downloads, "
+        "root folder /tv/shows is on mount /tv",
+        conflict=CROSS_MOUNT,
+    )
+
+
+_HARDLINK_THEREFORE = (
+    "every import from this client into that library is a full copy, not a hardlink, "
+    "so each one doubles its disk use. Put downloads and library under one volume in "
+    "the arr's container (TRaSH's `/data` layout), or turn hardlinks off to make the "
+    "copying deliberate."
+)
+
+
+@pytest.mark.parametrize("instance", ["qbittorrent[main]", "fake[main]", "nosuch[main]"])
+def test_render_shows_the_therefore_line_for_a_cross_mount_fail(instance):
+    """A shared check's line is the same whichever backend produced the finding,
+    and is found before the backend lookup gives up on an unregistered kind."""
+    from lintarr.cli import _render_findings
+
+    rendered = _render_findings([_cross_mount_fail(instance)])
+    assert f"  Therefore: {_HARDLINK_THEREFORE}" in rendered
+    assert "downloads in /downloads/tv are on mount /downloads" in rendered
+
+
+def test_a_cross_mount_skip_has_no_therefore_line():
+    from dataclasses import replace
+
+    from lintarr.cli import _render_findings
+    from lintarr.outcomes import Outcome
+
+    skip = replace(_cross_mount_fail(), outcome=Outcome.SKIP)
+    assert "Therefore:" not in _render_findings([skip])

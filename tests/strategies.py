@@ -16,7 +16,16 @@ from hypothesis import strategies as st
 
 from lintarr.collect.http import ErrorKind
 from lintarr.facts import Known, Unknown
-from lintarr.models import ArrInstance, ErrorRow, IndexerFacts, QbtInstance, StackFacts
+from lintarr.models import (
+    ArrDownloadClient,
+    ArrInstance,
+    ErrorRow,
+    IndexerFacts,
+    QbtInstance,
+    RemotePathMapping,
+    RootFolder,
+    StackFacts,
+)
 from tests.fixtures.clients import as_client
 
 #: Fixed so a shrunk counterexample is reproducible; the predicates under test
@@ -126,6 +135,9 @@ def qbt_instances(names: st.SearchStrategy | None = None) -> st.SearchStrategy:
         max_seeding_time=LIMIT_FACTS,
         max_inactive_seeding_time_enabled=BOOL_FACTS,
         categories=facts(CATEGORY_MAPS),
+        save_path=facts(st.one_of(st.sampled_from(["/data/torrents", "/dl/"]), JUNK_VALUES)),
+        auto_tmm_enabled=BOOL_FACTS,
+        use_category_paths_in_manual_mode=BOOL_FACTS,
     )
 
 
@@ -161,12 +173,43 @@ INDEXERS = st.builds(
     season_pack_seed_time=LIMIT_FACTS,
 )
 
+_PATHS = st.sampled_from(
+    ["/", "/config", "/data", "/data/media/tv", "/data/torrents/tv", "/dl/", ""]
+)
+
+ROOT_FOLDERS = st.builds(RootFolder, path=_PATHS, accessible=st.one_of(st.none(), st.booleans()))
+REMOTE_PATH_MAPPINGS = st.builds(
+    RemotePathMapping,
+    host=st.sampled_from(["gluetun", "other"]),
+    remote_path=_PATHS,
+    local_path=_PATHS,
+)
+ARR_DOWNLOAD_CLIENTS = st.builds(
+    ArrDownloadClient,
+    name=st.sampled_from(["qBittorrent", "SAB"]),
+    implementation=st.sampled_from(["QBittorrent", "Sabnzbd"]),
+    enabled=st.booleans(),
+    host=st.one_of(st.none(), st.sampled_from(["gluetun", "other"])),
+    category=st.sampled_from(["", "tv", "movies"]),
+)
+
+
+def _arr_fact(valid: st.SearchStrategy) -> st.SearchStrategy:
+    """Known valid values, ``Unknown``, and junk wearing a ``Known``."""
+    return facts(st.one_of(valid, JUNK_VALUES))
+
+
 ARR_INSTANCES = st.builds(
     ArrInstance,
     name=st.text(min_size=1, max_size=5),
     kind=st.sampled_from(["sonarr", "radarr"]),
     version=st.just("4.0.0"),
     indexers=st.lists(INDEXERS, max_size=3).map(tuple),
+    copy_using_hardlinks=BOOL_FACTS,
+    root_folders=_arr_fact(st.lists(ROOT_FOLDERS, max_size=3).map(tuple)),
+    mounts=_arr_fact(st.lists(_PATHS, max_size=4).map(tuple)),
+    remote_path_mappings=_arr_fact(st.lists(REMOTE_PATH_MAPPINGS, max_size=2).map(tuple)),
+    download_clients=_arr_fact(st.lists(ARR_DOWNLOAD_CLIENTS, max_size=3).map(tuple)),
 )
 
 #: Every value the ``ErrorKind`` alias admits, read off the alias rather than

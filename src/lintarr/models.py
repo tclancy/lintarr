@@ -5,6 +5,7 @@ download clients per arr, are the common case, and retrofitting multiplicity
 after invariants exist is expensive.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -30,15 +31,24 @@ class QbtInstance:
     max_seeding_time: Fact[int]
     max_inactive_seeding_time_enabled: Fact[bool]
     categories: Fact[dict[str, Any]]
+    save_path: Fact[str]
+    auto_tmm_enabled: Fact[bool]
+    use_category_paths_in_manual_mode: Fact[bool]
 
 
 @dataclass(frozen=True, slots=True)
 class ClientFacts:
     """Client-neutral facts every backend reports.
 
-    Empty on purpose: a neutral field is added in the same change as the first
-    shared check that reads it, and populated by every registered backend then.
+    A neutral field is added in the same change as the first shared check that
+    reads it, and populated by every registered backend then.
+
+    ``save_paths`` maps each category to the absolute directory, in the
+    client's own namespace, where a new download in that category is saved.
+    The key ``""`` is the uncategorised location.
     """
+
+    save_paths: Fact[Mapping[str, str]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +83,41 @@ class IndexerFacts:
 
 
 @dataclass(frozen=True, slots=True)
+class RootFolder:
+    path: str
+    #: ``None`` when the arr did not say; counts as accessible downstream.
+    accessible: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class RemotePathMapping:
+    host: str
+    remote_path: str
+    local_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArrDownloadClient:
+    name: str
+    implementation: str
+    enabled: bool
+    host: str | None
+    #: ``tvCategory`` or ``movieCategory``, whichever the arr carries. ``""``
+    #: when absent or empty: both mean "the client's default save path".
+    category: str
+
+
+@dataclass(frozen=True, slots=True)
 class ArrInstance:
     name: str
     kind: str
     version: str
     indexers: tuple[IndexerFacts, ...]
+    copy_using_hardlinks: Fact[bool]
+    root_folders: Fact[tuple[RootFolder, ...]]
+    mounts: Fact[tuple[str, ...]]
+    remote_path_mappings: Fact[tuple[RemotePathMapping, ...]]
+    download_clients: Fact[tuple[ArrDownloadClient, ...]]
 
 
 @dataclass(frozen=True, slots=True)

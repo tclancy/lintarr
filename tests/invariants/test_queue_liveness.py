@@ -11,9 +11,10 @@ import pytest
 
 from lintarr.clients.qbittorrent.queue_liveness import MAX_REACHABLE_SEED_RATIO, check
 from lintarr.facts import Known, Unknown
-from lintarr.models import ArrInstance, IndexerFacts
+from lintarr.models import IndexerFacts
 from lintarr.outcomes import Outcome
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
+from tests.fixtures.homelab_paths import arr_with, homelab_arr
 
 
 def _fact(value):
@@ -69,7 +70,7 @@ def _wrap(value):
 
 
 def _arrs(*indexers):
-    return (ArrInstance(name="main", kind="sonarr", version="4.0.0", indexers=indexers),)
+    return (arr_with(homelab_arr(name="main"), indexers=indexers),)
 
 
 _NO_RATIO = Unknown("field-absent", "seed_ratio")
@@ -1022,7 +1023,7 @@ def test_no_arr_instances_does_not_hide_a_starved_client():
 
 def test_an_arr_that_reported_no_indexers_is_a_read_we_performed():
     """An arr with no indexers grabs nothing, so it cannot leave seeders behind."""
-    empty = (ArrInstance(name="main", kind="sonarr", version="4.0.19", indexers=()),)
+    empty = (arr_with(homelab_arr(name="main"), indexers=()),)
     assert check(wedged_qbt(), empty).outcome is Outcome.PASS
 
 
@@ -1032,7 +1033,7 @@ def test_a_pass_says_so_when_the_arr_answered_with_no_indexers():
     The verdict is right, but an operator who expected indexers in their Sonarr
     has a collection problem, and nothing else in the output would show it.
     """
-    empty = (ArrInstance(name="main", kind="sonarr", version="4.0.19", indexers=()),)
+    empty = (arr_with(homelab_arr(name="main"), indexers=()),)
     f = check(wedged_qbt(), empty)
     assert "sonarr[main]" in f.detail
     assert "no indexers" in f.detail

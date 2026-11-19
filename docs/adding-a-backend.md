@@ -61,12 +61,22 @@ error with exit 2.
 Report what you read. A value you could not read is `Unknown(reason, detail)`,
 never a default.
 
-`ClientInstance.common` holds client-neutral facts. It is empty today, on
-purpose. Client facts grow with their consumers: a neutral field is added in
-the same slice as the first shared check that reads it, and that slice must
-populate it in every registered backend. Do not add a neutral field because
-your backend happens to have the data. Put it in `specific` until a shared
-check needs it.
+`ClientInstance.common` holds client-neutral facts. Client facts grow with
+their consumers: a neutral field is added in the same slice as the first shared
+check that reads it, and that slice must populate it in every registered
+backend. Do not add a neutral field because your backend happens to have the
+data. Put it in `specific` until a shared check needs it.
+
+Today there is one, `save_paths: Fact[Mapping[str, str]]`. Every backend must
+fill it: per category, the absolute directory, in the client's own namespace,
+where a new download in that category is saved. The key `""` is the
+uncategorised location. If you cannot work it out, return `Unknown`, never a
+guess. qBittorrent is the worked example (`clients/qbittorrent/save_paths.py`):
+`""` is the `save_path` preference; a category uses its own `savePath` when
+`auto_tmm_enabled` is on (or it is off and `use_category_paths_in_manual_mode`
+is on), and `save_path` otherwise; an empty `savePath` is `<save_path>/<name>`
+and a relative one is joined to `save_path`; any input it needs that was not
+read makes the whole mapping `Unknown`.
 
 Shared checks live in `lintarr/checks/` (`SHARED_CHECKS`, none yet). They read
 only neutral facts and run on every backend.

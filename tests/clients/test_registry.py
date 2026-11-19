@@ -38,8 +38,11 @@ def test_registry_is_patchable():
 def test_a_wedged_qbittorrent_finding_keeps_its_labels():
     facts = StackFacts(clients=(as_client(wedged_qbt()),), arrs=NO_GOALS)
     findings = run_checks(facts, declared=frozenset({"qbittorrent", "sonarr"}))
-    assert [(f.invariant, f.instance) for f in findings] == [
+    assert [(f.invariant, f.instance) for f in findings if f.invariant == "queue-liveness"] == [
         ("queue-liveness", "qbittorrent[main]")
+    ]
+    assert [(f.invariant, f.instance) for f in findings if f.invariant != "queue-liveness"] == [
+        ("hardlink-futility", "qbittorrent[main]")
     ]
 
 

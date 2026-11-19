@@ -195,6 +195,10 @@ _PREF_KEYS = (
     # whole predicate and the paired `max_inactive_seeding_time` value would be
     # a fact nothing reads — the defect lintarr#32 was filed about.
     "max_inactive_seeding_time_enabled",
+    # Where downloads land; read by `save_paths`, the neutral fact.
+    "save_path",
+    "auto_tmm_enabled",
+    "use_category_paths_in_manual_mode",
 )
 
 

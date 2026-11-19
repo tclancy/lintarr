@@ -51,18 +51,38 @@ def test_a_credential_the_fake_does_not_use_is_rejected(fake_backend):
     assert "fake" in str(exc.value)
 
 
+#: The shared check, which runs on every kind. With no arr collected it is N/A.
+_HARDLINK = "hardlink-futility"
+
+
+def _own(findings):
+    """*findings* without the shared ``hardlink-futility`` one, which every kind gets."""
+    return [f for f in findings if f["invariant"] != _HARDLINK]
+
+
+def _hardlink(findings):
+    return [(f["instance"], f["outcome"]) for f in findings if f["invariant"] == _HARDLINK]
+
+
 def test_a_fake_instance_yields_its_own_check_and_no_queue_liveness(fake_backend):
     result, findings = _check(FAKE_ENV)
-    assert result.exit_code == 0
-    assert [(f["invariant"], f["instance"]) for f in findings] == [("fake-check", "fake[main]")]
+    assert [(f["invariant"], f["instance"]) for f in _own(findings)] == [
+        ("fake-check", "fake[main]")
+    ]
+    assert _hardlink(findings) == [("fake[main]", "N/A")]
+    # Was 0. The fake's own check PASSes; strict mode now exits 3 on the shared
+    # check's N/A, which no backend check masks here (queue-liveness would).
+    assert [f["outcome"] for f in _own(findings)] == ["PASS"]
+    assert result.exit_code == 3
 
 
 def test_a_broken_fake_fails_its_check(fake_backend):
     result, findings = _check(FAKE_ENV | {"DOWNLOAD_CLIENT_URL": "http://fake/broken"})
     assert result.exit_code == 1
-    assert [(f["invariant"], f["instance"], f["outcome"]) for f in findings] == [
+    assert [(f["invariant"], f["instance"], f["outcome"]) for f in _own(findings)] == [
         ("fake-check", "fake[main]", "FAIL")
     ]
+    assert _hardlink(findings) == [("fake[main]", "N/A")]
 
 
 def test_shared_checks_run_on_every_kind_and_own_checks_only_on_their_kind(
@@ -105,8 +125,13 @@ def test_the_fake_never_touches_the_network(fake_backend):
     def refuse(request: httpx.Request) -> httpx.Response:
         raise AssertionError(f"unexpected request {request.url}")
 
-    result, _ = _check(FAKE_ENV, transport=httpx.MockTransport(refuse))
-    assert result.exit_code == 0
+    result, findings = _check(FAKE_ENV, transport=httpx.MockTransport(refuse))
+    # Was 0: the shared check's N/A (no arr collected) now exits 3 under strict.
+    # Nothing ERRORed (that would be 2), and the only non-PASS is that N/A.
+    assert result.exit_code == 3
+    assert [(f["invariant"], f["outcome"]) for f in findings if f["outcome"] != "PASS"] == [
+        (_HARDLINK, "N/A")
+    ]
 
 
 #: A qBittorrent ``therefore`` key, reused by the fake with its own text.
@@ -144,3 +169,37 @@ def test_a_therefore_line_comes_from_the_producing_backend_only(fake_with_theref
 def test_a_label_whose_kind_is_not_a_backend_gets_no_therefore_line(fake_with_therefore):
     assert _therefore_line("arr[main]") is None
     assert _therefore_line("nosuch[main]") is None
+
+
+def test_fake_backend_populates_save_paths():
+    from lintarr.config import ClientConfig
+    from tests.fakes.backend import collect
+
+    cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
+    inst = collect(cfg, transport=None)
+    assert inst.common.save_paths.value == {"": "/data/torrents", "tv": "/data/torrents/tv"}
+
+
+def test_shared_check_runs_for_the_fake_backend_too(fake_backend):
+    """``hardlink-futility`` reads only neutral facts, so it judges a fake client too."""
+    from lintarr.checks.hardlink_futility import INVARIANT_ID
+    from lintarr.config import ClientConfig
+    from lintarr.models import ArrDownloadClient, RootFolder, StackFacts
+    from lintarr.run import run_checks
+    from tests.fakes.backend import collect
+    from tests.fixtures.homelab_paths import arr_with
+
+    cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
+    split = arr_with(
+        mounts=("/", "/data", "/tv"),
+        root_folders=(RootFolder("/tv/shows", True),),
+        download_clients=(ArrDownloadClient("Fake", "Fake", True, "fake", "tv"),),
+    )
+    facts = StackFacts(clients=(collect(cfg, transport=None),), arrs=(split,))
+    findings = run_checks(facts, declared=frozenset({"fake", "sonarr"}))
+    (finding,) = [f for f in findings if f.invariant == INVARIANT_ID]
+    assert (finding.instance, finding.outcome) == ("fake[main]", Outcome.FAIL)
+    assert finding.detail == (
+        "sonarr[tv]: downloads in /data/torrents/tv are on mount /data, "
+        "root folder /tv/shows is on mount /tv"
+    )

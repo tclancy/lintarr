@@ -70,6 +70,15 @@ _WEDGED: dict[str, Any] = _REPAIRED | {
 }
 
 
+# Added after #393: the three preferences that locate downloads. They were not
+# recorded there, so they are Unknown here; measured values live in
+# ``homelab_paths.py``.
+_NOT_RECORDED: dict[str, Any] = {
+    key: Unknown("field-absent", "not recorded in homelab#393")
+    for key in ("save_path", "auto_tmm_enabled", "use_category_paths_in_manual_mode")
+}
+
+
 def _known(value: Any) -> Known[Any]:
     return Known(value=value, source=_SOURCE, read_at=datetime.now(UTC), service_version=_VERSION)
 
@@ -88,7 +97,7 @@ def _build(values: dict[str, Any], name: str) -> QbtInstance:
     return QbtInstance(
         name=name,
         version=_VERSION,
-        **{key: _wrap(value) for key, value in values.items()},
+        **(_NOT_RECORDED | {key: _wrap(value) for key, value in values.items()}),
     )
 
 
