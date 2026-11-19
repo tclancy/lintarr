@@ -23,8 +23,11 @@ uploading seeders) are merged, and the nightly alert is armed.
 - **Axiom pinned nightly:** `tests/conformance/test_hardlink_exdev.py`
   (`link(2)` across bind mounts is `EXDEV`; within one it succeeds). Fails,
   not skips, without Docker in CI.
-- **Live, strict, from a throwaway checkout on homelab (2026-11-19):**
-  `check --json` exit 0, `hardlink-futility` PASS, every new fact `Known`.
+- **Live, strict, from a throwaway checkout on homelab:** at 7c0573f
+  (2026-11-19 ~18:42 UTC) every new fact read `Known`; at 07a7413
+  (2026-11-19 19:00 UTC, the final check logic) `check --json` exit 0, both
+  checks PASS, detail "downloads and library folders share a mount for
+  radarr[movies], sonarr[tv]".
 - **Known limits:** mergerfs/btrfs-subvolume links inside one mount are not
   detected; two same-kind clients sharing a category name can make the wrong
   one claim an arr (a `Check` sees one instance; disambiguating needs a wider
