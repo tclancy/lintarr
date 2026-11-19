@@ -1,11 +1,12 @@
 import pytest
 
 from lintarr.facts import Unknown
-from lintarr.models import ArrInstance, ErrorRow, StackFacts
+from lintarr.models import ErrorRow, StackFacts
 from lintarr.outcomes import Outcome
 from lintarr.run import run_checks, run_outcome
 from tests.fixtures.clients import as_client
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
+from tests.fixtures.homelab_paths import arr_with, homelab_arr
 from tests.invariants.test_queue_liveness import NO_GOALS, UNCLASSIFIABLE_NO_GOALS
 
 _QBT_ONLY = frozenset({"qbittorrent"})
@@ -138,7 +139,7 @@ def test_an_arr_that_was_collected_is_never_called_not_configured():
 def test_the_three_ways_of_having_no_arr_are_distinguishable():
     """The whole point of wiring ``declared`` through: one shape, three answers."""
     wedged = (as_client(wedged_qbt()),)
-    empty_sonarr = (ArrInstance(name="main", kind="sonarr", version="4.0.19", indexers=()),)
+    empty_sonarr = (arr_with(homelab_arr(name="main"), indexers=()),)
 
     def liveness(facts, declared):
         return next(

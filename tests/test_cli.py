@@ -6,6 +6,9 @@ import pytest
 from click.testing import CliRunner
 
 from lintarr.cli import cli
+from tests.fixtures.homelab_paths import arr_bodies
+
+ARR_BODIES = arr_bodies()
 
 ENV = {
     "DOWNLOAD_CLIENT_KIND": "qbittorrent",
@@ -45,6 +48,8 @@ def _transport(*, arr_indexers=None):
                 return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=arr_indexers or [])
+            case path if path in ARR_BODIES:
+                return httpx.Response(200, json=ARR_BODIES[path])
         return httpx.Response(404)
 
     return httpx.MockTransport(handle)
@@ -179,3 +184,28 @@ def test_dump_facts_human_mode_includes_indexer_facts():
     assert "enable_interactive_search" in result.output
     assert "protocol" in result.output
     assert "seed_time                    ? UNKNOWN (field-absent)" in result.output
+
+
+_NEW_ARR_FACTS = (
+    "copy_using_hardlinks",
+    "root_folders",
+    "mounts",
+    "remote_path_mappings",
+    "download_clients",
+)
+
+
+def test_dump_facts_shows_the_new_arr_facts():
+    result = _run(["dump-facts", "--json"], extra_env=_ARR_ENV)
+    assert result.exit_code == 0, result.output
+    arr = json.loads(result.output)["arrs"][0]
+    assert arr["copy_using_hardlinks"]["value"] is True
+    assert arr["root_folders"]["value"] == [{"path": "/data/media/tv", "accessible": True}]
+    assert arr["mounts"]["value"] == ["/", "/config", "/data"]
+    assert arr["remote_path_mappings"]["value"] == []
+    assert arr["download_clients"]["value"][0]["category"] == "tv"
+
+    human = _run(["dump-facts"], extra_env=_ARR_ENV)
+    assert human.exit_code == 0, human.output
+    for key in _NEW_ARR_FACTS:
+        assert key in human.output

@@ -14,15 +14,28 @@ this project's cardinal sin (a defaulted fact masquerading as a real one), so
 each is read as its own ``Fact`` rather than collapsed into a bare bool.
 """
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from lintarr.collect.http import ReadOnlyClient, ServiceError
 from lintarr.config import ArrConfig
-from lintarr.facts import read
-from lintarr.models import ArrInstance, IndexerFacts
+from lintarr.facts import Fact, Known, Unknown, read
+from lintarr.models import (
+    ArrDownloadClient,
+    ArrInstance,
+    IndexerFacts,
+    RemotePathMapping,
+    RootFolder,
+)
 
 _STATUS = "/api/v3/system/status"
 _INDEXER = "/api/v3/indexer"
+_MEDIA_MANAGEMENT = "/api/v3/config/mediamanagement"
+_ROOT_FOLDER = "/api/v3/rootfolder"
+_DISK_SPACE = "/api/v3/diskspace"
+_REMOTE_PATH_MAPPING = "/api/v3/remotepathmapping"
+_DOWNLOAD_CLIENT = "/api/v3/downloadclient"
 
 _SEED_FIELDS = {
     "seed_ratio": "seedCriteria.seedRatio",
@@ -271,8 +284,152 @@ def _indexer_facts(raw: dict[str, Any], *, version: str) -> IndexerFacts:
     )
 
 
+def _optional[T](
+    client: ReadOnlyClient,
+    path: str,
+    reader: Callable[[ReadOnlyClient, str], Fact[T]],
+    *,
+    version: str,
+) -> Fact[T]:
+    """Read one endpoint that an older arr may not serve.
+
+    Only a 404 means "this version has no such endpoint". Anything else, a 500
+    or a 401 included, is a service we could not read and must ERROR the arr as
+    the indexer read does, not be quietly downgraded to an unknown.
+    """
+    try:
+        return reader(client, version)
+    except ServiceError as exc:
+        if exc.status == 404:
+            return Unknown(reason="field-absent", detail=f"{path} answered 404")
+        raise
+
+
+def _known[T](value: T, path: str, version: str) -> Known[T]:
+    return Known(
+        value=value, source=f"GET {path}", read_at=datetime.now(UTC), service_version=version
+    )
+
+
+def _array_of_objects(client: ReadOnlyClient, path: str) -> list[dict[str, Any]]:
+    payload = client.get_json(path)
+    if not isinstance(payload, list) or not all(isinstance(i, dict) for i in payload):
+        raise ServiceError("bad-response", f"{path}: expected a JSON array of objects")
+    return payload
+
+
+def _required_str(entry: dict[str, Any], key: str, path: str) -> str:
+    value = entry.get(key)
+    if not isinstance(value, str):
+        raise ServiceError("bad-response", f"{path}: an entry has no {key!r} string")
+    return value
+
+
+def _read_copy_using_hardlinks(client: ReadOnlyClient, version: str) -> Fact[bool]:
+    """A non-bool is a bad response: a later ``"false"`` would read as truthy."""
+    payload = client.get_json(_MEDIA_MANAGEMENT)
+    if not isinstance(payload, dict):
+        raise ServiceError("bad-response", f"{_MEDIA_MANAGEMENT}: expected a JSON object")
+    if "copyUsingHardlinks" not in payload:
+        return Unknown(
+            reason="field-absent",
+            detail=f"'copyUsingHardlinks' absent from GET {_MEDIA_MANAGEMENT}",
+        )
+    value = payload["copyUsingHardlinks"]
+    if not isinstance(value, bool):
+        raise ServiceError("bad-response", f"{_MEDIA_MANAGEMENT}: 'copyUsingHardlinks' not a bool")
+    return _known(value, _MEDIA_MANAGEMENT, version)
+
+
+def _root_folder(entry: dict[str, Any]) -> RootFolder:
+    accessible = entry.get("accessible")
+    if accessible is not None and not isinstance(accessible, bool):
+        raise ServiceError("bad-response", f"{_ROOT_FOLDER}: 'accessible' is not a bool")
+    return RootFolder(path=_required_str(entry, "path", _ROOT_FOLDER), accessible=accessible)
+
+
+def _read_root_folders(client: ReadOnlyClient, version: str) -> Fact[tuple[RootFolder, ...]]:
+    folders = tuple(_root_folder(e) for e in _array_of_objects(client, _ROOT_FOLDER))
+    return _known(folders, _ROOT_FOLDER, version)
+
+
+def _read_mounts(client: ReadOnlyClient, version: str) -> Fact[tuple[str, ...]]:
+    paths = tuple(
+        _required_str(e, "path", _DISK_SPACE) for e in _array_of_objects(client, _DISK_SPACE)
+    )
+    return _known(paths, _DISK_SPACE, version)
+
+
+def _mapping(entry: dict[str, Any]) -> RemotePathMapping:
+    return RemotePathMapping(
+        host=_required_str(entry, "host", _REMOTE_PATH_MAPPING),
+        remote_path=_required_str(entry, "remotePath", _REMOTE_PATH_MAPPING),
+        local_path=_required_str(entry, "localPath", _REMOTE_PATH_MAPPING),
+    )
+
+
+def _read_remote_path_mappings(
+    client: ReadOnlyClient, version: str
+) -> Fact[tuple[RemotePathMapping, ...]]:
+    mappings = tuple(_mapping(e) for e in _array_of_objects(client, _REMOTE_PATH_MAPPING))
+    return _known(mappings, _REMOTE_PATH_MAPPING, version)
+
+
+_CATEGORY_FIELDS = ("tvCategory", "movieCategory")
+
+
+def _client_field(entry: dict[str, Any], names: tuple[str, ...]) -> Any:
+    """The value of the first of *names* this client's ``fields`` list carries."""
+    fields = entry.get("fields", [])
+    if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
+        raise ServiceError(
+            "bad-response", f"{_DOWNLOAD_CLIENT}: 'fields' is not an array of objects"
+        )
+    for name in names:
+        for f in fields:
+            if f.get("name") == name:
+                return f.get("value")
+    return None
+
+
+def _download_client(entry: dict[str, Any]) -> ArrDownloadClient:
+    enabled = entry.get("enable")
+    if not isinstance(enabled, bool):
+        raise ServiceError("bad-response", f"{_DOWNLOAD_CLIENT}: 'enable' is not a bool")
+    host = _client_field(entry, ("host",))
+    category = _client_field(entry, _CATEGORY_FIELDS)
+    return ArrDownloadClient(
+        name=_required_str(entry, "name", _DOWNLOAD_CLIENT),
+        implementation=_required_str(entry, "implementation", _DOWNLOAD_CLIENT),
+        enabled=enabled,
+        host=host if isinstance(host, str) else None,
+        category=category if isinstance(category, str) else "",
+    )
+
+
+def _read_download_clients(
+    client: ReadOnlyClient, version: str
+) -> Fact[tuple[ArrDownloadClient, ...]]:
+    clients = tuple(_download_client(e) for e in _array_of_objects(client, _DOWNLOAD_CLIENT))
+    return _known(clients, _DOWNLOAD_CLIENT, version)
+
+
 def collect_arr(client: ReadOnlyClient, cfg: ArrConfig) -> ArrInstance:
     status = _status(client)
     version, kind = _read_version(status), _read_kind(status)
     indexers = tuple(_indexer_facts(raw, version=version) for raw in _indexer_payloads(client))
-    return ArrInstance(name=cfg.name, kind=kind, version=version, indexers=indexers)
+
+    def optional(path: str, reader):
+        return _optional(client, path, reader, version=version)
+
+    return ArrInstance(
+        name=cfg.name,
+        kind=kind,
+        version=version,
+        indexers=indexers,
+        copy_using_hardlinks=optional(_MEDIA_MANAGEMENT, _read_copy_using_hardlinks),
+        root_folders=optional(_ROOT_FOLDER, _read_root_folders),
+        mounts=optional(_DISK_SPACE, _read_mounts),
+        remote_path_mappings=optional(_REMOTE_PATH_MAPPING, _read_remote_path_mappings),
+        download_clients=optional(_DOWNLOAD_CLIENT, _read_download_clients),
+    )

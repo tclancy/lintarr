@@ -13,6 +13,9 @@ from lintarr.collect.stack import collect_stack
 from lintarr.config import load_config
 from lintarr.outcomes import Outcome, exit_code
 from lintarr.run import declared_services, run_checks
+from tests.fixtures.homelab_paths import arr_bodies
+
+ARR_BODIES = arr_bodies()
 
 CLIENT_ENV = {
     "DOWNLOAD_CLIENT_KIND": "qbittorrent",
@@ -61,6 +64,8 @@ def _transport(*, arr_down: bool = False, app_name: str = "Sonarr") -> httpx.Moc
                 return httpx.Response(200, json={"version": "4.0.0", "appName": app_name})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=[])
+            case path if path in ARR_BODIES:
+                return httpx.Response(200, json=ARR_BODIES[path])
         return httpx.Response(404)
 
     return httpx.MockTransport(handle)

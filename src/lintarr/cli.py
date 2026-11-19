@@ -51,11 +51,18 @@ def _config_from_env() -> LintarrConfig:
         raise click.UsageError(str(exc)) from exc
 
 
+def _plain(value: Any) -> Any:
+    """A tuple of dataclasses as a list of dicts; anything else as it came."""
+    if isinstance(value, tuple) and value and all(dataclasses.is_dataclass(v) for v in value):
+        return [dataclasses.asdict(v) for v in value]
+    return value
+
+
 def _fact_to_dict(f: Known[Any] | Unknown) -> dict[str, Any]:
     if is_known(f):
         return {
             "known": True,
-            "value": f.value,
+            "value": _plain(f.value),
             "source": f.source,
             "read_at": f.read_at.isoformat(),
             # The version of the service the fact was read from. Emitted

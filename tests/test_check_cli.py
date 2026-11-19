@@ -5,6 +5,9 @@ import httpx
 from click.testing import CliRunner
 
 from lintarr.cli import cli
+from tests.fixtures.homelab_paths import arr_bodies
+
+ARR_BODIES = arr_bodies()
 
 _PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
@@ -67,6 +70,8 @@ def _transport(prefs, indexers=WEDGED_INDEXERS):
                 return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
                 return httpx.Response(200, json=indexers)
+            case path if path in ARR_BODIES:
+                return httpx.Response(200, json=ARR_BODIES[path])
         return httpx.Response(404)
 
     return httpx.MockTransport(handle)
