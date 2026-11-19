@@ -34,11 +34,17 @@ limit fires, does any configured setting remove their files?**
 1. FAIL `remove-keeps-files` when the action for the arr's category is Remove
    (keep files) and a limit can fire for that arr's torrents.
 2. FAIL `nothing-reclaims` when a limit can fire for that arr's torrents and
-   either the action is Stop and the arr's "Remove Completed" is off, or the
-   action is anything other than Stop, Remove or RemoveWithContent.
-3. PASS when every arr using the client has a configured path: the action is
-   RemoveWithContent, or the action is Stop and "Remove Completed" is on. Also
-   PASS when no limit can fire, because unlimited seeding is a deliberate
+   no configured setting removes the files. That covers three cases:
+   - the action is Stop and the arr won't remove the torrent: "Remove Completed"
+     is off, a post-import category hides it, or the limit that fires is one the
+     arr doesn't check;
+   - the action is anything other than Stop, Remove or RemoveWithContent.
+3. PASS when every arr using the client has a configured path:
+   - the action is RemoveWithContent; or
+   - the action is Stop, the arr removes completed downloads, and every limit
+     that can fire is one the arr recognises.
+
+   Also PASS when no limit can fire, because unlimited seeding is a deliberate
    choice and `queue-liveness` already owns its consequences.
 4. SKIP, never guess, when a needed input is unreadable.
 
@@ -88,6 +94,23 @@ Measured live on homelab, 2026-11-19:
 Homelab: Remove Completed is off, but the action is RemoveWithContent, so path
 1 covers both arrs. PASS.
 
+## How the arr removes a download (verified)
+
+Read from Sonarr `v5-develop` on 2026-11-19. Radarr shares the code shape.
+
+- `QBittorrent.GetItems`: `CanBeRemoved = RemoveCompletedDownloads && state is pausedUP or stoppedUP && HasReachedSeedLimit(torrent, prefs)`.
+- `HasReachedSeedLimit` and its seeding-time and inactive siblings read the
+  **torrent's own** limit when it is `>= 0`. When the torrent's limit is `-2`,
+  they read the **global** preference instead. They never read a category's
+  limits. So a torrent that qBittorrent stops at a *category* limit is never
+  removable by the arr.
+- `QBittorrentProxyV2.GetTorrents` lists only torrents in `tvCategory`. After
+  import, a post-import category (`tvImportedCategory`, `movieImportedCategory`)
+  re-labels the torrent, so the arr can no longer see it or remove it. From then
+  on, qBittorrent applies the *imported* category's action and limits.
+- Indexer seed criteria become the torrent's own limits when the arr adds it.
+  For season packs, `seasonPackSeedTime` sets the seeding-time limit.
+
 ## The check
 
 This is a **qBittorrent backend check**, not a shared one. Share-limit
@@ -97,102 +120,122 @@ terms. It lives beside `queue-liveness` in `clients/qbittorrent/`.
 For client `C` and each arr `A`, the arr download clients that are `C` are
 found with exactly `hardlink-futility`'s rule (kind, enabled, category present
 in `save_paths`, `""` for blank). That rule is moved to a public helper in
-`lintarr.checks` and reused, not copied. For each matching `(A, D)`, with
-category `k = D.category`:
+`lintarr.checks` and reused, not copied. For each matching `(A, D)`:
 
+0. **Settled category.** `k` is `D.imported_category` if it is a non-empty
+   string different from `D.category`, and `D.category` otherwise.
+   `arr_removes` is `D.remove_completed`, except that it is `False` when `k` is
+   the imported category: the arr no longer sees the torrent. In the
+   imported-category case, the limits that apply before import are ignored. The
+   seeding that matters is the seeding after import.
 1. **Effective action for `k`.** If category `k` exists and its
    `share_limit_action` is not `"Default"`, map `"Stop"` → 0, `"Remove"` → 1,
    `"EnableSuperSeeding"` → 2 and `"RemoveWithContent"` → 3. Otherwise use the
-   global `max_ratio_act`. An unknown string or wrong type is unknown. `k = ""`
-   (uncategorised) uses the global action. A category whose key is absent
-   (older qBittorrent) uses the global action, the same way `_own_share_limit`
-   treats absence as information.
-2. **Can a limit fire for `A`'s torrents in `k`?** True if *some* enabled
-   torrent indexer of `A` grabs torrents for which at least one arm can be
-   reached:
-   - **ratio arm:** the indexer's `seed_ratio` is a goal; or it defers (unset,
-     null or `-2`) and the category's own `ratio_limit` is reachable; or it
-     defers and the category inherits (`-2` or absent) and the global ratio is
-     reachable;
-   - **seeding-time arm:** the same, with `seed_time`, `seeding_time_limit` and
-     `max_seeding_time_enabled`;
-   - **inactive arm:** the category's own `inactive_seeding_time_limit` is
+   global `max_ratio_act`. That covers `k = ""`, a category not in the map, and
+   a missing key (older qBittorrent; absence is information, as in
+   `_own_share_limit`). An unknown string or a wrong type is unknown.
+2. **Decide from the action first.** Reachability is evaluated only when the
+   action could conflict:
+   - action 3 → **no conflict**, without reading reachability;
+   - action unknown → **unknown**;
+   - action 1 → conflict `remove-keeps-files` iff `can_fire`;
+   - action 0 with `arr_removes` true → conflict `nothing-reclaims` iff
+     `can_fire_unrecognised`. With `arr_removes` false → `nothing-reclaims` iff
+     `can_fire`. With `arr_removes` unknown → unknown if `can_fire` is not
+     False, else no conflict;
+   - any other action (2, -1, other) → `nothing-reclaims` iff `can_fire`.
+
+   Here `None` from `can_fire` or `can_fire_unrecognised` makes the pair
+   unknown.
+3. **`can_fire`:** *some* enabled torrent indexer of `A` grabs torrents for
+   which at least one arm in category `k` can be reached. The three arms are:
+   - **ratio:** the indexer's `seed_ratio` is a goal. Or it defers (unset, null
+     or `-2`) and the category's own `ratio_limit` is reachable. Or it defers,
+     the category inherits (`-2`/absent), and the global ratio is reachable.
+   - **seed time:** the same with `seed_time` (or, for sonarr, also
+     `season_pack_seed_time`), `seeding_time_limit` and
+     `max_seeding_time_enabled`.
+   - **inactive:** the category's own `inactive_seeding_time_limit` is
      reachable, or it inherits and `max_inactive_seeding_time_enabled` is true.
-     Sonarr sets no per-torrent inactive limit.
+     The arr sets no per-torrent inactive limit.
 
-   An indexer criterion that overrides (a negative value other than `-2`,
-   `inf`, `nan`) blocks its arm. This reuses `queue-liveness`'s
-   `_is_a_seed_goal`, `_overrides_the_share_limit`, `_can_be_reached`,
-   `_is_a_torrent_source`, `_no_global_ratio` and `_not_inactive_gate`
-   semantics by import. Nothing is re-derived.
+   An indexer criterion that overrides (a negative value other than `-2`, `inf`
+   or `nan`) blocks its arm. An arr with no enabled torrent indexer can't fire.
+   This reuses `queue-liveness`'s helpers by import.
+4. **`can_fire_unrecognised`:** like `can_fire`, but it counts only arms the arr
+   does **not** recognise. That is an arm reached through a category's own
+   limit. An indexer goal or an inherited global is recognised. Concretely: some
+   enabled torrent indexer has an arm that is reached through the category's
+   own `ratio_limit`, `seeding_time_limit` or `inactive_seeding_time_limit`.
 
-   An arr with no enabled torrent indexer has no route: no limit can fire for
-   it, and it gives no conflict.
-3. **Conflict for `(A, D)`**, given a limit can fire:
-   - action 1 → `remove-keeps-files`
-   - action 0 with `D.remove_completed` false → `nothing-reclaims`
-   - action not in {0, 1, 3} → `nothing-reclaims`
-   - action 3, or action 0 with `D.remove_completed` true → no conflict.
+**Aggregation** (one finding per client, built like `hardlink-futility`'s):
 
-   If no limit can fire, there is no conflict, whatever the action. If the
-   action is unknown, or (only when it is 0) `remove_completed` is unknown, or
-   reachability is unknown, the pair is unknown.
+- FAIL on the first conflict found, `remove-keeps-files` before
+  `nothing-reclaims`. SKIP if no pair conflicts and some pair is unknown.
+- Otherwise PASS, or N/A when no arrs were collected. With arrs present but none
+  using `C`, PASS with the shared `NO_ARR_SENDS_HERE` detail.
+- An arr that failed to collect turns PASS or N/A into SKIP through `run.py`.
+  The invariant is listed in the qBittorrent backend's new `arr_dependent`
+  mapping (see Model changes), not hard-coded in `run.py`.
 
-**Aggregation**, one finding per client and conflict, built like
-`hardlink-futility`'s:
+**Labels and wording:**
 
-- `check` returns one `Finding`. It FAILs on the first conflict, in the order
-  `remove-keeps-files` then `nothing-reclaims`, if any pair has it. Pairs with
-  unknown inputs give SKIP when no pair conflicts.
-- Otherwise it PASSes, or is N/A when no arrs were collected.
-- With arrs present but none using `C`, it PASSes with the detail
-  `hardlink-futility` uses.
-- An arr that failed to collect turns PASS or N/A into SKIP through
-  `run.py`'s existing `_resolve_failed_arr`, widened to this invariant.
+- **Premises:** one per conflict, `arr.limit_fires_and_files_stay` and
+  `arr.limit_fires_and_nothing_reclaims`.
+- **Details** name each pair. For example:
+  - `sonarr[tv] (category tv): a limit can fire; action is Remove, which keeps files`
+  - `… action is Stop and the arr's Remove Completed is off`
+  - `… action is Stop and the limit that fires is category tv's own, which the arr does not check`
+  - `… the arr re-labels imports to category tv-done, so it can no longer remove them`
+- **PASS details** say what decided it. For example:
+  - `sonarr[tv]: qBittorrent removes files at the limit`
+  - `sonarr[tv]: qBittorrent stops at the limit and the arr removes completed downloads`
+  - `radarr[movies]: no limit can fire; seeding is unlimited`
 
-Labels and wording:
-
-- One premise per conflict: `arr.limit_fires_and_files_stay` for
-  `remove-keeps-files`, and `arr.limit_fires_and_nothing_reclaims` for
-  `nothing-reclaims`.
-- Detail lines name each pair, for example
-  `sonarr[tv] (category tv): limit can fire; action is Remove, which keeps files`,
-  or `… action is Stop and the arr's Remove Completed is off`.
-- PASS details say what decided it, for example
-  `sonarr[tv]: qBittorrent removes files at the limit`,
-  `radarr[movies]: no limit can fire; seeding is unlimited`.
-
-**Therefore** (in the qBittorrent `THEREFORE` table):
+**Therefore** (qBittorrent `THEREFORE` table):
 
 - `remove-keeps-files`: "when a seed limit is reached, qBittorrent drops the
   torrent but leaves its files, and nothing else knows they exist. They stay
   until someone deletes them by hand. Set the share-limit action to 'Remove
   torrent and its files', or use Stop and turn on the arr's Remove Completed."
 - `nothing-reclaims`: "torrents reach their seed limit and then keep their files
-  forever: qBittorrent stops or super-seeds them, and the arr isn't set to
-  remove completed downloads. Turn on Remove Completed in the arr's download
-  client with the Stop action, or use 'Remove torrent and its files'."
+  forever. qBittorrent stops or super-seeds them, and the arr either isn't set
+  to remove completed downloads, can't see them after a post-import category,
+  or doesn't recognise the limit that stopped them. Use 'Remove torrent and its
+  files', or the Stop action with Remove Completed on, global or indexer seed
+  limits, and no post-import category."
+
+## Known limits
+
+- **Indexer pinning.** An indexer's `downloadClientId` can pin it to another
+  client. Every indexer of the arr is counted for every client.
+- **Parent categories.** qBittorrent falls back to a parent category's limits.
+  This check reads a flat map.
+- **Older arr builds** don't recognise qBittorrent 5's `stoppedUP` state, so the
+  Stop path never reclaims there. That isn't modelled.
+- **Stacks relying on Cleanuparr** with a keep-files action FAIL honestly, until
+  suppression (P1) exists.
 
 ## Model changes
 
-- `ArrDownloadClient` gains `remove_completed: bool | None`, read from the
-  top-level `removeCompletedDownloads`. Absent gives `None`; a non-bool is
-  `bad-response`.
-- No new qBittorrent prefs. Every pref used is already collected.
-  `categories` carries `share_limit_action` and the inactive limit.
+- `ArrDownloadClient` gains two fields:
+  - `remove_completed: bool | None`, from the top-level `removeCompletedDownloads`. Absent, null or non-bool reads as `None`, never `bad-response`, so a junk value can't ERROR the whole arr.
+  - `imported_category: str`, from the `tvImportedCategory` or `movieImportedCategory` field. Absent, null or empty reads as `""`, and a non-string reads as `""` too. The value is only consulted when non-empty, so the default is harmless.
+- `Backend` gains `arr_dependent: Mapping[str, str]`, mapping invariant id to the premise used for the failed-arr SKIP. It defaults to empty. `lintarr.checks` gains `SHARED_ARR_DEPENDENT` (hardlink-futility's entry). `run._resolve_failed_arr` reads both instead of naming `hardlink_futility`. Its existing hardlink output stays byte-identical.
+- No new qBittorrent prefs.
 
 ## Axioms
 
 | Axiom | Status |
 |---|---|
-| `ShareLimitAction` values and `Default` matching no branch | measured from source (existing, `queue_liveness._RELEASING_ACTIONS`) |
-| Category `share_limit_action` strings and the `Default` redirect to the global | assumed from qBittorrent 5.x source (`effectiveShareLimitAction`) |
-| The arr removes a torrent (with data) only once qBittorrent reports it stopped at a seed limit | assumed from Sonarr/Radarr source (`QBittorrent.CanBeRemoved`) |
-| Remove (1) deletes the torrent and keeps its files | qBittorrent UI semantics; not conformance-tested |
+| `ShareLimitAction` values; `Default` matches no branch | measured from source (existing `_RELEASING_ACTIONS`) |
+| Category `share_limit_action` strings and the `Default` redirect to the global | assumed from qBittorrent 5.x source |
+| The arr removes a torrent only when it is stopped and has reached a torrent-level or global limit, never a category limit | read from Sonarr source, 2026-11-19 |
+| A post-import category hides the torrent from the arr | read from Sonarr source, 2026-11-19 |
+| Remove (1) deletes the torrent and keeps its files | qBittorrent semantics; not conformance-tested |
 
-No new conformance test in this slice. The share-limit *action* behaviour can
-be measured with the existing container harness later, and it is noted as the
-follow-up.
+No new conformance test in this slice. Container-testing the share-limit
+actions is the follow-up.
 
 ## Deploy impact
 

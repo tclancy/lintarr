@@ -2,59 +2,69 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a qBittorrent backend check that FAILs when a seed limit can fire for an arr's torrents but no configured setting removes their files.
+**Goal:** Add a qBittorrent backend check. It FAILs when a seed limit can fire for an arr's torrents but no configured setting removes their files.
 
-**Architecture:** The arr download-client fact gains `remove_completed`. `hardlink-futility`'s arr-to-client matching becomes a public helper in `lintarr.checks`. A new `clients/qbittorrent/share_limits.py` answers two questions per category: what is the effective action, and can a limit fire? It reuses `queue_liveness`'s helpers. The check lives in `clients/qbittorrent/orphan_inevitability.py`, is registered in the qBittorrent `Backend.checks`, and its two Therefore lines go in `THEREFORE`.
+**Architecture:**
+- The arr download-client fact gains `remove_completed` and `imported_category`.
+- `hardlink-futility`'s arr-to-client matching becomes a public helper in `lintarr.checks`.
+- `Backend` gains `arr_dependent`, so `run.py` stops naming checks.
+- A new `clients/qbittorrent/share_limits.py` answers, per category: the effective action, whether some limit can fire, and whether some limit the arr doesn't recognise can fire. It reuses `queue_liveness`'s helpers.
+- The check lives in `clients/qbittorrent/orphan_inevitability.py`.
 
 **Tech Stack:** Python 3.13, uv, pytest, Hypothesis.
 
-**Spec:** `docs/superpowers/specs/2026-11-19-orphan-inevitability-design.md`. Its "The check" section is the binding predicate.
+**Spec:** `docs/superpowers/specs/2026-11-19-orphan-inevitability-design.md`. Its sections "How the arr removes a download" and "The check" are the binding predicate.
 
 ## Global Constraints
 
-- Facts are `Known` or `Unknown`, never defaulted. An unreadable input the decision needs gives SKIP, never PASS.
-- Invariant id `orphan-inevitability`; conflicts `remove-keeps-files` and `nothing-reclaims`; premises `arr.limit_fires_and_files_stay` and `arr.limit_fires_and_nothing_reclaims`; instance `qbittorrent[<name>]`.
-- `queue-liveness` and `hardlink-futility` findings, details, edge keys and Therefore text stay byte-identical. Their existing tests are the gate. Never edit their expected strings.
-- No new `GET`s except reading one more top-level key from the existing `/api/v3/downloadclient` body.
-- Never weaken an existing assertion. Filter it to the invariant it was written about, add a separate assertion for the new finding, and name each such test in the report.
+- Facts are `Known` or `Unknown`, never defaulted. An unreadable input the decision needs gives SKIP, never PASS. An input the decision doesn't need (reachability under action 3) must never cause a SKIP.
+- **Names:**
+  - invariant `orphan-inevitability`;
+  - conflicts `remove-keeps-files` and `nothing-reclaims`;
+  - premises `arr.limit_fires_and_files_stay` and `arr.limit_fires_and_nothing_reclaims`;
+  - instance `qbittorrent[<name>]`.
+- `queue-liveness` and `hardlink-futility` findings, details, edge keys and Therefore text stay byte-identical. Never edit their expected strings.
+- No new `GET`s. Read only more keys from the existing `/api/v3/downloadclient` body.
+- Never weaken an existing assertion. Filter it to its invariant, add a separate assertion for the new finding, and name each such test in the report. Don't change qBittorrent pref values in `tests/test_check_cli.py`'s `WEDGED_PREFS` or other base prefs. To keep those tests' exit codes, serve `"removeCompletedDownloads": true` from their arr transports.
+- `tests/fixtures/homelab.py` is homelab#393 incident evidence and must not change.
 - Fast suite: `uv run pytest -q`. No `--no-verify`. Revert stray `ruff format` edits to docs you didn't change.
 
 ## Review Focus
 
-1. **Homelab must PASS.** Global action 3, ratio 1.5 on, seeding time 20160 on, categories `"Default"` and `-2`, indexers with no seed criteria, `remove_completed` false. `homelab_paths.py` gains these values, and Task 3's PASS test uses them. Task 4 verifies live in strict mode.
-2. **Unlimited seeding must PASS, not SKIP:** global limits off, categories inherit, indexers defer.
-3. **An indexer override blocks only its own arm.** Ratio `-1` beside a seed-time goal is still reachable.
-4. **A category `share_limit_action` beats the global action.** For example, global 3 with category `"Remove"` FAILs.
-5. **Unknown `remove_completed` only matters when the action is Stop.** With action 3 it must not SKIP.
+1. **Homelab must PASS on RemoveWithContent, not by accident.** The values are: global action 3; ratio 1.5 on; seeding time 20160 on; categories `share_limit_action: "Default"` with every limit `-2`; one torrent indexer with no seed criteria; `remove_completed` false; no imported category. Task 3's homelab test uses an explicit torrent indexer and asserts the RemoveWithContent detail. Task 4 verifies live in strict mode.
+2. **Unlimited seeding must PASS, not SKIP.**
+3. **Stop plus Remove Completed with a firing category-own limit must FAIL** `nothing-reclaims`. The arr never checks category limits.
+4. **A post-import category means the arr can't remove the torrent.** Action and limits come from the imported category.
+5. **Action 3 never reads reachability.** Junk seed criteria under action 3 still PASS.
 
 ---
 
-### Task 1: `remove_completed` fact and a public arr-client matcher
+### Task 1: Arr facts, a public matcher, `Backend.arr_dependent`
 
 **Files:**
-- Modify: `src/lintarr/models.py` (`ArrDownloadClient.remove_completed: bool | None`, the last field)
-- Modify: `src/lintarr/collect/arr.py` (read top-level `removeCompletedDownloads`: absent → `None`, non-bool → `bad-response`, `null` → `None`)
-- Create: `src/lintarr/checks/arr_clients.py`. Move `hardlink_futility`'s `_tuple_of`, `_is_this_client`, `_is_well_formed`, `_clients_that_are_this`, `_arr_label`, `_save_paths` and `NO_ARR_SENDS_HERE` here as public names (no leading underscore). `hardlink_futility` imports them. Behaviour and strings unchanged.
-- Modify: every `ArrDownloadClient(...)` site in `src/` and `tests/`; `tests/fixtures/homelab_paths.py` (raw body `"removeCompletedDownloads": false` and the built fixture); `tests/strategies.py`
-- Test: extend `tests/collect/test_arr_paths.py`; create `tests/checks/test_arr_clients.py`
+- Modify: `src/lintarr/models.py`. `ArrDownloadClient` gains `remove_completed: bool | None` and `imported_category: str`, appended in that order.
+- Modify: `src/lintarr/collect/arr.py`.
+  - `removeCompletedDownloads` is top-level: a bool is read as is; absent, null or anything else gives `None`. Never `bad-response`.
+  - `tvImportedCategory` or `movieImportedCategory` is a `fields` entry: a non-empty str is read as is; anything else gives `""`.
+- Create: `src/lintarr/checks/arr_clients.py`. Move `hardlink_futility`'s `_tuple_of`, `_save_paths`, `_arr_label`, `_is_well_formed`, `_is_this_client`, `_clients_that_are_this` and `NO_ARR_SENDS_HERE` here as public names: `tuple_of`, `save_paths_of`, `arr_label`, `is_well_formed`, `is_this_client`, `clients_that_are`, `NO_ARR_SENDS_HERE`. `hardlink_futility` imports them. Its behaviour and strings don't change.
+- Modify: `src/lintarr/clients/base.py`. Add `Backend.arr_dependent: Mapping[str, str] = field(default_factory=dict)`, documented as invariant id → the premise label for the failed-arr SKIP. Check that `Backend` is a frozen dataclass and that the default keeps every existing construction valid.
+- Modify: `src/lintarr/checks/__init__.py`. Add `SHARED_ARR_DEPENDENT = {hardlink_futility.INVARIANT_ID: hardlink_futility.PREMISE}`.
+- Modify: `src/lintarr/run.py`. `_resolve_failed_arr` applies when `finding.invariant` is in the merged mapping, `BACKENDS[...].arr_dependent | checks.SHARED_ARR_DEPENDENT`. Its SKIP premise is the mapped label. Its detail is unchanged for hardlink-futility. For any other invariant it reads "an arr could not be read, so its downloads could not be checked". Remove the `hardlink_futility` import from `run.py`.
+- Modify:
+  - every `ArrDownloadClient(...)` site;
+  - `tests/fixtures/homelab_paths.py`: add `removeCompletedDownloads: false` to the raw bodies, and give `QBT_CATEGORIES` the full measured category bodies, each with `share_limit_action: "Default"`, `ratio_limit: -2`, `seeding_time_limit: -2`, `inactive_seeding_time_limit: -2` and `download_path: None`;
+  - `tests/strategies.py`.
+- Test: extend `tests/collect/test_arr_paths.py`; create `tests/checks/test_arr_clients.py`; extend `tests/test_run.py` (a fake backend's `arr_dependent` entry gets the failed-arr SKIP).
 
-**Interfaces (produced):**
-- `lintarr.checks.arr_clients`:
-  - `tuple_of[T](fact, kind) -> tuple[T, ...] | None`
-  - `save_paths_of(instance) -> Mapping[str, object] | None` (renamed from `_save_paths`)
-  - `arr_label(arr) -> str`
-  - `is_well_formed(d) -> bool`; `is_well_formed` also requires `remove_completed` to be `bool | None`
-  - `clients_that_are(arr, instance, save_paths) -> tuple[ArrDownloadClient, ...] | str`
-  - `NO_ARR_SENDS_HERE`
-
-- [ ] **Step 1:** Write failing tests:
-  - `test_reads_remove_completed`: `true`, `false`, absent → `None`, `null` → `None`.
-  - Add `removeCompletedDownloads` = `"yes"` to the bad-response cases.
-  - `test_arr_clients` covers `clients_that_are`: match, other kind, disabled, missing category, malformed, and unreadable list.
+- [ ] **Step 1:** Write failing tests.
+  - `test_reads_remove_completed`: true, false, absent, null and `"yes"`. The last three give `None`.
+  - `test_reads_imported_category`: set, absent, empty and non-string.
+  - `clients_that_are` cases: match, other kind, disabled, missing category, malformed, and an unreadable list.
+  - The `arr_dependent` run test.
 - [ ] **Step 2:** Run the tests and see them fail.
-- [ ] **Step 3:** Implement. Move the helpers verbatim, then rename.
-- [ ] **Step 4:** Run `uv run pytest -q`. All pass, and the `hardlink-futility` tests are untouched.
-- [ ] **Step 5:** Commit `feat(arr): read removeCompletedDownloads; share the arr-client matcher`
+- [ ] **Step 3:** Implement. Move the helpers verbatim before renaming them.
+- [ ] **Step 4:** Run `uv run pytest -q`. All pass.
+- [ ] **Step 5:** Commit `feat: arr remove/imported-category facts, shared arr-client matcher, Backend.arr_dependent`.
 
 ### Task 2: qBittorrent share-limit questions
 
@@ -63,88 +73,112 @@
 - Test: `tests/clients/test_qbittorrent_share_limits.py`
 
 **Interfaces:**
-- Consumes these, imported from `queue_liveness`: `_as_limit`, `_truth`, `_is_a_seed_goal`, `_is_an_unusable_seed_criterion`, `_is_a_readable_seed_criterion`, `_can_be_reached`, `_no_global_ratio`, `_not_inactive_gate`, `_is_a_torrent_source`, `_any_of`, `_all_of`, `USE_GLOBAL`, `UNLIMITED`. Don't move them, so `queue-liveness` stays byte-identical.
-- Produces:
-  - `ACTION_BY_NAME = {"Stop": 0, "Remove": 1, "EnableSuperSeeding": 2, "RemoveWithContent": 3}`
-  - `effective_action(qbt: QbtInstance, category: str) -> int | None` follows spec step 1. `""`, a category not in the map, a category missing the key, or `"Default"` → global `max_ratio_act` via `_as_limit`. An unknown string, a non-string, unreadable categories or a non-dict entry → `None`.
-  - `limit_can_fire(qbt: QbtInstance, arr: ArrInstance, category: str) -> bool | None` follows spec step 2. It's an existential over the arr's indexers, using `_any_of` over each indexer's `_all_of((_is_a_torrent_source(i), arm_reachable))`. `arm_reachable` is `_any_of` over the ratio, seed-time and inactive arms. Inside an arm:
-    - an indexer criterion that is a goal → `True`;
-    - one that overrides (readable, not `-2`, not reachable) → `False`;
-    - an unusable criterion → `None`;
-    - one that defers → the category's own limit (`True` if reachable, `False` if `-1` or another non-`-2` unreachable value, `None` if unreadable), or, if the category inherits or the key is absent, the global.
-    - The global ratio is `not _no_global_ratio(qbt)`, keeping `None` as `None`. Global seed time is `_truth(max_seeding_time_enabled)`. The inactive arm takes the category's `inactive_seeding_time_limit` own value, or, when inheriting, `not _not_inactive_gate(qbt)`.
-    - An arr with no indexers → `False`.
+- **Consumes, imported from `queue_liveness` and not moved:** `_as_limit`, `_truth`, `_is_a_seed_goal`, `_is_an_unusable_seed_criterion`, `_is_a_readable_seed_criterion`, `_can_be_reached`, `_no_global_ratio`, `_not_inactive_gate`, `_is_a_torrent_source`, `_any_of`, `_all_of`, `USE_GLOBAL` and `UNLIMITED`. If a name or semantics differs from this list, report it rather than guess.
+- **Produces:**
+  - `ACTION_BY_NAME = {"Stop": 0, "Remove": 1, "EnableSuperSeeding": 2, "RemoveWithContent": 3}`.
+  - `effective_action(qbt, category: str) -> int | None`, as spec step 1.
+  - `can_fire(qbt, arr, category: str) -> bool | None`, as spec step 3.
+  - `can_fire_unrecognised(qbt, arr, category: str) -> bool | None`, as spec step 4.
+  - Both reachability functions are an existential over the arr's indexers: `_any_of(_all_of((_is_a_torrent_source(i), arms(i))) for i in arr.indexers)`. An arr with no indexers gives `False`.
+  - Each arm is a small function returning `bool | None`.
+- **Per-arm rule for an indexer criterion:**
+  - a goal → reachable, and recognised;
+  - overriding (readable, not a goal, not `-2`) → `False`;
+  - unusable → `None`;
+  - deferring (absent, null or `-2`) → go to the category's own limit:
+    - reachable → `True`, unrecognised;
+    - `-1` or another non-`-2` unreachable value → `False`;
+    - unreadable → `None`;
+    - `-2` or key absent → go to the global, reachable means recognised.
+- **Global readings:**
+  - ratio: `not _no_global_ratio(qbt)`, with `None` kept as `None`;
+  - seed time: `_truth(qbt.max_seeding_time_enabled)`;
+  - inactive: `not _not_inactive_gate(qbt)`.
+- **Inactive arm:** there is no indexer criterion, so start at the category's `inactive_seeding_time_limit`.
+- **Seed-time goal:** for `arr.kind == "sonarr"`, `season_pack_seed_time` being a goal also counts as one.
 
-- [ ] **Step 1:** Write failing tests. For `effective_action`:
-  - `test_default_category_uses_global_action`
-  - `test_category_action_overrides_global` (one case per name)
-  - `test_uncategorised_and_unknown_category_use_global`
-  - `test_unknown_action_string_is_none`
-  - `test_unreadable_categories_is_none`
-
-  For `limit_can_fire`:
-  - `test_homelab_limits_can_fire`
-  - `test_unlimited_seeding_cannot_fire` (globals off, categories `-2`, indexers unset)
-  - `test_indexer_goal_fires_even_with_globals_off`
-  - `test_indexer_override_blocks_only_its_arm`
-  - `test_category_own_limit_fires`
-  - `test_category_minus_one_blocks_the_global`
-  - `test_inactive_gate_fires`
-  - `test_usenet_only_arr_cannot_fire`
-  - `test_unusable_criterion_is_unknown_when_it_decides`
-  - `test_no_indexers_cannot_fire`
+- [ ] **Step 1:** Write failing tests.
+  - `effective_action`:
+    - Default → global;
+    - each name overrides;
+    - `""`, an unknown category and a missing key → global;
+    - an unknown string → `None`;
+    - unreadable categories → `None`.
+  - `can_fire`:
+    - homelab (one torrent indexer with no criteria) → True;
+    - unlimited seeding → False;
+    - an indexer goal with globals off → True;
+    - an override blocks only its own arm;
+    - a category's own limit → True;
+    - category `-1` blocks the global;
+    - the inactive gate → True;
+    - a usenet-only arr → False;
+    - no indexers → False;
+    - an unusable criterion that decides → None;
+    - a sonarr season-pack goal → True.
+  - `can_fire_unrecognised`:
+    - homelab → False (the global is recognised);
+    - category ratio 2 with globals off → True;
+    - an indexer goal only → False;
+    - category `-2` inheriting a reachable global → False.
 - [ ] **Step 2:** Run the tests and see them fail.
-- [ ] **Step 3:** Implement with small functions, one per arm.
+- [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run `uv run pytest -q`.
-- [ ] **Step 5:** Commit `feat(qbittorrent): effective share-limit action and limit reachability per category`
+- [ ] **Step 5:** Commit `feat(qbittorrent): share-limit action and reachability per category`.
 
 ### Task 3: The `orphan-inevitability` check
 
 **Files:**
-- Create: `src/lintarr/clients/qbittorrent/orphan_inevitability.py`
-- Modify: `src/lintarr/clients/qbittorrent/__init__.py` (append to `checks`, after `queue_liveness`)
-- Modify: `src/lintarr/clients/qbittorrent/therefore.py` (two entries, spec text verbatim)
-- Modify: `src/lintarr/run.py`. `_resolve_failed_arr` applies to an invariant in a set `{hardlink_futility.INVARIANT_ID, orphan_inevitability.INVARIANT_ID}`. The SKIP premise is the finding's own invariant's premise: for orphan, use `arr.limit_fires_and_nothing_reclaims`. The detail says "an arr could not be read, so its downloads could not be checked" for orphan. The hardlink detail is unchanged byte for byte.
-- Modify, without weakening: any exact-finding-list or exit-code test the full suite turns red, such as `test_fake_backend` and `test_check_cli`. Mock transports that serve qBittorrent prefs must yield homelab-like values that PASS.
-- Test: `tests/clients/test_orphan_inevitability.py`, `tests/clients/test_orphan_inevitability_properties.py`; extend `tests/test_render_human.py`
-
-**Interfaces:**
-- Produces:
-  - `INVARIANT_ID`, `REMOVE_KEEPS_FILES`, `NOTHING_RECLAIMS`, `PREMISE_FILES_STAY`, `PREMISE_NOTHING_RECLAIMS`
-  - `check(qbt_instance: ClientInstance, arrs) -> Finding`. It is registered as `lambda inst, arrs: orphan_inevitability.check(inst, arrs)`, because it needs `inst.common.save_paths` *and* `inst.specific`.
+- Create: `src/lintarr/clients/qbittorrent/orphan_inevitability.py`.
+- Modify: `src/lintarr/clients/qbittorrent/__init__.py`.
+  - Append `orphan_inevitability.check` to `checks`, after the queue-liveness entry. Pass the function itself: it takes `(ClientInstance, arrs)` and reads `inst.common` and `inst.specific`.
+  - Set `arr_dependent={orphan_inevitability.INVARIANT_ID: orphan_inevitability.PREMISE_NOTHING_RECLAIMS}`.
+- Modify: `src/lintarr/clients/qbittorrent/therefore.py`. Add two entries, with the spec's text verbatim.
+- Modify, without weakening, whichever exact-list or exit-code tests the suite turns red (expect `test_fake_backend`, `test_check_cli`, `test_cli`). Fix them through the arr transports serving `removeCompletedDownloads: true`, plus filtering by invariant.
+- Modify: `tests/strategies.py`.
+  - Make `CATEGORY` draw `share_limit_action` (valid names, `"Default"`, junk or absent) and `inactive_seeding_time_limit`.
+  - Draw category-map keys from `{"tv", "movies"}` plus text.
+  - Make `ARR_DOWNLOAD_CLIENTS` draw `remove_completed` and `imported_category`.
+  - Update `test_the_strategies_still_generate_every_category_map_shape_they_claim` accordingly.
+- Test: create `tests/clients/test_orphan_inevitability.py` and `tests/clients/test_orphan_inevitability_properties.py`; extend `tests/test_render_human.py`.
 
 - [ ] **Step 1:** Write failing tests:
-  - `test_homelab_passes`
-  - `test_remove_action_fails_remove_keeps_files`: global 1, limits on.
+  - `test_homelab_passes_because_qbittorrent_removes_files`. Use an explicit torrent indexer and assert the detail. Its twin, action 1, FAILs `remove-keeps-files`.
   - `test_stop_without_arr_removal_fails_nothing_reclaims`
-  - `test_stop_with_arr_removal_passes`
+  - `test_stop_with_arr_removal_and_global_limits_passes`
+  - `test_stop_with_arr_removal_but_category_own_limit_fails`
+  - `test_imported_category_means_the_arr_cannot_remove`. Its action comes from the imported category.
   - `test_super_seeding_fails_nothing_reclaims`
   - `test_default_action_minus_one_fails_nothing_reclaims`
   - `test_category_remove_beats_global_remove_with_content`
+  - `test_action_three_never_reads_reachability`. Junk criteria still give PASS.
   - `test_unlimited_seeding_passes_with_detail`
-  - `test_remove_keeps_files_wins_over_nothing_reclaims_when_both_present` (two arrs, different categories)
+  - `test_remove_keeps_files_wins_over_nothing_reclaims` (two arrs)
   - `test_unknown_remove_completed_skips_only_for_stop`
   - `test_unknown_action_skips`
   - `test_unknown_in_one_arr_does_not_hide_a_fail_in_another`
   - `test_no_arrs_is_not_applicable`
   - `test_arrs_using_another_client_pass_with_detail`
-  - `test_failed_arr_turns_pass_into_skip` (via `run_checks`)
+  - `test_failed_arr_turns_pass_into_skip`, via `run_checks`
   - `test_render_shows_each_therefore_line`
-  - Properties: never raises; every FAIL carries exactly its one holding premise; never PASS when the action is unknown and a limit can fire for a matched arr.
-  - Mutation twin in the Remove test: flip only the action to 3 and get PASS.
+  - **Properties:**
+    - the check never raises;
+    - every FAIL carries exactly its one premise, and that premise holds;
+    - it never PASSes when, for a matched arr, the effective action is unknown;
+    - a hand-built control proves the strategy reaches a matched category whose action is not Default.
 - [ ] **Step 2:** Run the tests and see them fail.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** Run `uv run pytest -q`.
-- [ ] **Step 5:** Run a mutation round and record the results:
+- [ ] **Step 5:** Mutation round. Record the results; all must go red:
   1. Treat action 1 as reclaiming.
   2. Ignore `remove_completed`.
   3. Drop the "no limit can fire → no conflict" rule.
   4. Ignore the category action.
-
-  All four must go red.
-- [ ] **Step 6:** Commit `feat(qbittorrent): orphan-inevitability`
+  5. Treat a category-own arm as recognised.
+  6. Ignore `imported_category`.
+- [ ] **Step 6:** Commit `feat(qbittorrent): orphan-inevitability`.
 
 ### Task 4: Live verification and docs (controller)
 
-- [ ] On homelab, from a throwaway checkout at the branch head, with the deployed env: strict `check --json` exits 0 and `orphan-inevitability` passes. Remove the checkout.
-- [ ] Update `CONTINUATION.md`: this slice; next is `seed-goal-conflict`; follow-up to conformance-test share-limit actions. Commit `docs(continuation): orphan-inevitability slice`.
+- [ ] **Live check on homelab.** From a throwaway checkout at the head, run strict `check --json` with the deployed env. It must exit 0 with `orphan-inevitability` PASS and the detail "qBittorrent removes files at the limit" for both arrs. Remove the checkout afterwards.
+- [ ] **`CONTINUATION.md`.** Record this slice, the next slice (`seed-goal-conflict`), and the follow-up to conformance-test the share-limit actions. Commit.
