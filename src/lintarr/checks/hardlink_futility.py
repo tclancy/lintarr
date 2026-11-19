@@ -11,6 +11,25 @@ two collected clients of one kind that both define ``D``'s category both claim
 ``D``. That over-reports, and gives a false FAIL when the configured client
 shares a category name with an unconfigured one the arr really uses.
 
+Axioms (spec "Axioms"), each with its status:
+
+- ``link(2)`` across two mount points fails with ``EXDEV``, even when both are
+  bind mounts of one filesystem. Conformance-tested:
+  ``test_link_across_two_bind_mounts_is_exdev``.
+- Within one mount point on ext4/xfs, ``link(2)`` succeeds. Conformance-tested:
+  ``test_link_within_one_bind_mount_succeeds``.
+- Within one mount point, ``link(2)`` succeeds on mergerfs/btrfs subvolumes.
+  Assumed false-negative risk: a documented limitation.
+- Arr ``diskspace`` lists every mount a download path can lie on. Assumed (the
+  arr omits some fs types, e.g. network mounts, so a download on an unlisted
+  mount nested inside a listed one reads as the parent mount).
+- qBittorrent's empty/relative category ``savePath`` resolution. Assumed from
+  source.
+- Sonarr/Radarr apply the first matching remote path mapping in API order.
+  Assumed from source (``RemotePathMappingService``).
+
+Both tests live in ``tests/conformance/test_hardlink_exdev.py``.
+
 The "an arr failed to collect" SKIP lives in ``run.py`` (``_resolve_failed_arr``):
 this check sees no collection errors.
 """

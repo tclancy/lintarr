@@ -42,6 +42,8 @@ jobs:
     # window, so it costs ~1.5 min, not 2.1: that case is cheaper, not dearer.
     # Only the old 27 min stalled-night case above, plus a stalled new suite,
     # can pass 35 min; the step timeout then fails the step and pages as before.
+    # Hardlink EXDEV pair (tests/conformance/test_hardlink_exdev.py): 2 tests, 1.65 s measured
+    # locally (alpine:3.20, no services); negligible against the budget.
     # A job-level timeout CANCELS the job, and failure() is false for a
     # cancelled job, so the pytest step carries its own 35 min timeout: that
     # fails the step, which turns any overrun into a harness-error page. The
