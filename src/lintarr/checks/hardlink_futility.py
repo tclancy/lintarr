@@ -1,0 +1,265 @@
+"""``hardlink-futility``: an arr imports by hardlink across two mounts.
+
+For one client ``C``, every collected arr ``A``, every enabled arr download
+client ``D`` that is ``C``, and every accessible root folder ``R`` of ``A``,
+the triple ``(A, D, R)`` conflicts when ``C``'s save path for ``D``, translated
+into ``A``'s namespace, and ``R`` sit on different mounts (neither ``/``) and
+``A`` has hardlinks on. See the spec's "The check" for every rule.
+
+Known limitation (spec step 1): a check sees one client, not its siblings, so
+two collected clients of one kind that both define ``D``'s category both claim
+``D``. That over-reports, and gives a false FAIL when the configured client
+shares a category name with an unconfigured one the arr really uses.
+
+The "an arr failed to collect" SKIP lives in ``run.py`` (``_resolve_failed_arr``):
+this check sees no collection errors.
+"""
+
+from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass, replace
+from pathlib import PurePosixPath
+
+from lintarr.checks.paths import mount_of, posix_abs, translate
+from lintarr.facts import Fact, is_known
+from lintarr.invariants.combinator import conflict_if, premise
+from lintarr.models import (
+    ArrDownloadClient,
+    ArrInstance,
+    ClientInstance,
+    RemotePathMapping,
+    RootFolder,
+)
+from lintarr.outcomes import Finding, Outcome
+
+INVARIANT_ID = "hardlink-futility"
+CROSS_MOUNT = "cross-mount"
+PREMISE = "arr.hardlink_import_crosses_a_mount"
+
+_ROOT = PurePosixPath("/")
+NO_ARR_SENDS_HERE = "no collected arr sends downloads to this client"
+
+
+@dataclass(frozen=True, slots=True)
+class Verdict:
+    """One triple's (or one arr's) answer: True conflict, False none, None unknown."""
+
+    state: bool | None
+    fragment: str = ""
+
+
+def _tuple_of[T](fact: Fact[object], kind: type[T]) -> tuple[T, ...] | None:
+    """*fact*'s value when it is a readable tuple of *kind*, else ``None``."""
+    if not is_known(fact) or not isinstance(fact.value, tuple):
+        return None
+    if not all(isinstance(item, kind) for item in fact.value):
+        return None
+    return fact.value
+
+
+def _save_paths(instance: ClientInstance) -> Mapping[str, object] | None:
+    fact = instance.common.save_paths
+    if not is_known(fact) or not isinstance(fact.value, Mapping):
+        return None
+    return fact.value
+
+
+def _hardlinks(arr: ArrInstance) -> bool | None:
+    fact = arr.copy_using_hardlinks
+    return fact.value if is_known(fact) and isinstance(fact.value, bool) else None
+
+
+def _arr_label(arr: ArrInstance) -> str:
+    return f"{arr.kind}[{arr.name}]"
+
+
+def _is_this_client(
+    d: ArrDownloadClient, instance: ClientInstance, save_paths: Mapping[str, object] | None
+) -> bool:
+    """Spec step 1. With ``save_paths`` unread, any enabled ``D`` of this kind may be ``C``."""
+    if d.enabled is not True or not isinstance(d.implementation, str):
+        return False
+    if d.implementation.lower() != instance.kind:
+        return False
+    return save_paths is None or d.category in save_paths
+
+
+def _clients_that_are_this(
+    arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
+) -> tuple[ArrDownloadClient, ...] | None:
+    clients = _tuple_of(arr.download_clients, ArrDownloadClient)
+    if clients is None:
+        return None
+    return tuple(d for d in clients if _is_this_client(d, instance, save_paths))
+
+
+def _mount_or_reason(path: PurePosixPath, mounts: tuple[str, ...]) -> PurePosixPath | str:
+    mount = mount_of(path, mounts)
+    return mount if mount is not None else f"the arr reports no mount containing {path}"
+
+
+def _one_side_on_root(
+    label: str, download: PurePosixPath, dm: PurePosixPath, root: PurePosixPath
+) -> Verdict:
+    """Spec: exactly one side only on ``/`` is unknown, and the detail says which."""
+    if dm == _ROOT:
+        reason = f"no mount for {download} other than /, so it cannot see the download"
+    else:
+        reason = f"no mount for root folder {root} other than /, so the library is not on a volume"
+    return Verdict(None, f"{label}: the arr reports {reason}")
+
+
+def _triple(
+    label: str,
+    hardlinks: bool | None,
+    download: PurePosixPath,
+    root: PurePosixPath,
+    mounts: tuple[str, ...],
+) -> Verdict:
+    """Spec step 5 for one ``(A, D, R)`` whose paths are already in ``A``'s namespace."""
+    dm, rm = _mount_or_reason(download, mounts), _mount_or_reason(root, mounts)
+    for side in (dm, rm):
+        if isinstance(side, str):
+            return Verdict(None, f"{label}: {side}")
+    if dm == rm:
+        return Verdict(False)
+    if _ROOT in (dm, rm):
+        return _one_side_on_root(label, download, dm, root)
+    if hardlinks is None:
+        return Verdict(None, f"{label}: its hardlink setting could not be read")
+    conflict = (
+        f"{label}: downloads in {download} are on mount {dm}, root folder {root} is on mount {rm}"
+    )
+    return Verdict(True, conflict)
+
+
+@dataclass(frozen=True, slots=True)
+class _ArrView:
+    """The facts an involved arr must supply, each already read and type-checked."""
+
+    label: str
+    hardlinks: bool | None
+    roots: tuple[RootFolder, ...]
+    mounts: tuple[str, ...]
+    mappings: tuple[RemotePathMapping, ...]
+
+
+def _unreadable_arr_inputs(arr: ArrInstance) -> list[str]:
+    fields = {
+        "root folders": _tuple_of(arr.root_folders, RootFolder),
+        "mounts": _tuple_of(arr.mounts, str),
+        "remote path mappings": _tuple_of(arr.remote_path_mappings, RemotePathMapping),
+    }
+    return [name for name, value in fields.items() if value is None]
+
+
+def _view(arr: ArrInstance) -> _ArrView:
+    return _ArrView(
+        label=_arr_label(arr),
+        hardlinks=_hardlinks(arr),
+        roots=_tuple_of(arr.root_folders, RootFolder) or (),
+        mounts=_tuple_of(arr.mounts, str) or (),
+        mappings=_tuple_of(arr.remote_path_mappings, RemotePathMapping) or (),
+    )
+
+
+def _download_path(view: _ArrView, d: ArrDownloadClient, raw: object) -> PurePosixPath | str:
+    """Spec steps 2-3: the save path in the arr's namespace, or why it isn't readable."""
+    if not isinstance(raw, str):
+        return f"{view.label}: the client's save path for {d.category!r} is not a string"
+    path = posix_abs(translate(raw, view.mappings, d.host))
+    return path if path is not None else f"{view.label}: save path {raw!r} is not absolute POSIX"
+
+
+def _root_path(view: _ArrView, folder: RootFolder) -> PurePosixPath | str:
+    path = posix_abs(folder.path)
+    if path is None:
+        return f"{view.label}: root folder {folder.path!r} is not absolute POSIX"
+    return path
+
+
+def _usable_roots(view: _ArrView) -> tuple[RootFolder, ...]:
+    return tuple(r for r in view.roots if r.accessible is not False)
+
+
+def _left_out_roots(view: _ArrView) -> list[str]:
+    return [
+        f"{view.label}: root folder {r.path} is not accessible and was left out"
+        for r in view.roots
+        if r.accessible is False
+    ]
+
+
+def _triples(
+    view: _ArrView, clients: Iterable[ArrDownloadClient], save_paths: Mapping[str, object]
+) -> Iterator[Verdict]:
+    """Every ``(A, D, R)`` verdict for one arr whose inputs are all readable."""
+    for d in clients:
+        download = _download_path(view, d, save_paths[d.category])
+        for folder in _usable_roots(view):
+            root = _root_path(view, folder)
+            unreadable = next((p for p in (download, root) if isinstance(p, str)), None)
+            if unreadable is not None:
+                yield Verdict(None, unreadable)
+            else:
+                yield _triple(view.label, view.hardlinks, download, root, view.mounts)
+
+
+def _arr_verdicts(
+    arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
+) -> tuple[list[Verdict], bool]:
+    """One arr's verdicts, and whether it sends any downloads to this client."""
+    if _hardlinks(arr) is False:
+        return [], False
+    label = _arr_label(arr)
+    clients = _clients_that_are_this(arr, instance, save_paths)
+    if clients is None:
+        return [Verdict(None, f"{label}: its download clients could not be read")], True
+    if not clients:
+        return [], False
+    unreadable = _unreadable_arr_inputs(arr)
+    if save_paths is None:
+        unreadable.append("this client's save paths")
+    if unreadable:
+        return [Verdict(None, f"{label}: could not read {', '.join(unreadable)}")], True
+    view = _view(arr)
+    notes = [Verdict(False, note) for note in _left_out_roots(view)]
+    return [*notes, *_triples(view, clients, save_paths)], True
+
+
+def _aggregate(verdicts: list[Verdict]) -> tuple[bool | None, list[str]]:
+    """FAIL on any conflict, else SKIP on any unknown, else PASS; with the lines to show."""
+    conflicts = [v.fragment for v in verdicts if v.state is True]
+    if conflicts:
+        return True, list(dict.fromkeys(conflicts))
+    unknowns = [v.fragment for v in verdicts if v.state is None]
+    if unknowns:
+        return None, list(dict.fromkeys(unknowns))
+    return False, list(dict.fromkeys(v.fragment for v in verdicts if v.fragment))
+
+
+def _not_applicable(label: str) -> Finding:
+    return Finding(
+        invariant=INVARIANT_ID,
+        instance=label,
+        outcome=Outcome.NOT_APPLICABLE,
+        detail="no sonarr or radarr was collected, so no import can be checked",
+        conflict=CROSS_MOUNT,
+    )
+
+
+def check(instance: ClientInstance, arrs: tuple[ArrInstance, ...]) -> Finding:
+    """One finding for *instance* over every collected arr."""
+    label = f"{instance.kind}[{instance.name}]"
+    if not arrs:
+        return _not_applicable(label)
+    save_paths = _save_paths(instance)
+    verdicts: list[Verdict] = []
+    involved = False
+    for arr in arrs:
+        arr_verdicts, sends_here = _arr_verdicts(arr, instance, save_paths)
+        verdicts += arr_verdicts
+        involved |= sends_here
+    state, lines = _aggregate(verdicts)
+    finding = conflict_if(INVARIANT_ID, label, premise(PREMISE, state), conflict=CROSS_MOUNT)
+    detail = "; ".join(lines) if lines or involved else NO_ARR_SENDS_HERE
+    return replace(finding, detail=detail)

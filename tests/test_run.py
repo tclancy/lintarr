@@ -2,7 +2,7 @@ import pytest
 
 from lintarr.facts import Unknown
 from lintarr.models import ErrorRow, StackFacts
-from lintarr.outcomes import Outcome
+from lintarr.outcomes import Outcome, exit_code
 from lintarr.run import run_checks, run_outcome
 from tests.fixtures.clients import as_client
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
@@ -29,9 +29,12 @@ def test_one_finding_per_qbittorrent_instance():
         clients=(as_client(wedged_qbt("main")), as_client(repaired_qbt("vpn"))), arrs=NO_GOALS
     )
     findings = run_checks(facts, declared=_QBT_AND_SONARR)
-    by_instance = {f.instance: f.outcome for f in findings}
-    assert by_instance["qbittorrent[main]"] is Outcome.FAIL
-    assert by_instance["qbittorrent[vpn]"] is Outcome.PASS
+    by_instance = {f.instance: f.outcome for f in findings if f.invariant == "queue-liveness"}
+    assert by_instance == {"qbittorrent[main]": Outcome.FAIL, "qbittorrent[vpn]": Outcome.PASS}
+    # The shared check also runs once per instance. homelab#393's evidence never
+    # recorded save paths, so it cannot decide and SKIPs for each.
+    hardlink = {f.instance: f.outcome for f in findings if f.invariant == "hardlink-futility"}
+    assert hardlink == {"qbittorrent[main]": Outcome.SKIP, "qbittorrent[vpn]": Outcome.SKIP}
 
 
 def test_collect_errors_become_error_findings():
@@ -74,7 +77,12 @@ def test_a_wedged_instance_alongside_a_healthy_one_fails_the_run(unhealthy_first
     facts = StackFacts(
         clients=instances if unhealthy_first else tuple(reversed(instances)), arrs=NO_GOALS
     )
-    assert run_outcome(run_checks(facts, declared=_QBT_AND_SONARR)) is Outcome.FAIL
+    findings = run_checks(facts, declared=_QBT_AND_SONARR)
+    queue = [f for f in findings if f.invariant == "queue-liveness"]
+    assert run_outcome(queue) is Outcome.FAIL
+    # The full run also carries hardlink-futility's SKIPs (homelab#393 recorded no
+    # save paths), which outrank FAIL in severity but never in the exit code.
+    assert exit_code(f.outcome for f in findings) == 1
 
 
 def test_no_service_declared_and_none_collected_yields_no_findings():

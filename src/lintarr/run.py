@@ -16,11 +16,12 @@ from collections.abc import Iterable
 from dataclasses import replace
 
 from lintarr import checks
+from lintarr.checks import hardlink_futility
 from lintarr.clients import BACKENDS
 from lintarr.collect.arr import ARR_KINDS, ARR_LABEL_KIND
 from lintarr.config import LintarrConfig
 from lintarr.models import ClientInstance, ErrorRow, StackFacts
-from lintarr.outcomes import Finding, Outcome, worst
+from lintarr.outcomes import Finding, Outcome, Premise, worst
 
 #: The premise that has no answer without arr data. Named here so the
 #: substitution below fires only on a SKIP that is actually about missing arrs,
@@ -144,12 +145,39 @@ def _resolve_missing_arrs(
     )
 
 
+def _resolve_failed_arr(finding: Finding, facts: StackFacts) -> Finding:
+    """A ``hardlink-futility`` PASS or N/A is a SKIP when an arr failed to collect.
+
+    The check never sees collection errors, and an arr that could not be read
+    cannot be ruled out: it may import across mounts. A FAIL found elsewhere
+    stands, and so does a SKIP the check reached itself.
+    """
+    if finding.outcome not in (Outcome.PASS, Outcome.NOT_APPLICABLE):
+        return finding
+    if not _an_arr_failed(facts):
+        return finding
+    return replace(
+        finding,
+        outcome=Outcome.SKIP,
+        premises=(Premise(hardlink_futility.PREMISE, None),),
+        detail="an arr could not be read, so its imports could not be checked",
+    )
+
+
+def _resolve(finding: Finding, facts: StackFacts, *, declared: frozenset[str]) -> Finding:
+    """Every run-level correction that applies to *finding*."""
+    finding = _resolve_missing_arrs(finding, facts, declared=declared)
+    if finding.invariant == hardlink_futility.INVARIANT_ID:
+        finding = _resolve_failed_arr(finding, facts)
+    return finding
+
+
 def _client_findings(
     instance: ClientInstance, facts: StackFacts, *, declared: frozenset[str]
 ) -> list[Finding]:
     """Every check that applies to *instance*: its backend's own, then the shared ones."""
     return [
-        _resolve_missing_arrs(check(instance, facts.arrs), facts, declared=declared)
+        _resolve(check(instance, facts.arrs), facts, declared=declared)
         for check in (*BACKENDS[instance.kind].checks, *checks.SHARED_CHECKS)
     ]
 

@@ -5,9 +5,18 @@ import httpx
 from click.testing import CliRunner
 
 from lintarr.cli import cli
-from tests.fixtures.homelab_paths import arr_bodies
+from tests.fixtures.homelab_paths import QBT_CATEGORIES, arr_bodies
 
 ARR_BODIES = arr_bodies()
+
+#: Tom's measured save-path preferences (``homelab_paths.homelab_qbt``), served
+#: beneath every test's own prefs so ``hardlink-futility`` reads the homelab's
+#: one ``/data`` volume and PASSes. A test's own prefs win on any shared key.
+HOMELAB_PATH_PREFS = {
+    "save_path": "/data/torrents",
+    "auto_tmm_enabled": True,
+    "use_category_paths_in_manual_mode": False,
+}
 
 _PREFIXES = ("QBIT_", "SONARR_", "RADARR_", "LINTARR_", "DOWNLOAD_CLIENT_", "ARR_")
 _CLEARED = {k: None for k in os.environ if k.startswith(_PREFIXES)}
@@ -63,9 +72,9 @@ def _transport(prefs, indexers=WEDGED_INDEXERS):
             case "/api/v2/app/version":
                 return httpx.Response(200, text="v5.2.3")
             case "/api/v2/app/preferences":
-                return httpx.Response(200, json=prefs)
+                return httpx.Response(200, json=HOMELAB_PATH_PREFS | prefs)
             case "/api/v2/torrents/categories":
-                return httpx.Response(200, json={})
+                return httpx.Response(200, json=QBT_CATEGORIES)
             case "/api/v3/system/status":
                 return httpx.Response(200, json={"version": "4.0.15.2941", "appName": "Sonarr"})
             case "/api/v3/indexer":
@@ -273,7 +282,11 @@ def test_the_json_outcome_and_exit_code_may_disagree_and_both_are_reported():
     outcomes = {f["invariant"]: f["outcome"] for f in payload["findings"]}
     assert outcomes["queue-liveness"] == "FAIL"
     assert outcomes["collect"] == "SKIP"
-    assert payload["outcome"] == "SKIP"
+    # No arr was collected and none failed, so the shared check is N/A (spec,
+    # "Which arrs are involved"). N/A outranks SKIP in severity, so the payload's
+    # severity is now N/A, still disagreeing with the FAIL exit code.
+    assert outcomes["hardlink-futility"] == "N/A"
+    assert payload["outcome"] == "N/A"
     assert payload["exit_code"] == result.exit_code == 1
 
 
@@ -391,8 +404,14 @@ def test_edge_unwritable_state_exits_two_without_a_traceback(tmp_path):
 def test_edge_json_marks_which_findings_are_new(tmp_path):
     first = json.loads(_edge(tmp_path, "--json").stdout)
     second = json.loads(_edge(tmp_path, "--json").stdout)
-    assert [f["new"] for f in first["findings"]] == [True]
-    assert [f["new"] for f in second["findings"]] == [False]
+
+    def new(payload, invariant):
+        return [f["new"] for f in payload["findings"] if f["invariant"] == invariant]
+
+    assert new(first, "queue-liveness") == [True]
+    assert new(second, "queue-liveness") == [False]
+    # hardlink-futility PASSes on the homelab bodies, so it is never a new problem.
+    assert new(first, "hardlink-futility") == new(second, "hardlink-futility") == [False]
     assert (first["exit_code"], second["exit_code"]) == (1, 0)
 
 

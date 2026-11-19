@@ -9,6 +9,7 @@ from typing import Any
 
 import click
 
+from lintarr import checks
 from lintarr.clients import BACKENDS
 from lintarr.collect.stack import collect_stack
 from lintarr.config import LintarrConfig, load_config
@@ -284,7 +285,13 @@ def _therefore(finding) -> str | None:
     ``queue-liveness`` with a ``seeding`` conflict, and a lookup across every
     table would print the first backend's remedy under the second's finding. A
     label whose kind is not a backend (an arr, say) has no "Therefore" line.
+
+    A shared check's line comes first, from ``checks.SHARED_THEREFORE``: its
+    finding carries whichever backend's label it ran against, and its remedy is
+    the same for all of them.
     """
+    if finding.invariant in checks.SHARED_INVARIANTS:
+        return checks.SHARED_THEREFORE.get((finding.invariant, finding.conflict))
     backend = BACKENDS.get(finding.instance.split("[", 1)[0])
     if backend is None:
         return None
