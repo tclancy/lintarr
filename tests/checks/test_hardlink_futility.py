@@ -51,6 +51,9 @@ def test_homelab_passes():
     arrs = (homelab_arr("sonarr", "tv"), homelab_arr("radarr", "movies"))
     finding = check(as_client(homelab_qbt()), arrs)
     assert finding.outcome is Outcome.PASS
+    assert finding.detail == (
+        "downloads and library folders share a mount for sonarr[tv], radarr[movies]"
+    )
     assert (finding.invariant, finding.conflict) == (INVARIANT_ID, CROSS_MOUNT)
 
 
@@ -73,9 +76,36 @@ def test_separate_download_and_library_mounts_fail():
     assert twin.outcome is Outcome.PASS
 
 
+_HARDLINKS_OFF = "sonarr[tv]: hardlinks are off, so imports copy by design"
+
+
 def test_hardlinks_off_passes_even_with_unknown_mounts():
     arr = _split_arr(copy_using_hardlinks=False, mounts=_UNREAD, root_folders=_UNREAD)
-    assert check(_split_qbt(), (arr,)).outcome is Outcome.PASS
+    finding = check(_split_qbt(), (arr,))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == _HARDLINKS_OFF
+
+
+def test_hardlinks_off_arr_is_involved_not_absent():
+    """It does send downloads here, so "no collected arr sends downloads" would be false."""
+    off = _split_arr(copy_using_hardlinks=False)
+    shared = arr_with(homelab_arr("radarr", "movies"), download_clients=(_qbt_client(),))
+    finding = check(_client(), (off, shared))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == (
+        f"downloads and library folders share a mount for radarr[movies]; {_HARDLINKS_OFF}"
+    )
+
+
+def test_hardlinks_off_arr_on_another_client_is_not_named():
+    off = _split_arr(copy_using_hardlinks=False, download_clients=(_qbt_client(enabled=False),))
+    assert check(_split_qbt(), (off,)).detail == "no collected arr sends downloads to this client"
+
+
+def test_hardlinks_off_settles_even_unreadable_download_clients():
+    off = _split_arr(copy_using_hardlinks=False, download_clients=_UNREAD)
+    finding = check(_split_qbt(), (off,))
+    assert (finding.outcome, finding.detail) == (Outcome.PASS, _HARDLINKS_OFF)
 
 
 def test_hardlinks_unknown_on_split_mounts_skips():
@@ -143,7 +173,10 @@ def test_inaccessible_root_folder_is_ignored_and_named():
     arr = arr_with(mounts=("/", "/data", "/tv"), root_folders=roots)
     finding = check(as_client(homelab_qbt()), (arr,))
     assert finding.outcome is Outcome.PASS
-    assert finding.detail == "sonarr[tv]: root folder /tv/old is not accessible and was left out"
+    assert finding.detail == (
+        "downloads and library folders share a mount for sonarr[tv]; "
+        "sonarr[tv]: root folder /tv/old is not accessible and was left out"
+    )
 
 
 def test_root_folder_with_unstated_accessibility_counts():
@@ -196,6 +229,49 @@ def test_junk_wearing_a_known_is_unknown(junk):
     for field in ("root_folders", "mounts", "remote_path_mappings", "download_clients"):
         finding = check(_split_qbt(), (_split_arr(**{field: junk}),))
         assert finding.outcome is Outcome.SKIP, field
+
+
+@pytest.mark.parametrize(
+    "field, junk",
+    [
+        ("category", None),
+        ("category", 5),
+        ("host", 5),
+        ("host", ["gluetun"]),
+        ("enabled", "yes"),
+        ("enabled", None),
+        ("implementation", None),
+    ],
+)
+def test_a_download_client_with_unreadable_fields_is_unknown(field, junk):
+    """Neither a crash in ``translate`` nor a silent "disabled"."""
+    from dataclasses import replace as replace_field
+
+    bad = replace_field(_qbt_client(), **{field: junk})
+    finding = check(_split_qbt(), (_split_arr(download_clients=(bad,)),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: download client 'qBittorrent' has fields that could not be read"
+    )
+
+
+def test_a_save_path_that_translates_to_non_posix_names_both_paths():
+    qbt = _client(categories={"tv": {"name": "tv", "savePath": "/downloads/tv"}})
+    mapping = RemotePathMapping("gluetun", "/downloads/", "D:\\media\\")
+    finding = check(qbt, (_split_arr(remote_path_mappings=(mapping,)),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: save path 'D:\\\\media/tv' (translated from '/downloads/tv') "
+        "is not absolute POSIX"
+    )
+
+
+def test_an_untranslated_non_posix_save_path_names_it_once():
+    qbt = _client(save_path="C:\\Downloads\\tv", categories={})
+    arr = _split_arr(download_clients=(_qbt_client(category=""),))
+    finding = check(qbt, (arr,))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == ("sonarr[tv]: save path 'C:\\\\Downloads\\\\tv' is not absolute POSIX")
 
 
 def test_unknown_in_one_triple_does_not_hide_a_fail_in_another():

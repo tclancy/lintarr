@@ -45,6 +45,8 @@ class Verdict:
 
     state: bool | None
     fragment: str = ""
+    #: The arr whose download and library share a mount, for the PASS detail.
+    shared_by: str = ""
 
 
 def _tuple_of[T](fact: Fact[object], kind: type[T]) -> tuple[T, ...] | None:
@@ -76,19 +78,34 @@ def _is_this_client(
     d: ArrDownloadClient, instance: ClientInstance, save_paths: Mapping[str, object] | None
 ) -> bool:
     """Spec step 1. With ``save_paths`` unread, any enabled ``D`` of this kind may be ``C``."""
-    if d.enabled is not True or not isinstance(d.implementation, str):
+    if not d.enabled:
         return False
     if d.implementation.lower() != instance.kind:
         return False
     return save_paths is None or d.category in save_paths
 
 
+def _is_well_formed(d: ArrDownloadClient) -> bool:
+    """Every field ``_is_this_client`` and ``translate`` read has the type they assume."""
+    return (
+        isinstance(d.enabled, bool)
+        and isinstance(d.implementation, str)
+        and isinstance(d.category, str)
+        and (d.host is None or isinstance(d.host, str))
+    )
+
+
 def _clients_that_are_this(
     arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
-) -> tuple[ArrDownloadClient, ...] | None:
+) -> tuple[ArrDownloadClient, ...] | str:
+    """The arr's download clients that are this client, or why they can't be told."""
+    label = _arr_label(arr)
     clients = _tuple_of(arr.download_clients, ArrDownloadClient)
     if clients is None:
-        return None
+        return f"{label}: its download clients could not be read"
+    malformed = [d.name for d in clients if not _is_well_formed(d)]
+    if malformed:
+        return f"{label}: download client {malformed[0]!r} has fields that could not be read"
     return tuple(d for d in clients if _is_this_client(d, instance, save_paths))
 
 
@@ -121,7 +138,7 @@ def _triple(
         if isinstance(side, str):
             return Verdict(None, f"{label}: {side}")
     if dm == rm:
-        return Verdict(False)
+        return Verdict(False, shared_by=label)
     if _ROOT in (dm, rm):
         return _one_side_on_root(label, download, dm, root)
     if hardlinks is None:
@@ -166,8 +183,12 @@ def _download_path(view: _ArrView, d: ArrDownloadClient, raw: object) -> PurePos
     """Spec steps 2-3: the save path in the arr's namespace, or why it isn't readable."""
     if not isinstance(raw, str):
         return f"{view.label}: the client's save path for {d.category!r} is not a string"
-    path = posix_abs(translate(raw, view.mappings, d.host))
-    return path if path is not None else f"{view.label}: save path {raw!r} is not absolute POSIX"
+    translated = translate(raw, view.mappings, d.host)
+    path = posix_abs(translated)
+    if path is not None:
+        return path
+    source = f" (translated from {raw!r})" if translated != raw else ""
+    return f"{view.label}: save path {translated!r}{source} is not absolute POSIX"
 
 
 def _root_path(view: _ArrView, folder: RootFolder) -> PurePosixPath | str:
@@ -207,15 +228,15 @@ def _triples(
 def _arr_verdicts(
     arr: ArrInstance, instance: ClientInstance, save_paths: Mapping[str, object] | None
 ) -> tuple[list[Verdict], bool]:
-    """One arr's verdicts, and whether it sends any downloads to this client."""
-    if _hardlinks(arr) is False:
-        return [], False
+    """One arr's verdicts, and whether it (or, unreadably, may) send downloads to this client."""
     label = _arr_label(arr)
     clients = _clients_that_are_this(arr, instance, save_paths)
-    if clients is None:
-        return [Verdict(None, f"{label}: its download clients could not be read")], True
-    if not clients:
+    if clients == ():
         return [], False
+    if _hardlinks(arr) is False:
+        return [Verdict(False, f"{label}: hardlinks are off, so imports copy by design")], True
+    if isinstance(clients, str):
+        return [Verdict(None, clients)], True
     unreadable = _unreadable_arr_inputs(arr)
     if save_paths is None:
         unreadable.append("this client's save paths")
@@ -234,7 +255,16 @@ def _aggregate(verdicts: list[Verdict]) -> tuple[bool | None, list[str]]:
     unknowns = [v.fragment for v in verdicts if v.state is None]
     if unknowns:
         return None, list(dict.fromkeys(unknowns))
-    return False, list(dict.fromkeys(v.fragment for v in verdicts if v.fragment))
+    return False, _pass_lines(verdicts)
+
+
+def _pass_lines(verdicts: list[Verdict]) -> list[str]:
+    """What a PASS decided: which arrs share a mount, then each note (hardlinks off, left out)."""
+    shared = list(dict.fromkeys(v.shared_by for v in verdicts if v.shared_by))
+    lines = (
+        [f"downloads and library folders share a mount for {', '.join(shared)}"] if shared else []
+    )
+    return lines + list(dict.fromkeys(v.fragment for v in verdicts if v.fragment))
 
 
 def _not_applicable(label: str) -> Finding:
