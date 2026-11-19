@@ -6,6 +6,7 @@ environment can never run against the services it meant to name.
 """
 
 import os
+import re
 
 import pytest
 from click.testing import CliRunner
@@ -24,15 +25,24 @@ NEUTRAL = {
     "ARR_API_KEY__TV": "tk",
 }
 
-#: Every legacy base and the neutral base that replaces it.
+#: Every legacy variable, bare and suffixed, and the exact name that replaces it.
+#: Arr replacements carry an instance name from the old app name, so a Sonarr
+#: and a Radarr can never be told to rename onto the same variable.
 LEGACY = {
     "QBIT_URL": "DOWNLOAD_CLIENT_URL",
+    "QBIT_URL__4K": "DOWNLOAD_CLIENT_URL__4K",
     "QBIT_USER": "DOWNLOAD_CLIENT_USER",
+    "QBIT_USER__4K": "DOWNLOAD_CLIENT_USER__4K",
     "QBIT_PASS": "DOWNLOAD_CLIENT_PASS",
-    "SONARR_URL": "ARR_URL",
-    "SONARR_API_KEY": "ARR_API_KEY",
-    "RADARR_URL": "ARR_URL",
-    "RADARR_API_KEY": "ARR_API_KEY",
+    "QBIT_PASS__4K": "DOWNLOAD_CLIENT_PASS__4K",
+    "SONARR_URL": "ARR_URL__SONARR",
+    "SONARR_URL__4K": "ARR_URL__SONARR_4K",
+    "SONARR_API_KEY": "ARR_API_KEY__SONARR",
+    "SONARR_API_KEY__4K": "ARR_API_KEY__SONARR_4K",
+    "RADARR_URL": "ARR_URL__RADARR",
+    "RADARR_URL__4K": "ARR_URL__RADARR_4K",
+    "RADARR_API_KEY": "ARR_API_KEY__RADARR",
+    "RADARR_API_KEY__4K": "ARR_API_KEY__RADARR_4K",
 }
 
 
@@ -60,12 +70,11 @@ def test_lintarr_services_is_read_as_the_explicit_declaration():
     assert cfg.declared_explicit == frozenset({"qbittorrent", "sonarr"})
 
 
-@pytest.mark.parametrize("suffix", ["", "__4K"])
 @pytest.mark.parametrize(("legacy", "replacement"), sorted(LEGACY.items()))
-def test_a_legacy_name_is_rejected_naming_its_replacement(legacy, replacement, suffix):
+def test_a_legacy_name_is_rejected_naming_its_replacement(legacy, replacement):
     """Pinned as the pairing: ``ARR_URL`` alone is a substring of ``SONARR_URL``."""
-    message = _message({f"{legacy}{suffix}": "x"})
-    assert f"rename {legacy}{suffix} to {replacement}{suffix}" in message
+    message = _message({legacy: "x"})
+    assert f"rename {legacy} to {replacement};" in f"{message};"
     if legacy.startswith("QBIT_"):
         assert "DOWNLOAD_CLIENT_KIND=qbittorrent" in message
 
@@ -76,7 +85,7 @@ def test_every_legacy_name_present_is_named_at_once():
     for name, replacement in [
         ("QBIT_URL", "DOWNLOAD_CLIENT_URL"),
         ("QBIT_PASS__4K", "DOWNLOAD_CLIENT_PASS__4K"),
-        ("RADARR_API_KEY__HD", "ARR_API_KEY__HD"),
+        ("RADARR_API_KEY__HD", "ARR_API_KEY__RADARR_HD"),
     ]:
         assert f"rename {name} to {replacement}" in message
     assert "DOWNLOAD_CLIENT_KIND=qbittorrent" in message
@@ -89,7 +98,34 @@ def test_arr_only_legacy_names_do_not_mention_a_client_kind():
 def test_a_legacy_name_alongside_the_neutral_names_is_still_rejected():
     """Review Focus 1: a half-migrated environment must not run on the half it reads."""
     message = _message(NEUTRAL | {"SONARR_URL": "http://old:8989"})
-    assert "rename SONARR_URL to ARR_URL" in message
+    assert "rename SONARR_URL to ARR_URL__SONARR" in message
+
+
+_RENAME = re.compile(r"rename (\w+) to (\w+)")
+
+
+def test_following_the_renames_for_a_sonarr_and_a_radarr_keeps_both():
+    """Both apps map to the one ``ARR_URL`` base. Suggesting ``ARR_URL`` for each
+    would have an operator overwrite one arr with the other, and with
+    ``LINTARR_SERVICES`` unset the lost arr is never declared, so the run goes
+    green over a service it never read. Applied literally, the message must
+    produce two arrs."""
+    legacy = {
+        "SONARR_URL": "http://sonarr:8989",
+        "SONARR_API_KEY": "sk",
+        "RADARR_URL": "http://radarr:7878",
+        "RADARR_API_KEY": "rk",
+    }
+    renames = dict(_RENAME.findall(_message(legacy)))
+    assert renames.keys() == legacy.keys()
+    assert len(set(renames.values())) == len(renames), renames
+
+    migrated = {renames[key]: value for key, value in legacy.items()}
+    cfg = load_config(migrated)
+    assert [(a.name, a.url, a.api_key) for a in cfg.arrs] == [
+        ("radarr", "http://radarr:7878", "rk"),
+        ("sonarr", "http://sonarr:8989", "sk"),
+    ]
 
 
 @pytest.mark.parametrize("suffix", ["", "__VPN"])
@@ -194,7 +230,10 @@ _CLEARED = {
     ("env", "named"),
     [
         ({"QBIT_URL": "http://q:8080"}, "rename QBIT_URL to DOWNLOAD_CLIENT_URL"),
-        ({"SONARR_URL__ANIME": "http://s:8989"}, "rename SONARR_URL__ANIME to ARR_URL__ANIME"),
+        (
+            {"SONARR_URL__ANIME": "http://s:8989"},
+            "rename SONARR_URL__ANIME to ARR_URL__SONARR_ANIME",
+        ),
     ],
 )
 @pytest.mark.parametrize("command", ["check", "dump-facts"])

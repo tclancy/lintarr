@@ -117,6 +117,24 @@ def _legacy_present(env: Mapping[str, str]) -> list[tuple[str, str]]:
     ]
 
 
+def _replacement(key: str, legacy: str) -> str:
+    """The neutral name for legacy variable *key*, whose base is *legacy*.
+
+    A client keeps its ``__NAME`` suffix. An arr's replacement always carries an
+    instance name taken from the old app name — ``SONARR_URL`` becomes
+    ``ARR_URL__SONARR``, ``RADARR_URL__4K`` becomes ``ARR_URL__RADARR_4K`` —
+    because both apps map to the one ``ARR_URL`` base: suggesting ``ARR_URL``
+    for each would have an operator following the message literally overwrite
+    one arr with the other, and an arr that is never configured is never read.
+    """
+    suffix = key.removeprefix(legacy)
+    if legacy.startswith("QBIT_"):
+        return f"{_LEGACY_NAMES[legacy]}{suffix}"
+    app = legacy.split("_", 1)[0]
+    name = app if not suffix else f"{app}_{suffix.removeprefix('__')}"
+    return f"{_LEGACY_NAMES[legacy]}__{name}"
+
+
 def _reject_legacy_names(env: Mapping[str, str]) -> None:
     """Fail on any pre-rename variable, even beside the new ones.
 
@@ -128,10 +146,7 @@ def _reject_legacy_names(env: Mapping[str, str]) -> None:
     present = _legacy_present(env)
     if not present:
         return
-    renames = "; ".join(
-        f"rename {key} to {_LEGACY_NAMES[legacy]}{key.removeprefix(legacy)}"
-        for key, legacy in present
-    )
+    renames = "; ".join(f"rename {key} to {_replacement(key, legacy)}" for key, legacy in present)
     message = f"legacy variables are no longer read: {renames}"
     if any(legacy.startswith("QBIT_") for _, legacy in present):
         message += (
