@@ -139,8 +139,10 @@ so an unknown never hides a FAIL found elsewhere. It PASSes otherwise.
 
 Which arrs are involved also decides the outcome, so that nothing new pages:
 
-- **No arrs collected and none failed:** **N/A**. queue-liveness already
-  reports N/A on such a stack, so this adds no new non-zero exit.
+- **No arrs collected and none failed:** **N/A**. On a qBittorrent stack
+  queue-liveness already reports N/A there, so this adds no new non-zero exit.
+  A backend with no N/A check of its own will now exit 3 in strict mode, which
+  is the project's rule for N/A.
 - **An arr failed to collect:** that arr can't be ruled out, so a run with no
   conflicting triple is **SKIP**, not PASS. The arr's own ERROR is reported
   too.
