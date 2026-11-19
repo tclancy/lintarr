@@ -267,14 +267,18 @@ def _premise_column_width(findings) -> int:
 
 
 def _therefore(finding) -> str | None:
-    """The "Therefore" line for *finding*'s ``(invariant, conflict)``, if any backend has one.
+    """The "Therefore" line for *finding*'s ``(invariant, conflict)`` in its own backend's table.
 
-    Looked up across every backend's table rather than the one that produced the
-    finding: a finding carries its instance label, not its kind, and an
-    ``(invariant, conflict)`` pair is only ever one backend's to explain.
+    The backend is the kind in the finding's ``<kind>[<name>]`` label. Only that
+    backend's table is consulted: two backends may both name a check
+    ``queue-liveness`` with a ``seeding`` conflict, and a lookup across every
+    table would print the first backend's remedy under the second's finding. A
+    label whose kind is not a backend (an arr, say) has no "Therefore" line.
     """
-    key = (finding.invariant, finding.conflict)
-    return next((b.therefore[key] for b in BACKENDS.values() if key in b.therefore), None)
+    backend = BACKENDS.get(finding.instance.split("[", 1)[0])
+    if backend is None:
+        return None
+    return backend.therefore.get((finding.invariant, finding.conflict))
 
 
 def _render_findings(findings) -> str:

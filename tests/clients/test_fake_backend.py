@@ -1,13 +1,19 @@
 """A fake backend proves the seam: registration is the only edit a new kind needs."""
 
+import dataclasses
 import json
 
 import httpx
 import pytest
 from click.testing import CliRunner
 
-from lintarr.cli import cli
+from lintarr.cli import _render_findings, cli
+from lintarr.clients import BACKENDS
+from lintarr.clients.qbittorrent import queue_liveness
+from lintarr.clients.qbittorrent.therefore import THEREFORE
 from lintarr.config import load_config
+from lintarr.outcomes import Finding, Outcome
+from tests.fakes.backend import FAKE
 from tests.test_check_cli import _CLEARED, WEDGED_PREFS, _transport
 
 FAKE_ENV = {
@@ -99,3 +105,40 @@ def test_the_fake_never_touches_the_network(fake_backend):
 
     result, _ = _check(FAKE_ENV, transport=httpx.MockTransport(refuse))
     assert result.exit_code == 0
+
+
+#: A qBittorrent ``therefore`` key, reused by the fake with its own text.
+_SHARED_KEY = (queue_liveness.INVARIANT_ID, queue_liveness.SEEDING)
+_FAKE_THEREFORE = "the fake's own remedy, not qBittorrent's."
+
+
+@pytest.fixture
+def fake_with_therefore(monkeypatch):
+    fake = dataclasses.replace(FAKE, therefore={_SHARED_KEY: _FAKE_THEREFORE})
+    monkeypatch.setitem(BACKENDS, "fake", fake)
+
+
+def _therefore_line(instance: str) -> str | None:
+    finding = Finding(
+        invariant=_SHARED_KEY[0],
+        instance=instance,
+        outcome=Outcome.FAIL,
+        conflict=_SHARED_KEY[1],
+    )
+    rendered = _render_findings([finding])
+    if "Therefore: " not in rendered:
+        return None
+    return rendered.split("Therefore: ", 1)[1].split("\n\n", 1)[0]
+
+
+def test_a_therefore_line_comes_from_the_producing_backend_only(fake_with_therefore):
+    """Two backends may both name a check ``queue-liveness`` with a ``seeding``
+    conflict. Each finding must render its own backend's remedy: a union
+    lookup gave the fake qBittorrent's advice, and its own line never showed."""
+    assert _therefore_line("fake[main]") == _FAKE_THEREFORE
+    assert _therefore_line("qbittorrent[main]") == THEREFORE[_SHARED_KEY]
+
+
+def test_a_label_whose_kind_is_not_a_backend_gets_no_therefore_line(fake_with_therefore):
+    assert _therefore_line("arr[main]") is None
+    assert _therefore_line("nosuch[main]") is None
