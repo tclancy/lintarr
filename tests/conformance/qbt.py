@@ -30,6 +30,7 @@ class Row:
     upspeed: int
     dlspeed: int
     num_leechs: int
+    super_seeding: bool = False
 
 
 class QbtHarness:
@@ -47,6 +48,11 @@ class QbtHarness:
 
     def close(self) -> None:
         self._http.close()
+
+    @property
+    def downloads(self) -> Path:
+        """The host directory the client sees as /downloads."""
+        return self._downloads
 
     def login(self) -> None:
         """Log in exactly once. Failed logins feed qBittorrent's 5-failure IP ban."""
@@ -77,16 +83,20 @@ class QbtHarness:
             f.flush()
             os.fsync(f.fileno())
 
-    def add(self, t: HarnessTorrent, *, complete: bool) -> None:
+    def add(self, t: HarnessTorrent, *, complete: bool, category: str = "") -> None:
+        """Add `t`, filed under `category` when one is named (it must exist already)."""
         if complete:
             self._write_durably(self._downloads / t.name, t.data)
+        data = {
+            "savepath": "/downloads",
+            "skip_checking": "true" if complete else "false",
+            "stopped": "false",
+        }
+        if category:
+            data["category"] = category
         r = self._http.post(
             "/api/v2/torrents/add",
-            data={
-                "savepath": "/downloads",
-                "skip_checking": "true" if complete else "false",
-                "stopped": "false",
-            },
+            data=data,
             files={"torrents": (f"{t.name}.torrent", t.metainfo, "application/x-bittorrent")},
         )
         self._checked(r)
@@ -101,9 +111,14 @@ class QbtHarness:
                 upspeed=row["upspeed"],
                 dlspeed=row["dlspeed"],
                 num_leechs=row["num_leechs"],
+                super_seeding=bool(row["super_seeding"]),
             )
             for row in r.json()
         ]
+
+    def categories(self) -> dict[str, object]:
+        """The categories endpoint `orphan-inevitability` reads, verbatim."""
+        return self._checked(self._http.get("/api/v2/torrents/categories")).json()
 
     def states(self) -> dict[str, str]:
         return {r.hash: r.state for r in self.rows()}

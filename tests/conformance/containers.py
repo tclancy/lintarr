@@ -157,8 +157,14 @@ class Pair:
     seeder_ip: str
 
 
-def start_qbt(downloads: Path, *, network: str | None = None) -> tuple[str, QbtHarness]:
+def start_qbt(
+    downloads: Path, *, network: str | None = None, config: Path | None = None
+) -> tuple[str, QbtHarness]:
     """Start a qBittorrent container and return its name and a logged-in harness.
+
+    `config` is bind-mounted at /config, so a test can seed the client's own
+    config files before it starts (see tests/conformance/categories.py). Without
+    one the container keeps its config to itself.
 
     On failure after the container started, it is removed before the error propagates.
     """
@@ -167,12 +173,14 @@ def start_qbt(downloads: Path, *, network: str | None = None) -> tuple[str, QbtH
     port = _free_port()
     container = f"lintarr-conformance-{port}"  # teardown keys on the name, not parsed output
     net_args = ["--network", network] if network else []
+    config_args = ["-v", f"{config}:/config"] if config else []
     harness = None
     try:
         _docker(
             "run", "-d", "--rm", "--name", container,
             "--label", f"{EXPIRY_LABEL}={int(time.time()) + LIFETIME_SECONDS}",
             *net_args,
+            *config_args,
             "-p", f"127.0.0.1:{port}:{port}",
             "-e", f"WEBUI_PORT={port}",
             "-e", f"PUID={os.getuid()}",

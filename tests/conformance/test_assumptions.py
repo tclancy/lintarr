@@ -5,25 +5,21 @@ as it was observed, so a qBittorrent change trips here before it silently
 changes what a differential scenario means. Needs Docker.
 """
 
-import time
-from collections.abc import Callable
-
 import pytest
 
 from tests.conformance.qbt import QbtHarness
 from tests.conformance.torrents import HarnessTorrent, make_torrent
+from tests.conformance.watching import (
+    SETTLE_TIMEOUT,
+    SHARE_LIMIT_TIMEOUT,
+    States,
+    _assert_eventually,
+    _assert_holds,
+    add_settled,
+    state_is,
+)
 
 pytestmark = pytest.mark.container
-
-# Measured: the share limit fired 8.4-8.9 s after the torrent reached stalledUP
-# (one pass of qBittorrent's share-limit check). 30 s is that pass three times.
-SHARE_LIMIT_TIMEOUT = 30.0
-# Measured: an add settles in 1.3-3.2 s (checkingResumeData, then any queue release).
-SETTLE_TIMEOUT = 10.0
-# How long a state that should hold is watched, asserted on every poll. Longer
-# than libtorrent's 30 s auto-manage interval, so a tick-driven change is caught.
-HOLD_SECONDS = 35.0
-POLL = 0.25
 
 # Every key a test below touches, at the image's own default, restored first.
 _QUEUE_DEFAULTS: dict[str, object] = {
@@ -41,81 +37,41 @@ _QUEUE_DEFAULTS: dict[str, object] = {
 }
 
 
-def _preferences(qbt: QbtHarness) -> dict[str, object]:
-    """QbtHarness has no preferences read; this file may not widen it (Task 4 scope)."""
-    r = qbt._http.get("/api/v2/app/preferences")
-    r.raise_for_status()
-    return r.json()
-
-
 def _fresh(qbt: QbtHarness, prefs: dict[str, object]) -> None:
     qbt.reset()
     qbt.set_prefs(_QUEUE_DEFAULTS | prefs)
-
-
-States = dict[str, str]
-Check = Callable[[States], bool]
-
-
-def _assert_eventually(qbt: QbtHarness, done: Check, timeout: float) -> States:
-    deadline = time.monotonic() + timeout
-    states = qbt.states()
-    while not done(states):
-        if time.monotonic() >= deadline:
-            pytest.fail(f"condition not met within {timeout:.0f}s; last states {states}")
-        time.sleep(POLL)
-        states = qbt.states()
-    return states
-
-
-def _assert_holds(qbt: QbtHarness, holds: Check, seconds: float = HOLD_SECONDS) -> None:
-    """Assert `holds` on every poll for `seconds`, not only at the end."""
-    deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
-        states = qbt.states()
-        assert holds(states), f"stopped holding after {seconds:.0f}s window began: {states}"
-        time.sleep(POLL)
-
-
-def _state_is(t: HarnessTorrent, want: str) -> Check:
-    return lambda states: states.get(t.info_hash) == want
-
-
-def _add_settled(qbt: QbtHarness, t: HarnessTorrent, *, complete: bool, want: str) -> None:
-    qbt.add(t, complete=complete)
-    _assert_eventually(qbt, _state_is(t, want), SETTLE_TIMEOUT)
 
 
 def test_ratio_zero_with_stop_action_stops_an_unshared_seeder(qbt):
     """Item 1: max_ratio=0 fires on a just-added complete torrent with zero upload."""
     _fresh(qbt, {"max_ratio_enabled": True, "max_ratio": 0, "max_ratio_act": 0})
     t = make_torrent("assume-ratio-stop")
-    _add_settled(qbt, t, complete=True, want="stalledUP")
-    _assert_eventually(qbt, _state_is(t, "stoppedUP"), SHARE_LIMIT_TIMEOUT)
+    add_settled(qbt, t, complete=True, want="stalledUP")
+    _assert_eventually(qbt, state_is(t, "stoppedUP"), SHARE_LIMIT_TIMEOUT)
 
 
 def test_seeding_time_zero_with_stop_action_stops_a_seeder(qbt):
     """Item 1's fallback, measured too: max_seeding_time=0 fires the same way."""
     _fresh(qbt, {"max_seeding_time_enabled": True, "max_seeding_time": 0, "max_ratio_act": 0})
     t = make_torrent("assume-seedtime-stop")
-    _add_settled(qbt, t, complete=True, want="stalledUP")
-    _assert_eventually(qbt, _state_is(t, "stoppedUP"), SHARE_LIMIT_TIMEOUT)
+    add_settled(qbt, t, complete=True, want="stalledUP")
+    _assert_eventually(qbt, state_is(t, "stoppedUP"), SHARE_LIMIT_TIMEOUT)
 
 
 def test_ratio_zero_with_remove_files_action_removes_torrent_and_data(qbt):
     """Item 2: action 3 makes the torrent vanish from torrents/info, files and all."""
     _fresh(qbt, {"max_ratio_enabled": True, "max_ratio": 0, "max_ratio_act": 3})
     t = make_torrent("assume-ratio-remove")
-    _add_settled(qbt, t, complete=True, want="stalledUP")
+    add_settled(qbt, t, complete=True, want="stalledUP")
     _assert_eventually(qbt, lambda states: t.info_hash not in states, SHARE_LIMIT_TIMEOUT)
-    assert not (qbt._downloads / t.name).exists()
+    assert not (qbt.downloads / t.name).exists()
 
 
 @pytest.mark.parametrize("value", [-5, 0, 1])
 def test_slow_timer_has_no_api_minimum(qbt, value):
     """Item 3: setPreferences stores any integer for the slow timer, negatives included."""
     _fresh(qbt, {"slow_torrent_inactive_timer": value})
-    assert _preferences(qbt)["slow_torrent_inactive_timer"] == value
+    assert qbt.preferences()["slow_torrent_inactive_timer"] == value
 
 
 _DOWNLOAD_LIMIT_1 = {"max_active_downloads": 1, "max_active_torrents": -1}
@@ -135,15 +91,15 @@ def _two_incompletes(
             "slow_torrent_inactive_timer": 1,
         },
     )
-    _add_settled(qbt, make_torrent(f"assume-{tag}-a"), complete=False, want="stalledDL")
+    add_settled(qbt, make_torrent(f"assume-{tag}-a"), complete=False, want="stalledDL")
     b = make_torrent(f"assume-{tag}-b")
     qbt.add(b, complete=False)
     return b
 
 
 def _assert_held_in_queue(qbt: QbtHarness, t: HarnessTorrent) -> None:
-    _assert_eventually(qbt, _state_is(t, "queuedDL"), SETTLE_TIMEOUT)
-    _assert_holds(qbt, _state_is(t, "queuedDL"))
+    _assert_eventually(qbt, state_is(t, "queuedDL"), SETTLE_TIMEOUT)
+    _assert_holds(qbt, state_is(t, "queuedDL"))
 
 
 def test_slow_exemption_frees_the_download_limit(qbt):
@@ -151,7 +107,7 @@ def test_slow_exemption_frees_the_download_limit(qbt):
     The second download reaches stalledDL within one settle. Item 3d measured
     1.32 s, 1.32 s and 3.15 s; the 3.15 s run sat in queuedDL for 1.57 s first."""
     b = _two_incompletes(qbt, _DOWNLOAD_LIMIT_1, dont_count=True, tag="dl-exempt")
-    _assert_eventually(qbt, _state_is(b, "stalledDL"), SETTLE_TIMEOUT)
+    _assert_eventually(qbt, state_is(b, "stalledDL"), SETTLE_TIMEOUT)
 
 
 def test_download_limit_holds_without_exemption(qbt):
@@ -189,7 +145,7 @@ def test_download_displaces_seeder_from_full_torrent_limit(qbt, dont_count):
         qbt, lambda st: all(st.get(s.info_hash) == "stalledUP" for s in seeds), SETTLE_TIMEOUT
     )
     inc = make_torrent(f"assume-displace-{dont_count}-inc")
-    _add_settled(qbt, inc, complete=False, want="stalledDL")
+    add_settled(qbt, inc, complete=False, want="stalledDL")
 
     def displaced(states: States) -> bool:
         seeders = sorted(states.get(s.info_hash, "<absent>") for s in seeds)
