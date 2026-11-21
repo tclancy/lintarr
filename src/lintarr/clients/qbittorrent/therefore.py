@@ -45,13 +45,15 @@ THEREFORE: dict[tuple[str, str], str] = {
         "  per-category, which lintarr does not yet read."
     ),
     (queue_liveness.INVARIANT_ID, queue_liveness.ACTION): (
-        "your share-limit action is set to something that does not free\n"
+        "a share-limit action is set to something that does not free\n"
         "  the slot. qBittorrent consults the action only AFTER a limit is\n"
         "  reached, so this defeats the ratio, seeding-time and\n"
         "  inactive-seeding-time limits at once and every limit you have set is\n"
         "  decorative. Super seeding keeps the torrent running; so does any\n"
-        "  value matching no action branch. Set qBittorrent's share-limit\n"
-        "  action to Stop, Remove, or Remove-with-content."
+        "  value matching no action branch. Set it to Stop, Remove, or\n"
+        "  Remove-with-content — in Options > BitTorrent for the global one,\n"
+        "  and on the category itself for any category named above, which\n"
+        "  overrides the global for its own torrents."
     ),
     (queue_liveness.INVARIANT_ID, queue_liveness.OVERRIDE_RATIO): (
         "an indexer sets a negative seed ratio other than -2, so\n"

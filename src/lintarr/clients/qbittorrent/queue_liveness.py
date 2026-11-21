@@ -118,8 +118,9 @@ NEEDS: tuple[str, ...] = (
     # `max_seeding_time` gets no such entry (lintarr#33).
     "qbt.max_ratio",
     "qbt.max_seeding_time_enabled",
-    # The action applied when any gate fires. Declared because an unread value
-    # is genuinely undecidable — `conflict_if` lets an unknown premise dominate,
+    # The action applied when any gate fires, for every torrent whose category
+    # does not name one of its own. Declared because an unread value is
+    # genuinely undecidable — `conflict_if` lets an unknown premise dominate,
     # so `ACTION` SKIPs — and an undeclared fact the predicate reads escapes
     # tests/test_needs_are_load_bearing.py entirely.
     "qbt.max_ratio_act",
@@ -135,6 +136,13 @@ NEEDS: tuple[str, ...] = (
     # lintarr#32 wanted. The `insufficient-permission` case does still SKIP, and
     # is pinned by tests/invariants/test_inactive_seed_time_gate.py rather than
     # by the NEEDS table.
+    #
+    # `qbt.categories` is read twice over, and by two routes that want
+    # different keys from it: `_no_category_sets_its_own_limit` reads each
+    # category's `ratio_limit` and `seeding_time_limit`, and since lintarr#61
+    # `_action_frees_no_slot` reads each category's `share_limit_action`. One
+    # declaration covers both; the pair in tests/test_needs_are_load_bearing.py
+    # exercises the first.
     "qbt.categories",
     # Three separate reads, not one. An indexer's protocol, its enable toggles
     # and its seed criteria each independently flip the verdict, so declaring
@@ -438,18 +446,6 @@ def _as_number(fact: Fact[Any]) -> float | None:
 _RELEASING_ACTIONS: frozenset[int] = frozenset({0, 1, 3})
 
 
-def _action_frees_no_slot(qbt: QbtInstance) -> bool | None:
-    """True when the configured share-limit action leaves the torrent running.
-
-    ``max_ratio_act`` is misleadingly named: it is the **global** action for all
-    three arms, not the ratio arm's. ``effectiveShareLimitAction()`` redirects
-    ``Default`` through ``categoryShareLimitAction()`` to it, and Sonarr sets no
-    per-torrent action, so this one value decides what reaching *any* limit does.
-    """
-    act = _as_limit(qbt.max_ratio_act)
-    return None if act is None else act not in _RELEASING_ACTIONS
-
-
 def _as_limit(fact: Fact[int]) -> int | None:
     """The integer a limit was read as, or ``None`` if it was not read as one.
 
@@ -459,6 +455,143 @@ def _as_limit(fact: Fact[int]) -> int | None:
     if not is_known(fact) or isinstance(fact.value, bool) or not isinstance(fact.value, int):
         return None
     return fact.value
+
+
+#: ``share_limit_action`` strings as qBittorrent's categories endpoint reports
+#: them, mapped to the ``ShareLimitAction`` values ``max_ratio_act`` uses.
+#:
+#: A name this map does not carry — a value a future release adds — resolves to
+#: ``None`` rather than to "frees nothing", and that asymmetry with
+#: ``_RELEASING_ACTIONS`` is deliberate. An unmapped *integer* is a value we
+#: read and whose dispatch we have: it matches no branch, so it frees nothing.
+#: An unmapped *name* is a value we did not manage to read at all, and the
+#: branch it would match is one nobody here has looked at.
+ACTION_BY_NAME = {"Stop": 0, "Remove": 1, "EnableSuperSeeding": 2, "RemoveWithContent": 3}
+
+#: The category action that hands the decision to the global ``max_ratio_act``.
+DEFAULT_ACTION = "Default"
+
+#: The category a torrent with no category is in. ``effective_action`` reads it
+#: as "no category body", which is the global ``max_ratio_act`` verbatim — the
+#: same answer every ``Default`` and every absent category gets.
+UNCATEGORISED = ""
+
+
+def _category_body(qbt: QbtInstance, category: str) -> dict[str, Any] | None:
+    """Category *category*'s body; ``{}`` when there is none, ``None`` if unreadable.
+
+    ``{}`` makes every key absent, which is exactly how "no such category"
+    behaves: inherit the global. ``""`` never needs the map at all.
+    """
+    if category == UNCATEGORISED:
+        return {}
+    if not is_known(qbt.categories):
+        return None
+    categories = qbt.categories.value
+    if categories is None:
+        return {}
+    if not isinstance(categories, dict):
+        return None
+    body = categories.get(category, {})
+    return body if isinstance(body, dict) else None
+
+
+def _category_action(body: dict[str, Any]) -> int | str | None:
+    """The category's own action, ``DEFAULT_ACTION`` to defer, ``None`` if unreadable."""
+    name = body.get("share_limit_action", DEFAULT_ACTION)
+    if name == DEFAULT_ACTION:
+        return DEFAULT_ACTION
+    # A non-string (null or a number) is deliberately unknown, not a value to map.
+    return ACTION_BY_NAME.get(name) if isinstance(name, str) else None
+
+
+def effective_action(qbt: QbtInstance, category: str) -> int | None:
+    """The share-limit action for a torrent in *category*, or ``None`` if unknown.
+
+    A category's named action overrides; ``"Default"``, a missing key, ``""``
+    and a category not in the map all use the global ``max_ratio_act``. This is
+    ``effectiveShareLimitAction()``: the torrent's own action, then the
+    category's, then the global — and Sonarr sets no per-torrent action, so the
+    chain starts at the category.
+
+    Lives here rather than in ``share_limits`` as of lintarr#61, with the rest
+    of this file's measured qBittorrent semantics. ``share_limits`` says in its
+    own docstring that it imports qBittorrent's side rather than re-deriving
+    it, and this was the one piece pointing the other way — which is why
+    ``queue_liveness``'s own ``ACTION`` route could not reach it, and read only
+    the global for two releases.
+    """
+    body = _category_body(qbt, category)
+    if body is None:
+        return None
+    action = _category_action(body)
+    if action == DEFAULT_ACTION:
+        return _as_limit(qbt.max_ratio_act)
+    return action if isinstance(action, int) else None
+
+
+def _frees_no_slot_in(qbt: QbtInstance, category: str) -> bool | None:
+    """True when torrents filed under *category* keep their slot at the limit."""
+    act = effective_action(qbt, category)
+    return None if act is None else act not in _RELEASING_ACTIONS
+
+
+def _category_routes(qbt: QbtInstance) -> tuple[str, ...] | None:
+    """Every named category a torrent can be filed under, or ``None`` if unreadable.
+
+    A null category map is a client with no categories, which is information
+    and not a gap — the same reading ``_no_category_sets_its_own_limit`` gives
+    it, and for the same measured reason. A map that is not a map at all means
+    the read did not give us categories, so which routes exist is unknown.
+    """
+    if not is_known(qbt.categories):
+        return None
+    categories = qbt.categories.value
+    if categories is None:
+        return ()
+    if not isinstance(categories, dict):
+        return None
+    return tuple(name for name in categories if isinstance(name, str))
+
+
+def _action_frees_no_slot(qbt: QbtInstance) -> bool | None:
+    """True when some route a torrent can take leaves it running at the limit.
+
+    ``max_ratio_act`` is misleadingly named: it is the **global** action for all
+    three arms, not the ratio arm's. It is also not the only one.
+    ``effectiveShareLimitAction()`` redirects a torrent's ``Default`` through
+    ``categoryShareLimitAction()``, and a qBittorrent 5.x category carries its
+    own ``share_limit_action`` — so a category naming an action decides for its
+    own torrents and the global never runs for them (lintarr#61).
+
+    **A disjunction over routes, not a single value**, because the wedge
+    argument is per-torrent and the rest of this file's is too: seeders
+    accumulate in ``max_active_torrents`` and one source that never releases is
+    enough. A category set to ``EnableSuperSeeding`` beside a global ``Stop``
+    is such a source — its torrents hold their slots forever while every other
+    route drains — and reading the global alone PASSed it.
+
+    The routes are the global one (``UNCATEGORISED``, which is also what every
+    ``Default`` and every absent category resolves to) and each named category.
+    The global route is **not** conditional on a category deferring to it: a
+    torrent with no category always takes it, so it is always available. That
+    is why the mirror case — a global ``EnableSuperSeeding`` beside a category
+    set to ``Stop`` — stays a FAIL. It is a FAIL about uncategorised torrents
+    rather than about that category, which is a different sentence and not a
+    different verdict, so ``_note_action_routes`` says which route it is.
+    Narrowing it further wants the arr-side fact of which categories are
+    actually in use, which this route does not read; see lintarr#61.
+
+    Three-valued throughout: one route that frees nothing settles the premise
+    however unreadable its neighbours are, which keeps every verdict the global
+    alone already proved.
+    """
+    routes = _category_routes(qbt)
+    if routes is None:
+        # Which categories exist is unknown, so one of them may free nothing —
+        # unless the global route has already settled it.
+        return _any_of((_frees_no_slot_in(qbt, UNCATEGORISED), None))
+    return _any_of(_frees_no_slot_in(qbt, c) for c in (UNCATEGORISED, *routes))
 
 
 def _blocks_a_first_start(limit: Fact[int]) -> bool | None:
@@ -986,6 +1119,11 @@ OVERRIDE_SEED_TIME = "indexer-overrides-the-seed-time-limit"
 #: all) leave it running. That makes every limit on the stack decorative, so
 #: this route names no limit premise — it is the one case where a *better*
 #: configured stack wedges. lintarr#32.
+#:
+#: Per *route* since lintarr#61, not per client: a qBittorrent 5.x category
+#: carries its own `share_limit_action`, which overrides the global for its own
+#: torrents. The premise is still one boolean — some route frees nothing — and
+#: the finding's detail names which. See `_action_frees_no_slot`.
 ACTION = "share-limit-action-frees-no-slot"
 
 #: Every conflict this invariant can report, in no particular order. Published
@@ -1208,14 +1346,70 @@ def _action_conflict(qbt: QbtInstance, queueing: Premise) -> Finding:
     Ordered **last** in ``check``, so no stack that already FAILed changes which
     conflict it reports; the only new verdicts are on stacks every other route
     left at PASS.
+
+    One premise over several routes (lintarr#61), so the finding carries
+    ``_note_action_routes``' sentence: with categories in play, "the action
+    frees no slot" is true of a *set* of torrents, and which set it is decides
+    which setting an operator goes and changes.
     """
-    return conflict_if(
+    finding = conflict_if(
         INVARIANT_ID,
         f"qbittorrent[{qbt.name}]",
         *_slot_premises(qbt, queueing),
         premise("qbt.share_limit_action_frees_no_slot", _action_frees_no_slot(qbt)),
         conflict=ACTION,
     )
+    return _note_action_routes(finding, qbt)
+
+
+#: How each route is named in an ``ACTION`` finding. The global route covers
+#: more than uncategorised torrents — every ``Default`` and every category with
+#: no ``share_limit_action`` key resolves to it — and saying so is the half an
+#: operator cannot get from the premise label.
+_GLOBAL_ROUTE_NAME = "uncategorised torrents and every category that defers to the global"
+
+
+def _route_name(category: str) -> str:
+    return _GLOBAL_ROUTE_NAME if category == UNCATEGORISED else f"category {category}"
+
+
+def _names_its_own_action(qbt: QbtInstance, category: str) -> bool:
+    """True when *category* carries a readable ``share_limit_action`` of its own."""
+    body = _category_body(qbt, category)
+    return body is not None and isinstance(_category_action(body), int)
+
+
+def _routes_that_free_no_slot(qbt: QbtInstance) -> tuple[str, ...]:
+    """Name every route whose effective action leaves the torrent running.
+
+    Two filters, each of which was a misleading sentence on a real finding
+    before it existed:
+
+    - **Settled True only.** A route nobody could read did not contribute to
+      the FAIL — ``_any_of`` reached True without it — so naming it would send
+      an operator to a category that may be configured correctly.
+    - **Categories with an action of their own.** A category resolving to the
+      global is already covered by the global route's name, and listing it
+      again reads as "this category is set wrong" about a category that is set
+      to ``Default``. On the measured homelab stack both categories defer, so a
+      global that frees nothing used to name all three routes for one setting.
+    """
+    own = tuple(c for c in _category_routes(qbt) or () if _names_its_own_action(qbt, c))
+    return tuple(_route_name(c) for c in (UNCATEGORISED, *own) if _frees_no_slot_in(qbt, c) is True)
+
+
+def _note_action_routes(finding: Finding, qbt: QbtInstance) -> Finding:
+    """Say which torrents keep their slot, on an ``ACTION`` FAIL.
+
+    FAIL only. A SKIP already says it could not read what it needed, and no
+    route is settled True on a PASS, so there is nothing to name on either.
+    """
+    if finding.outcome is not Outcome.FAIL:
+        return finding
+    names = _routes_that_free_no_slot(qbt)
+    if not names:
+        return finding
+    return replace(finding, detail=f"the share-limit action frees no slot for {', '.join(names)}")
 
 
 def _note_arrs_that_reported_no_indexers(

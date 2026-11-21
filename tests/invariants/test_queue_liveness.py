@@ -9,7 +9,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from lintarr.clients.qbittorrent.queue_liveness import MAX_REACHABLE_SEED_RATIO, check
+from lintarr.clients.qbittorrent.queue_liveness import (
+    ACTION,
+    MAX_REACHABLE_SEED_RATIO,
+    _no_category_sets_its_own_limit,
+    check,
+)
 from lintarr.facts import Known, Unknown
 from lintarr.models import IndexerFacts
 from lintarr.outcomes import Outcome
@@ -1101,12 +1106,28 @@ def test_a_category_map_that_is_not_a_map_skips_however_empty_it_is():
 
 
 def test_one_readable_category_limit_settles_it_despite_an_unreadable_neighbour():
-    """A proved override releases slots however unparseable the next category is."""
+    """A proved override releases slots however unparseable the next category is.
+
+    Asserted on the premise rather than on the verdict since lintarr#61, and
+    that is a narrowing of the test rather than of the behaviour it guards.
+    `ACTION` now reads each category's `share_limit_action` as well, and an
+    unparseable category body is a category whose *action* nobody can read
+    either — so the surviving verdict is that route's honest SKIP, on a
+    question this test was never about. What it is about is the limits
+    premise, where `_any_of` must not lose the override `tv` already proved;
+    reading the unparseable neighbour as "inherits" there would put this stack
+    back at FAIL.
+    """
     mixed = {
         "tv": {"ratio_limit": 2.0, "seeding_time_limit": -2},
         "films": "unparseable",
     }
-    assert check(qbt_with(**(WEDGE | {"categories": mixed})), NO_GOALS).outcome is Outcome.PASS
+    qbt = qbt_with(**(WEDGE | {"categories": mixed}))
+    assert _no_category_sets_its_own_limit(qbt) is False
+    finding = check(qbt, NO_GOALS)
+    assert finding.outcome is Outcome.SKIP
+    assert finding.conflict == ACTION
+    assert [p.label for p in finding.premises] == ["qbt.share_limit_action_frees_no_slot"]
 
 
 # --- Limits ------------------------------------------------------------------
