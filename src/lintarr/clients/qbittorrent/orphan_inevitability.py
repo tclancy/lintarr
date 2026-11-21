@@ -6,12 +6,14 @@ download client ``D`` that is ``C`` (``lintarr.checks.arr_clients``, the rule
 can be reached for ``A``'s torrents and the action qBittorrent then takes, with
 what ``A`` does about it, leaves the files on disk. See the spec's "The check".
 
-How the arr removes a download (Sonarr ``v5-develop``, read 2026-11-19; Radarr
-shares the shape): only with Remove Completed on, only for torrents still in its
-own category, and only when the limit that stopped the torrent is the torrent's
-own (an indexer goal) or an inherited global. A category's own limit counts only
-when the same-arm global, which the arr checks for a ``-2`` torrent, is
-reachable at or below it (``share_limits``).
+How the arr removes a download (Sonarr ``v4.0.20.3014``, the build homelab
+runs; Radarr ``v6.4.4.10685`` carries the same members byte-identical): only
+with Remove Completed on, only for torrents still in its own category, and only
+when the limit that stopped the torrent is the torrent's own (an indexer goal)
+or an inherited global. A category's own limit counts only when the same-arm
+global, which the arr checks for a ``-2`` torrent, is reachable at or below it
+(``share_limits``). One version per claim, and the read is quoted in
+``docs/measurements/2026-11-21-sonarr-removal-rule-versions.md``.
 
 The decision reads the action first. Action 3 (RemoveWithContent) settles the
 pair without reading reachability, so an input only reachability needs can
@@ -19,7 +21,10 @@ never turn it into a SKIP.
 
 Known limits (spec "Known limits"): an indexer pinned to another client is still
 counted; parent categories are not followed; older arr builds that miss
-qBittorrent 5's ``stoppedUP`` are not modelled; Cleanuparr-style external
+qBittorrent 5's ``stoppedUP`` are not modelled; Sonarr ``v5.0.0.2997``'s
+season-pack goal toggle and season-pack ratio are not modelled, which is the
+one place the removal reading differs by version (``_season_pack_arm``);
+Cleanuparr-style external
 cleanup is not seen and FAILs honestly; an arr too old to report top-level
 ``removeCompletedDownloads`` reads Remove Completed as unknown, so a Stop action
 with a reachable limit SKIPs on every strict run; a global inactive limit armed
