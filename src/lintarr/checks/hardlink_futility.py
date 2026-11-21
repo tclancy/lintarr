@@ -26,7 +26,11 @@ Axioms (spec "Axioms"), each with its status:
 - qBittorrent's empty/relative category ``savePath`` resolution. Assumed from
   source.
 - Sonarr/Radarr apply the first matching remote path mapping in API order.
-  Assumed from source (``RemotePathMappingService``).
+  Assumed from source (``RemotePathMappingService``). Its edges -- Windows
+  paths matching case-insensitively, a ``/`` remote path swallowing the whole
+  path, an unrooted remote path matching nothing -- are read from Sonarr's own
+  ``OsPath``, run at a pinned release tag:
+  ``docs/measurements/2026-11-21-arr-path-mapping-edges.md``.
 
 Both tests live in ``tests/conformance/test_hardlink_exdev.py``.
 

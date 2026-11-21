@@ -115,6 +115,26 @@ For one download-client instance `C`, over every collected arr `A`:
    the raw string, *before* the POSIX check, so a Windows qBittorrent
    (`C:\Downloads\tv`) mapped to a Linux arr path still works. With no matching
    mapping the path is unchanged, which is what the arr itself does.
+
+   Four edges of that are read off Sonarr's own `OsPath`, run at a pinned
+   release tag in
+   [`docs/measurements/2026-11-21-arr-path-mapping-edges.md`](../../measurements/2026-11-21-arr-path-mapping-edges.md)
+   (#68), rather than guessed at:
+
+   - A **Windows** path matches case-insensitively, and `/` and `\` are one
+     separator, so `c:\downloads\tv` matches a mapping for `C:\Downloads\`. A
+     **POSIX** path matches case-sensitively: `/DL` and `/dl` are two
+     directories.
+   - A `remotePath` of `/` **swallows the path**: `/` → `/mnt` leaves the arr
+     looking at `/`, not `/mnt/data`, because the arr subtracts the mapping's
+     remote path and `/` has no components to subtract. Faithful, not tidy.
+   - An **unrooted** path on either side never matches, so an empty or
+     relative `remotePath` applies to nothing.
+   - A **blank `localPath`** translates to `''`, which fails the POSIX check
+     and is reported unknown. This is the single deliberate divergence: the
+     arr's API refuses a blank `localPath`, and its arithmetic would otherwise
+     hand back `/tv` for `/downloads/tv` -- an absolute path that reads as real
+     and would be placed on a mount.
 4. **Which mount is it on?** The longest `A.mounts` entry that is a
    component-wise prefix of the path. Do the same for each of `A`'s root folders
    whose `accessible` is true. A root folder whose `accessible` is false is
@@ -239,7 +259,7 @@ indexers.
 | Within one mount point, `link(2)` succeeds on mergerfs/btrfs subvolumes | **assumed false-negative risk**: documented limitation |
 | Arr `diskspace` lists every mount a download path can lie on | assumed (the arr omits some fs types, e.g. network mounts, so a download on an unlisted mount nested inside a listed one reads as the parent mount) |
 | qBittorrent's empty/relative category `savePath` resolution | assumed from source |
-| Sonarr/Radarr apply the first matching remote path mapping in API order | assumed from source (`RemotePathMappingService`) |
+| Sonarr/Radarr apply the first matching remote path mapping in API order | assumed from source (`RemotePathMappingService`); its case, root-path, unrooted and blank-`localPath` edges measured by running Sonarr's `OsPath` (`docs/measurements/2026-11-21-arr-path-mapping-edges.md`) |
 
 **Conformance test** (in the nightly suite, `container` marker; seconds, no
 services): `docker run` an Alpine container with two bind mounts of two

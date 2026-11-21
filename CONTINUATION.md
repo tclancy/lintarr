@@ -26,6 +26,56 @@ one pinned Sonarr version per claim. lintarr#60 is merged (lintarr#73).
 Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2 slices
 1 and 2 are merged, and the nightly alert is armed.
 
+**State:** `IN PROGRESS:` lintarr#68 on
+`claude/68-paths-translate-windows-prefix-case-empt` — `translate`'s three
+parked edges (Windows case, a blank local path, a `/` mapping) are read off
+Sonarr's own `OsPath` and pinned; committed and awaiting review. Everything
+else as above: `hardlink-futility` (lintarr#57) and `orphan-inevitability`
+(lintarr#58) are merged and deployed, lintarr#70 is merged (main 6c436c3),
+pluggable backends are merged and deployed (lintarr#56, homelab#692), and P2
+slices 1 and 2 are merged with the nightly alert armed.
+
+## #68: remote path mapping, at the edges `translate` was guessing
+
+- **The three parked edges** (from the #57 Task 3 review): the remote-path
+  prefix match was case-sensitive, so a Windows qBittorrent reporting
+  `c:\downloads\tv` never matched a mapping for `C:\Downloads\`; a blank
+  `localPath` produced `/tail`, an absolute path that reads as real; and a
+  remote `/` mapping did something nobody had read.
+- **What settled it:** running the arr's own code, not reading it. Sonarr is
+  GPL-3.0, so `docs/68-ospath-probe.sh` fetches `OsPath.cs` at a pinned release
+  tag, compiles it with `docs/68-ospath-probe.cs` (the body of
+  `RemapRemoteToLocal` and nothing else) and prints what the mapping arithmetic
+  does at each edge. `OsPath.cs` is byte-identical on Sonarr `v5.0.0.2997` and
+  Radarr `v6.4.4.10685` and one space different on Sonarr `v4.0.20.3014`, and
+  the probe prints the same lines on all three. Receipts:
+  `docs/measurements/2026-11-21-arr-path-mapping-edges.md`.
+- **#68's own assumption about `/` was wrong, and that is the headline.** A `/`
+  → `/mnt` mapping does **not** turn `/data` into `/mnt/data`. The arr
+  subtracts the mapping's remote path from the client's path; `/` has no
+  components to subtract, so the subtraction hands back a rooted `/`, and a
+  rooted right-hand side wins the join outright. Every path the client reports
+  becomes `/`. lintarr now does the same, and the test says loudly that it is
+  not a bug to tidy. Before, lintarr invented `/mnt/downloads/tv` and FAILED a
+  stack over a path that arr never computes.
+- **The one deliberate divergence:** a blank `localPath` translates to `''`,
+  not the arr's `/tv`. The arr's API refuses a blank `localPath`
+  (`IsValidPath`, `MappedNetworkDriveValidator`, `PathExistsValidator`), so it
+  takes a hand-edited database to reach, and copying the arithmetic would place
+  a file on a mount from a mapping that names no directory. Measured: with the
+  old code that invented path shared a mount with the root folder and
+  `hardlink-futility` **PASSED** a stack it had not read.
+- **Also fixed on the way:** an unrooted or empty `remotePath` now matches
+  nothing (`OsPath.Contains` requires both sides rooted). Without it the
+  root-path branch would fire on an empty `remotePath` and swallow every path.
+- **Not modelled, on purpose:** a `remotePath` of `\\` (a UNC root) makes the
+  arr throw, because the remainder is a Windows path and the local path is
+  POSIX. lintarr returns `/` as for any root mapping; named in `paths.py` and
+  in the measurement.
+- **Walkthrough:** `docs/68-path-mapping-edges.md` — the three scenarios before
+  and after, through the real CLI against a stub stack, plus the probe's output
+  and the suite green. `showboat verify` on it exits 0.
+
 ## #64: one pinned Sonarr version per verified claim
 
 - **The symptom:** `share_limits`'s module docstring said the removal rule was
