@@ -20,10 +20,45 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
 3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
-`IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
-— `..` in a path no longer reads as a mount. Pluggable backends are merged and
-deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the
-nightly alert is armed.
+`IN PROGRESS:` lintarr#64 on
+`claude/64-share-limits-cite-one-sonarr-version-per` — `share_limits` now cites
+one pinned Sonarr version per claim. lintarr#60 is merged (lintarr#73).
+Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2 slices
+1 and 2 are merged, and the nightly alert is armed.
+
+## #64: one pinned Sonarr version per verified claim
+
+- **The symptom:** `share_limits`'s module docstring said the removal rule was
+  read on Sonarr `v5-develop`, while `_season_pack_arm` two hundred lines down
+  said `main` (v4) — and the #58 PR body and spec said `v5-develop` too. Both
+  reads were made on 2026-11-19 and both were probably true, which is exactly
+  why neither told a reader which version the check is right about. Flagged by
+  the PR review bot on #58.
+- **What settled it:** re-read on **release tags**, not branches, the way
+  `docs/measurements/2026-10-05-sonarr-seed-ratio-range.md` already does.
+  `CanBeRemoved`, `HasReachedSeedLimit` and the seeding-time and inactive
+  siblings are **byte-identical** on Sonarr `v4.0.20.3014` (homelab's build and
+  the latest stable release), Sonarr `v5.0.0.2997` and Radarr
+  `v6.4.4.10685`. So that claim needs one citation, and it is v4 — the version
+  the check runs against.
+- **Where v5 really differs, and it is only here:** the season pack. v4 is
+  `fullSeason ? SeasonPackSeedTime : SeedTime` with the ratio always
+  `SeedRatio`. v5 adds a per-indexer `SeasonPackSeedGoal` toggle **and** a
+  `SeasonPackSeedRatio`, and gates both the time and the ratio on the toggle —
+  which defaults to `UseStandardSeedGoal = 0`, so a default-configured v5
+  season pack uses the ordinary `seedTime`/`seedRatio`, the opposite of v4.
+- **Not modelled, on purpose:** lintarr collects no `seasonPackSeedGoal`, so
+  against a v5 arr `_season_pack_arm` can read the wrong field and v5's
+  season-pack ratio is a fourth arm nothing reads. Closing either is a
+  collection change plus a v5 arr to read from; homelab runs v4, so neither gap
+  is live. Named in `share_limits`, `orphan_inevitability` and the spec's
+  "Known limits".
+- **Receipts:** `docs/measurements/2026-11-21-sonarr-removal-rule-versions.md`
+  (the C# quoted, the identical-member table, and the pinned curl commands to
+  re-derive it) and `docs/64-one-sonarr-version-per-claim.md` (the walkthrough:
+  the citations before and after, and the suite green).
+- **No behaviour change.** Nothing outside docstrings and docs moved; the
+  2855-test suite is unchanged and green.
 
 ## #60: a `..` segment makes a path unplaceable, not a verdict
 
@@ -69,8 +104,10 @@ and the nightly alert is armed.
 - **The fix:** collect `max_inactive_seeding_time` and send the inactive arm
   through the one shared `_global_covers`. Verified against source before
   coding: Sonarr's `HasReachedInactiveSeedingTimeLimit` has the same
-  own-limit-then-global shape as its siblings (`develop` and `main`, read
-  2026-11-21), and qBittorrent publishes both keys, deriving the flag as
+  own-limit-then-global shape as its siblings (read on Sonarr `v4.0.20.3014`,
+  and byte-identical on `v5.0.0.2997` — see
+  `docs/measurements/2026-11-21-sonarr-removal-rule-versions.md`), and
+  qBittorrent publishes both keys, deriving the flag as
   `(shareLimits.inactiveSeedingTimeLimit >= 0)` and clamping the value to `-1`
   (`appcontroller.cpp`, `sessionimpl.cpp`, `sharelimits.h` on `master`).
 - **Why the flag survives beside the value:** `_not_inactive_gate` resolves a
