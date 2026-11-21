@@ -281,6 +281,32 @@ def test_an_untranslated_non_posix_save_path_names_it_once():
     assert finding.detail == ("sonarr[tv]: save path 'C:\\\\Downloads\\\\tv' is not absolute POSIX")
 
 
+def test_a_save_path_with_a_parent_segment_is_unknown_not_a_cross_mount_fail():
+    """``/downloads/../media/tv`` really sits on /media beside the root folder, so a
+    hardlink there works. Compared lexically it reads as /downloads: a false FAIL."""
+    qbt = _client(categories={"tv": {"name": "tv", "savePath": "/downloads/../media/tv"}})
+    arr = _split_arr(
+        mounts=("/", "/downloads", "/media"),
+        root_folders=(RootFolder("/media/tv/shows", True),),
+    )
+    finding = check(qbt, (arr,))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: save path '/downloads/../media/tv' contains a .. segment, "
+        "so the mount it is on cannot be read"
+    )
+
+
+def test_a_root_folder_with_a_parent_segment_is_unknown():
+    arr = _split_arr(root_folders=(RootFolder("/tv/../downloads/shows", True),))
+    finding = check(_split_qbt(), (arr,))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: root folder '/tv/../downloads/shows' contains a .. segment, "
+        "so the mount it is on cannot be read"
+    )
+
+
 def test_unknown_in_one_triple_does_not_hide_a_fail_in_another():
     unknown = arr_with(homelab_arr("sonarr", "anime"), mounts=_UNREAD)
     finding = check(_split_qbt(), (unknown, _split_arr()))

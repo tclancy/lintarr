@@ -3,10 +3,33 @@
 **Last updated:** 2026-11-21 (UTC)
 **State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
-passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#70 on
-`claude/70-pre-push-gate-is-red-on-python-3-14-10-t` — a test-only fix for the
-3.14.10 pre-push red. Pluggable backends are merged and deployed (lintarr#56,
-homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
+passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
+`IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
+— `..` in a path no longer reads as a mount. Pluggable backends are merged and
+deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the
+nightly alert is armed.
+
+## #60: a `..` segment makes a path unplaceable, not a verdict
+
+- **The symptom:** `posix_abs` normalised slashes but kept `..`, and
+  `mount_of` compares with `PurePosixPath.is_relative_to`, which is lexical.
+  A save path `/downloads/../media/tv` was placed on mount `/downloads` though
+  it reaches `/media`. Measured both directions on 6c436c3: a **FAIL** over a
+  pair that really shares a mount, and a **PASS** over a pair that does not.
+- **The fix:** refuse `..` rather than resolve it. Resolving lexically
+  (`posixpath.normpath`) is the other option the issue offered, and it is right
+  only when no earlier component is a symlink — which the string cannot say.
+  Unknown is the honest answer, so the triple is unknown and the finding SKIPs.
+  `posix_abs_or_reason` carries the clause the SKIP detail prints; `posix_abs`
+  is a thin reader of it.
+- **Why the detail changed:** the old wording for an unparseable path was
+  "is not absolute POSIX", which is false of `/downloads/../media/tv`. The new
+  clause names the `..`.
+- **Mutation round** (whole suite, control between every mutant, in a throwaway
+  worktree): dropping the guard, resolving with `normpath`, testing `..` as a
+  substring, and swapping the reason text are all killed. Receipts in
+  `docs/60-dotdot-paths-are-unplaceable.md`.
+- **Nothing on homelab changes:** real arr and qBittorrent paths have no `..`.
 
 ## #70: the deep-JSON test no longer raises on 3.14.10
 
