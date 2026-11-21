@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 import pytest
 
 from lintarr.checks.arr_clients import NO_ARR_SENDS_HERE
+from lintarr.clients.base import ArrDependency
 from lintarr.clients.qbittorrent import BACKEND, orphan_inevitability
 from lintarr.clients.qbittorrent.orphan_inevitability import (
     INVARIANT_ID,
@@ -345,7 +346,12 @@ def test_failed_arr_does_not_hide_a_fail():
 def test_backend_registers_the_check_after_queue_liveness():
     assert BACKEND.checks[-1] is orphan_inevitability.check
     assert len(BACKEND.checks) == 2
-    assert BACKEND.arr_dependent == {INVARIANT_ID: PREMISE_NOTHING_RECLAIMS}
+    assert BACKEND.arr_dependent == {
+        INVARIANT_ID: ArrDependency(
+            PREMISE_NOTHING_RECLAIMS,
+            "an arr could not be read, so its downloads could not be checked",
+        )
+    }
 
 
 def test_module_exposes_the_names():

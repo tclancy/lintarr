@@ -44,6 +44,15 @@ cycle.
   line is looked up in the producing backend's table only (the kind in its
   `<kind>[<name>]` label), so reusing another backend's invariant id or
   conflict name cannot pick up that backend's text.
+- `arr_dependent`: which of this backend's invariant ids need arr data, and what
+  their SKIP says when an arr could not be read. It may be empty. The value is
+  an `ArrDependency(premise, detail)`: `run` turns that check's PASS or N/A into
+  a SKIP carrying `premise`, and prints `detail`. Write the sentence your own
+  check needs — `hardlink-futility` could not check *imports*,
+  `orphan-inevitability` could not check *downloads* — because nothing else
+  knows what your check reads the arr for. The ids must not appear in
+  `lintarr.checks.SHARED_ARR_DEPENDENT` either: a shared check already owns
+  those, and `run` refuses the pair rather than pick one.
 
 ## Credential rules
 

@@ -17,6 +17,7 @@ from dataclasses import replace
 
 from lintarr import checks
 from lintarr.clients import BACKENDS
+from lintarr.clients.base import ArrDependency
 from lintarr.collect.arr import ARR_KINDS, ARR_LABEL_KIND
 from lintarr.config import LintarrConfig
 from lintarr.models import ClientInstance, ErrorRow, StackFacts
@@ -144,41 +145,48 @@ def _resolve_missing_arrs(
     )
 
 
-#: The failed-arr SKIP detail for the shared checks (hardlink-futility), byte-identical.
-_SHARED_DETAIL = "an arr could not be read, so its imports could not be checked"
-_ARR_DEPENDENT_DETAIL = "an arr could not be read, so its downloads could not be checked"
+def _arr_dependent(instance: ClientInstance) -> Mapping[str, ArrDependency]:
+    """Invariant id -> its failed-arr SKIP, for this client's backend and the shared checks.
+
+    An id in both tables is refused rather than merged. ``|`` answered the
+    clash silently and in the shared table's favour, which drops a backend's
+    own premise and wording from a finding its own check produced; there is no
+    right answer to pick, because only one of the two checks ran.
+    """
+    own = BACKENDS[instance.kind].arr_dependent
+    clash = sorted(own.keys() & checks.SHARED_ARR_DEPENDENT.keys())
+    if clash:
+        raise ValueError(
+            f"backend {instance.kind!r} reuses shared invariant id(s) in arr_dependent: "
+            f"{', '.join(clash)}"
+        )
+    return own | checks.SHARED_ARR_DEPENDENT
 
 
-def _arr_dependent(instance: ClientInstance) -> Mapping[str, str]:
-    """Invariant id -> failed-arr SKIP premise, for this client's backend and the shared checks."""
-    return BACKENDS[instance.kind].arr_dependent | checks.SHARED_ARR_DEPENDENT
-
-
-def _resolve_failed_arr(finding: Finding, facts: StackFacts, premise: str) -> Finding:
+def _resolve_failed_arr(finding: Finding, facts: StackFacts, dependency: ArrDependency) -> Finding:
     """An arr-dependent PASS or N/A is a SKIP when an arr failed to collect.
 
     The check never sees collection errors, and an arr that could not be read
     cannot be ruled out. A FAIL found elsewhere stands, and so does a SKIP the
-    check reached itself. *premise* is the label the SKIP carries.
+    check reached itself. *dependency* is the premise the SKIP carries and the
+    sentence it prints, both named by whichever check this finding came from.
     """
     if finding.outcome not in (Outcome.PASS, Outcome.NOT_APPLICABLE):
         return finding
     if not _an_arr_failed(facts):
         return finding
-    shared = finding.invariant in checks.SHARED_ARR_DEPENDENT
-    detail = _SHARED_DETAIL if shared else _ARR_DEPENDENT_DETAIL
     return replace(
         finding,
         outcome=Outcome.SKIP,
-        premises=(Premise(premise, None),),
-        detail=detail,
+        premises=(Premise(dependency.premise, None),),
+        detail=dependency.detail,
     )
 
 
 def _resolve(
     finding: Finding,
     facts: StackFacts,
-    arr_dependent: Mapping[str, str],
+    arr_dependent: Mapping[str, ArrDependency],
     *,
     declared: frozenset[str],
 ) -> Finding:

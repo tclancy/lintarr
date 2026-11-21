@@ -7,6 +7,7 @@ from, or every persisting finding re-pages once.
 
 import httpx
 
+from lintarr import checks
 from lintarr.clients import BACKENDS
 from lintarr.clients.qbittorrent import BACKEND
 from lintarr.collect.stack import collect_stack
@@ -68,3 +69,20 @@ def test_a_failing_qbittorrent_keeps_its_error_label():
     )
     facts = collect_stack(cfg, transport=httpx.MockTransport(refuse))
     assert [(e.label, e.kind) for e in facts.errors] == [("qbittorrent[main]", "unreachable")]
+
+
+def test_no_backend_reuses_a_shared_arr_dependent_invariant_id():
+    """The two failed-arr tables are merged per client, so their keys must not meet.
+
+    A backend that names an id the shared checks already own has two
+    ``ArrDependency`` values for one finding, and the merge used to take the
+    shared one — printing a sentence about a check that never ran. The
+    disjointness is the registration rule; ``run._arr_dependent`` refuses the
+    pair if a future backend breaks it.
+    """
+    shared = set(checks.SHARED_ARR_DEPENDENT)
+    # Reachability: both sides empty would make every intersection below vacuous.
+    assert shared == {"hardlink-futility"}
+    assert set(BACKENDS) == {"qbittorrent"}
+    for kind, backend in BACKENDS.items():
+        assert set(backend.arr_dependent) & shared == set(), kind
