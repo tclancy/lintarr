@@ -27,10 +27,27 @@ category's value has that ratio or seeding time, and a stopped torrent's
 counters stop accruing. So the arr removes it exactly when the same-arm global
 is reachable and at or below the category's value (``_global_covers``). An
 unreadable global flag or value leaves that arm's recognition unknown
-(``Reach.OWN_UNSURE``), which only ``can_fire_unrecognised`` reads. Known
-limit: the global inactive-seeding-time *value* is not collected, so a
-category's own inactive limit is always unrecognised — possibly a false FAIL
-when the global inactive limit is armed at or below it.
+(``Reach.OWN_UNSURE``), which only ``can_fire_unrecognised`` reads.
+
+**All three arms read that one rule, the inactive one included** (lintarr#59).
+``HasReachedInactiveSeedingTimeLimit`` has the same shape as its siblings —
+the torrent's own limit when it is ``>= 0``, else ``config.MaxInactiveSeedingTime``
+when the torrent's limit is ``-2`` — and qBittorrent publishes
+``max_inactive_seeding_time`` beside its flag, deriving the flag as
+``(shareLimits.inactiveSeedingTimeLimit >= 0)`` and clamping the value with
+``std::max(..., NO_SEEDING_TIME_LIMIT)``, exactly as for the seeding-time pair
+(``appcontroller.cpp``, ``sessionimpl.cpp`` and ``sharelimits.h`` on
+qBittorrent ``master``, read 2026-11-21). So the flag alone still answers
+reachability, and the value answers coverage.
+
+Known limit: a global inactive limit armed *above* the category's value reads
+as unrecognised. That is the conservative half of a question this project has
+not measured — the arr compares ``now - last_activity``, which unlike a ratio
+or an accumulated seeding time keeps growing after qBittorrent stops the
+torrent, so the global may well be reached later and the arr remove it then.
+Whether a stopped torrent keeps reporting a growing ``last_activity`` gap is
+unmeasured here, so that case stays a possible false FAIL rather than becoming
+a guessed PASS.
 
 **qBittorrent's side** is ``queue_liveness``'s measured semantics, imported
 rather than re-derived: ``-2`` alone redirects (torrent → category → global),
@@ -209,8 +226,9 @@ def _global_seed_time_covers(qbt: QbtInstance, own: float) -> bool | None:
 
 
 def _global_inactive_covers(qbt: QbtInstance, own: float) -> bool | None:
-    """Never: the global inactive value is not collected (a known limit)."""
-    return False
+    return _global_covers(
+        _global_inactive_reachable(qbt), _as_number(qbt.max_inactive_seeding_time), own
+    )
 
 
 def _own_reach(covered: bool | None) -> Reach:
