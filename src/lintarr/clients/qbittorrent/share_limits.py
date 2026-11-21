@@ -10,15 +10,23 @@ on behalf of one arr:
 - ``can_fire_unrecognised``: whether some limit the arr does **not** recognise
   can be reached.
 
-**What the arr recognises**, read from Sonarr ``v5-develop`` (Radarr shares
-the shape): ``HasReachedSeedLimit`` and its siblings read the torrent's own
-limit when it is ``>= 0``, and only when the torrent's limit is ``-2`` do they
-read the **global** preferences. They never read a category's limits. Indexer
-seed criteria become the torrent's own limits when the arr adds it, and for a
-sonarr season pack ``seasonPackSeedTime`` alone is the seeding-time limit
-(never ``seedTime``; see ``_season_pack_arm``), so season packs are an arm of
-their own. So an arm reached through an indexer goal or an inherited global is
-recognised.
+**What the arr recognises**, read from Sonarr ``v4.0.20.3014`` — the build
+homelab runs, and Sonarr's latest stable release. ``HasReachedSeedLimit`` and
+its siblings read the torrent's own limit when it is ``>= 0``, and only when
+the torrent's limit is ``-2`` do they read the **global** preferences. They
+never read a category's limits. Indexer seed criteria become the torrent's own
+limits when the arr adds it, and for a sonarr season pack
+``seasonPackSeedTime`` alone is the seeding-time limit (never ``seedTime``; see
+``_season_pack_arm``), so season packs are an arm of their own. So an arm
+reached through an indexer goal or an inherited global is recognised.
+
+That rule is one read on one version, and v4 is the only version this module
+claims it of. Radarr ``v6.4.4.10685`` and Sonarr ``v5.0.0.2997`` carry
+``CanBeRemoved`` and all three ``HasReached*`` members byte-identical to the v4
+build, so naming a second version would add nothing — and the one place v5
+*does* diverge is the season pack, named in ``_season_pack_arm``. Receipts,
+with the C# quoted and the pinned tags to re-read it from:
+``docs/measurements/2026-11-21-sonarr-removal-rule-versions.md``.
 
 An arm reached through a category's own limit is recognised only when the
 **same-arm global covers it**. The torrent's own limit is still ``-2``, so the
@@ -257,15 +265,24 @@ def _seed_time_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Re
 def _season_pack_arm(qbt: QbtInstance, indexer: IndexerFacts, category: str) -> Reach | None:
     """A sonarr season pack's seed time, which is ``seasonPackSeedTime`` alone.
 
-    Verified in Sonarr ``main`` (v4) ``src/NzbDrone.Core/Indexers/SeedConfigProvider.cs``,
-    read 2026-11-19: ``var seedTime = fullSeason ? seedCriteria.SeasonPackSeedTime
+    Verified on Sonarr ``v4.0.20.3014`` — the same single version the module
+    docstring names — in ``src/NzbDrone.Core/Indexers/SeedConfigProvider.cs``:
+    ``var seedTime = fullSeason ? seedCriteria.SeasonPackSeedTime
     : seedCriteria.SeedTime`` and the limit is set only ``if (seedTime.HasValue)``.
     So a season pack never uses ``seedTime``: unset, the torrent keeps ``-2`` and
     defers to the category and then the global, like any other criterion. Its
     ratio is the ordinary ``seedRatio``, which ``_ratio_arm`` already covers.
 
-    Known limit: Sonarr ``v5-develop`` adds a ``SeasonPackSeedGoal`` toggle and a
-    ``SeasonPackSeedRatio``. Neither is modelled.
+    Known limit — **this is where v5 differs, and it is not modelled.** On
+    Sonarr ``v5.0.0.2997`` the two season-pack fields sit behind a new
+    per-indexer ``SeasonPackSeedGoal`` toggle, and a new ``SeasonPackSeedRatio``
+    joins them: ``(fullSeason && useSeasonPackSeedGoal) ? SeasonPackSeedTime
+    : SeedTime``, and the same condition on the ratio. The toggle defaults to
+    ``UseStandardSeedGoal = 0``, so a default-configured v5 season pack uses the
+    ordinary ``seedTime`` and ``seedRatio`` — the opposite of v4. lintarr
+    collects no ``seasonPackSeedGoal``, so against a v5 arr this arm can read
+    the wrong field, and v5's season-pack ratio is a fourth arm nothing reads.
+    Homelab runs v4, so neither gap is live here.
     """
     return _seed_time_through(qbt, indexer.season_pack_seed_time, category)
 
