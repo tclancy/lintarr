@@ -492,3 +492,31 @@ def test_default_action_minus_one_is_named_in_the_detail():
     assert finding.detail == (
         "sonarr[tv] (category tv): a limit can fire; action is Default, which removes nothing"
     )
+
+
+# --- #63: a PASS detail must not claim a limit fires when none can ------------
+
+
+def test_stop_with_arr_removal_and_no_limit_at_all_says_seeding_is_unlimited():
+    """Remove Completed is on, but nothing can ever stop a torrent.
+
+    The old line said "qBittorrent stops at the limit and the arr removes
+    completed downloads", which reads as a limit firing. Nothing fires here.
+    """
+    qbt = _qbt(max_ratio_act=0, **GLOBALS_OFF)
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == "sonarr[tv]: no limit can fire; seeding is unlimited"
+
+
+def test_stop_with_arr_removal_keeps_the_stop_line_when_a_limit_does_fire():
+    """The twin, so the two reasons stay mapped to their own lines.
+
+    The homelab's global ratio and seeding time are on, so a limit fires and
+    the arr recognises it.
+    """
+    finding = check(_qbt(max_ratio_act=0), (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == (
+        "sonarr[tv]: qBittorrent stops at the limit and the arr removes completed downloads"
+    )
