@@ -60,6 +60,26 @@ Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2 slices
 - **No behaviour change.** Nothing outside docstrings and docs moved; the
   2855-test suite is unchanged and green.
 
+## #65: a bad category names the field it read
+
+- **The symptom:** `_optional_str_field` formatted its `bad-response` from
+  `names[0]`, the first *candidate* field, not the field it found. The category
+  candidates are `("tvCategory", "movieCategory")`, so a Radarr serving junk in
+  `movieCategory` was reported as `'tvCategory' is not a string` — pointing the
+  operator at a field Radarr does not have. Cosmetic; the refusal itself was
+  right.
+- **The fix:** `_named_client_field` returns `(name, value)` for the first
+  candidate present, and `_optional_str_field` formats from that name.
+  `_client_field` stays as the value-only reader its other two callers want, so
+  nothing else moved.
+- **Why not `names[-1]`:** it would name `movieCategory` on a Sonarr instead —
+  the same bug mirrored. The new test is parametrised over both flavours and
+  also asserts the *other* candidate's name is absent, so a message hedging by
+  naming both would fail too. Measured: the `names[-1]` mutation turns the
+  Sonarr case red.
+- **Receipts:** `docs/65-bad-category-names-its-field.md`, real `lintarr check`
+  runs against a stub Radarr on the base commit and on this branch.
+
 ## #60: a `..` segment makes a path unplaceable, not a verdict
 
 - **The symptom:** `posix_abs` normalised slashes but kept `..`, and
