@@ -139,15 +139,28 @@ def _stop_without_arr_removal(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -
     return _fires(pair, NOTHING_RECLAIMS, can_fire(qbt, arr, pair.category), why)
 
 
+def _arr_reclaims(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -> Verdict:
+    """No unrecognised limit fires: say which of the two reasons settled it.
+
+    Either no limit can fire at all, or one can and it is a limit the arr
+    recognises. Both are PASS, but only the second involves a limit firing, so
+    the first borrows the unlimited-seeding line rather than claiming a stop
+    that cannot happen.
+    """
+    if can_fire(qbt, arr, pair.category) is False:
+        return _fires(pair, NOTHING_RECLAIMS, False, "")
+    return Verdict(
+        False,
+        (NOTHING_RECLAIMS,),
+        f"{pair.label}: qBittorrent stops at the limit and the arr removes completed downloads",
+    )
+
+
 def _stop_with_arr_removal(qbt: QbtInstance, arr: ArrInstance, pair: _Pair) -> Verdict:
     """Only a category's own limit the global does not cover leaves files."""
     fires = can_fire_unrecognised(qbt, arr, pair.category)
     if fires is False:
-        return Verdict(
-            False,
-            (NOTHING_RECLAIMS,),
-            f"{pair.label}: qBittorrent stops at the limit and the arr removes completed downloads",
-        )
+        return _arr_reclaims(qbt, arr, pair)
     why = (
         f"action is Stop and the limit that fires is category {pair.category}'s own, "
         "which the arr does not check"
