@@ -189,12 +189,21 @@ _PREF_KEYS = (
     "max_ratio_act",
     "max_seeding_time_enabled",
     "max_seeding_time",
-    # The third release gate. `appcontroller.cpp` derives it as
-    # `globalMaxInactiveSeedingMinutes() >= 0`, which is exactly the condition
-    # `processTorrentShareLimits`' third arm fires on, so the flag alone is the
-    # whole predicate and the paired `max_inactive_seeding_time` value would be
-    # a fact nothing reads — the defect lintarr#32 was filed about.
+    # The third release gate. `appcontroller.cpp` derives the flag as
+    # `(shareLimits.inactiveSeedingTimeLimit >= 0)`, which is exactly the
+    # condition `processTorrentShareLimits`' third arm fires on, so the flag
+    # alone decides whether that gate can ever fire (`_not_inactive_gate`).
+    #
+    # The value answers a second question, and until lintarr#59 nothing asked
+    # it: an arr reads the GLOBAL inactive limit for a torrent whose own limit
+    # is `-2`, so a category's own inactive limit is one the arr recognises
+    # only when the global sits at or below it. That is the same coverage rule
+    # the ratio and seeding-time pairs already use, and
+    # `share_limits._global_inactive_covers` could not apply it from the flag
+    # alone. Read only when the flag is on, in the order `_no_global_ratio`
+    # explains — so a pre-4.6 client that reports neither key still decides.
     "max_inactive_seeding_time_enabled",
+    "max_inactive_seeding_time",
     # Where downloads land; read by `save_paths`, the neutral fact.
     "save_path",
     "auto_tmm_enabled",
