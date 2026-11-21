@@ -24,6 +24,16 @@ rather than an unrelated one. It is also qBittorrent's own default. Both halves
 matter: the third release gate being OFF is why #393's seeders were never
 released by it, so the FAIL this fixture is evidence for stays a FAIL.
 
+`max_inactive_seeding_time` (added for lintarr#59) was in neither read, and it
+is the one value here that is *derived* rather than recorded or guessed.
+`appcontroller.cpp` publishes the flag as
+`(shareLimits.inactiveSeedingTimeLimit >= 0)` and `setShareLimits` clamps the
+value with `std::max(..., NO_SEEDING_TIME_LIMIT)`, where that sentinel is `-1`
+(`sharelimits.h`) — so the only value a client reporting the flag as `False`
+can hold is `-1`. That makes it the opposite case to the `max_ratio` /
+`max_seeding_time` pair below: those two carry values their own flags say are
+unreachable, while this one is exactly the value its flag implies.
+
 `max_ratio` and `max_seeding_time` are carried in `_WEDGED` as the *repaired*
 values (1.5 and 20160) beside their own flags set to False, and that pair
 cannot come off a live client: `appcontroller.cpp` derives each flag as
@@ -57,6 +67,7 @@ _REPAIRED: dict[str, Any] = {
     "max_seeding_time_enabled": True,
     "max_seeding_time": 20160,
     "max_inactive_seeding_time_enabled": False,
+    "max_inactive_seeding_time": -1,
     "categories": {},
 }
 

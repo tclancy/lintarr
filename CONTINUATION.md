@@ -1,7 +1,8 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-21 (UTC)
-**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438) and #70's
+3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
 `IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
@@ -30,6 +31,50 @@ nightly alert is armed.
   substring, and swapping the reason text are all killed. Receipts in
   `docs/60-dotdot-paths-are-unplaceable.md`.
 - **Nothing on homelab changes:** real arr and qBittorrent paths have no `..`.
+passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#59 on
+`claude/59-orphan-inevitability-category-inactive-l-1795261877` — the category
+inactive-limit false FAIL, committed and awaiting a PR. Pluggable backends are
+merged and deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged,
+and the nightly alert is armed.
+
+## #59: a category inactive limit the global already covers
+
+- **The symptom:** a stack running the Stop action with the arr's Remove
+  Completed ON, where a qBittorrent category sets its own
+  `inactive_seeding_time_limit`, got a FAIL `nothing-reclaims` even when the
+  global inactive limit was armed at or below the category's value — a stack
+  that reclaims perfectly well. Found by #58's final review and the PR review
+  bot.
+- **Why:** `orphan-inevitability` recognises a category's own limit only when
+  the same-arm global covers it (the arr reads the global for a `-2` torrent).
+  Ratio and seeding time did that; `_global_inactive_covers` hard-returned
+  `False`, because `max_inactive_seeding_time` was collected as a flag with no
+  value beside it. The flag alone answers *can the gate fire*, which is all
+  `queue-liveness` ever needed, so the value had never been collected.
+- **The fix:** collect `max_inactive_seeding_time` and send the inactive arm
+  through the one shared `_global_covers`. Verified against source before
+  coding: Sonarr's `HasReachedInactiveSeedingTimeLimit` has the same
+  own-limit-then-global shape as its siblings (`develop` and `main`, read
+  2026-11-21), and qBittorrent publishes both keys, deriving the flag as
+  `(shareLimits.inactiveSeedingTimeLimit >= 0)` and clamping the value to `-1`
+  (`appcontroller.cpp`, `sessionimpl.cpp`, `sharelimits.h` on `master`).
+- **Why the flag survives beside the value:** `_not_inactive_gate` resolves a
+  `field-absent` flag as "no third arm" on purpose, because the preference
+  postdates qBittorrent 4.6. Replacing the flag with the value would have
+  broken that resolution and turned every pre-4.6 client into a SKIP.
+- **The narrower limit left behind, on purpose:** a global armed *above* the
+  category's value still reads as unrecognised and still FAILs. Sonarr compares
+  `now - LastActivity`, which keeps growing after the stop — unlike a ratio or
+  an accumulated seeding time, which freeze — so such a torrent may be removed
+  later. Whether a stopped torrent keeps reporting a growing `last_activity`
+  gap is **unmeasured** here, so it stays a possible false FAIL rather than a
+  guessed PASS. `DECISION NEEDED:` if Tom wants that closed, it is a container
+  measurement (does `last_activity` keep moving on a stopped torrent?), not a
+  code change.
+- **Receipts:** `docs/59-category-inactive-limit-coverage.md` — the same
+  scenario FAILing at 6c436c3 and PASSing here, the three neighbouring stacks
+  (PASS / FAIL / SKIP), the collected preference pair, and a three-mutant round
+  over the whole suite with a control between every mutant.
 
 ## #70: the deep-JSON test no longer raises on 3.14.10
 
