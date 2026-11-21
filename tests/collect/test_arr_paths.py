@@ -1,5 +1,7 @@
 """The five arr endpoints the hardlink-futility check reads."""
 
+import re
+
 import httpx
 import pytest
 
@@ -176,6 +178,24 @@ def test_wrong_shape_is_bad_response(path, body):
     with pytest.raises(ServiceError) as exc:
         _collect(replace={path: body})
     assert exc.value.kind == "bad-response"
+
+
+@pytest.mark.parametrize(
+    ("kind", "field"),
+    [("sonarr", "tvCategory"), ("radarr", "movieCategory")],
+)
+def test_bad_category_names_the_field_it_read(kind, field):
+    """The message must name the field this arr carries, not whichever is listed first.
+
+    A Radarr operator told to fix 'tvCategory' is being pointed at a field
+    their app does not have.
+    """
+    body = [_dc(fields=[{"name": field, "value": []}])]
+    with pytest.raises(ServiceError) as exc:
+        _collect(kind, replace={"/api/v3/downloadclient": body})
+    assert field in exc.value.detail
+    other = {"tvCategory", "movieCategory"} - {field}
+    assert not (other & set(re.findall(r"\w+", exc.value.detail)))
 
 
 def _with_top_level(**extra):

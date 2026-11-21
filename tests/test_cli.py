@@ -234,5 +234,9 @@ def test_dump_facts_shows_the_client_save_paths():
         "tv": "/data/torrents/tv",
     }
     human = _run(["dump-facts"], transport=transport)
-    assert "save_paths" in human.output
+    # ``common.`` and not a bare ``save_paths``: human mode renders the neutral
+    # facts under the same namespace the JSON payload nests them in, so that a
+    # backend field of the same name cannot take its place (#66). qBittorrent's
+    # own ``save_path`` is one letter away from it in this very output.
+    assert "common.save_paths" in human.output
     assert "/data/torrents/tv" in human.output

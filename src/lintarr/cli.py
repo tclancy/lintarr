@@ -181,13 +181,37 @@ def _render_error_row(err: dict[str, Any]) -> list[str]:
     return lines
 
 
+#: The namespace the client-neutral facts render under, matching the key the
+#: JSON payload nests them beneath.
+_COMMON_PREFIX = "common."
+
+
+def _renderable_facts(instance: dict[str, Any]) -> dict[str, Any]:
+    """One instance's facts in a single mapping, under names that cannot clash.
+
+    The neutral facts keep the ``common.`` namespace the JSON payload nests
+    them under; the backend's own facts stay bare. Flattening both into one
+    namespace — ``{**common, **instance}`` — let a backend field named like a
+    neutral one silently replace it, printing one line where two facts were
+    collected. Nothing clashes today, which is exactly why the merge order was
+    never visible. Namespacing settles it for every future backend rather than
+    forbidding the name (found by #57's final review, #66).
+
+    The ``common`` container is dropped rather than left to be skipped by the
+    render conditions: it is a mapping of facts, not a fact, and having it in
+    here at all was only harmless by coincidence.
+    """
+    common = {f"{_COMMON_PREFIX}{k}": v for k, v in instance.get("common", {}).items()}
+    return common | {k: v for k, v in instance.items() if k != "common"}
+
+
 def _render_human(payload: dict[str, Any]) -> str:
     lines: list[str] = []
     for group in ("clients", "arrs"):
         for instance in payload[group]:
             kind = instance["kind"]
             lines.append(f"{kind}[{instance['name']}] {_version_label(instance['version'])}")
-            facts = {**instance.get("common", {}), **instance}
+            facts = _renderable_facts(instance)
             for key, value in sorted(facts.items()):
                 if isinstance(value, dict) and "known" in value:
                     lines.extend(_render_fact_lines(key, value, indent="    "))

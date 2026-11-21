@@ -78,6 +78,12 @@ is on), and `save_path` otherwise; an empty `savePath` is `<save_path>/<name>`
 and a relative one is joined to `save_path`; any input it needs that was not
 read makes the whole mapping `Unknown`.
 
+Your own fields may share a name with a neutral one. Nothing reconciles them
+and nothing has to: the JSON payload nests the neutral facts under `common`,
+and `dump-facts` human mode prints them under the matching `common.` prefix, so
+a `specific` field called `save_paths` renders beside `common.save_paths`
+rather than in place of it (#66).
+
 Shared checks live in `lintarr/checks/` (`SHARED_CHECKS`, none yet). They read
 only neutral facts and run on every backend.
 

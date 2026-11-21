@@ -96,7 +96,14 @@ Homelab: Remove Completed is off, but the action is RemoveWithContent, so path
 
 ## How the arr removes a download (verified)
 
-Read from Sonarr `v5-develop` on 2026-11-19. Radarr shares the code shape.
+Read from Sonarr `v4.0.20.3014` — the build homelab runs, and Sonarr's latest
+stable release. Radarr `v6.4.4.10685` and Sonarr `v5.0.0.2997` carry the four
+members below byte-identical, so this section is one version's reading and
+needs no second citation. (This section said `v5-develop` as first written,
+while the implementation cited v4 for the season pack; lintarr#64 settled it on
+the one version the check runs against. The only reading that *does* differ by
+version is the season pack, below.) Quoted in full in
+[`docs/measurements/2026-11-21-sonarr-removal-rule-versions.md`](../../measurements/2026-11-21-sonarr-removal-rule-versions.md).
 
 - `QBittorrent.GetItems`: `CanBeRemoved = RemoveCompletedDownloads && state is pausedUP or stoppedUP && HasReachedSeedLimit(torrent, prefs)`.
 - `HasReachedSeedLimit` and its seeding-time and inactive siblings read the
@@ -114,7 +121,11 @@ Read from Sonarr `v5-develop` on 2026-11-19. Radarr shares the code shape.
   re-labels the torrent, so the arr can no longer see it or remove it. From then
   on, qBittorrent applies the *imported* category's action and limits.
 - Indexer seed criteria become the torrent's own limits when the arr adds it.
-  For season packs, `seasonPackSeedTime` sets the seeding-time limit.
+  For season packs on v4, `seasonPackSeedTime` sets the seeding-time limit and
+  there is no fallback to `seedTime`; the ratio is always `seedRatio`. On
+  Sonarr `v5.0.0.2997` both of those sit behind a `SeasonPackSeedGoal` toggle
+  that defaults to off, and a new `SeasonPackSeedRatio` joins them — see
+  "Known limits".
 
 ## The check
 
@@ -241,6 +252,13 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
 - **Arrs without top-level `removeCompletedDownloads`.** An arr too old to
   report it reads Remove Completed as unknown, so a Stop action with a
   reachable limit SKIPs on every strict run.
+- **Sonarr v5's season-pack goal toggle and ratio.** The check implements the
+  v4 season-pack rule, which is what homelab runs. On Sonarr `v5.0.0.2997`
+  `SeasonPackSeedTime` applies only when the per-indexer `SeasonPackSeedGoal`
+  is `UseSeasonPackSeedGoal`, and it defaults to `UseStandardSeedGoal`, so a
+  default v5 season pack uses the ordinary `seedTime`; a `SeasonPackSeedRatio`
+  is a fourth arm nothing reads. Closing either needs `seasonPackSeedGoal` on
+  `IndexerFacts` — a collection change — and a v5 arr to read it from.
 
 ## Model changes
 
