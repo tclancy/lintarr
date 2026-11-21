@@ -155,7 +155,12 @@ Which arrs are involved also decides the outcome, so that nothing new pages:
 **Paths** are POSIX and absolute, normalised with `PurePosixPath`. A trailing
 slash is dropped, and a leading `//` (which `PurePosixPath` keeps) is collapsed
 to `/`. A path that isn't absolute POSIX after translation is unknown. That
-covers a Windows drive, a relative path, an empty string and a non-string.
+covers a Windows drive, a relative path, an empty string and a non-string. A
+`..` component is unknown too (#60): the comparison is lexical, so
+`/downloads/../media/x` would read as sitting under `/downloads`, and resolving
+it lexically is right only when no earlier component is a symlink, which the
+string cannot say. Real arr and qBittorrent paths do not contain `..`; the
+receipts are in `docs/60-dotdot-paths-are-unplaceable.md`.
 
 ### Finding shape
 
