@@ -1,6 +1,21 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-21 (UTC)
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. The 3.14.10 pre-push red is fixed and merged
+(lintarr#70, PR #71, merge 6c436c3). Pluggable backends are merged and deployed
+(lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the nightly alert
+is armed. `IN PROGRESS:` lintarr#63 on
+`claude/63-orphan-inevitability-pass-detail-says-a` — a wording-only fix to one
+of `orphan-inevitability`'s PASS details, committed and awaiting review.
+**State:** lintarr#70 is merged (main 6c436c3) and `orphan-inevitability`
+before it (lintarr#58). `hardlink-futility` is merged (lintarr#57) and
+deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:`
+lintarr#61 on `claude/61-queue-liveness-action-route-ignores-per` —
+`queue-liveness`'s ACTION route now reads each category's own
+`share_limit_action`. Pluggable backends are merged and deployed (lintarr#56,
+homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
 **State:** `orphan-inevitability` is merged (lintarr#58, main 4623438) and #70's
 3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
@@ -113,6 +128,60 @@ and the nightly alert is armed.
   (PASS / FAIL / SKIP), the collected preference pair, and a three-mutant round
   over the whole suite with a control between every mutant.
 
+## #61: the ACTION route reads each category's share-limit action
+
+- **The symptom:** `_action_frees_no_slot` read the global `max_ratio_act`
+  alone, and its docstring said that one value decided everything. It does
+  not. `effectiveShareLimitAction()` asks the torrent, then the category, then
+  the global, and a qBittorrent 5.x category carries its own
+  `share_limit_action`. Global Stop beside category `tv` on
+  `EnableSuperSeeding` was a **PASS** on a stack whose `tv` seeders hold their
+  slots forever — while `orphan-inevitability`, one check lower in the same
+  output, named that exact setting on that exact category.
+- **Why the flagship could not see it:** `effective_action` lived in
+  `share_limits.py`, which imports *from* `queue_liveness`. Reaching it meant
+  moving it up beside the rest of this file's measured qBittorrent semantics
+  (`_can_be_reached`, `USE_GLOBAL`, `_RELEASING_ACTIONS`), which is where
+  `share_limits`' own docstring already says qBittorrent's side comes from.
+  `share_limits` re-exports it, so `orphan_inevitability` and its tests are
+  untouched.
+- **The shape:** a three-valued OR over *routes* — the uncategorised/global
+  one, plus each named category. One route that frees nothing is enough,
+  because the wedge argument is the same monotone one as everywhere else here:
+  seeders accumulate in `max_active_torrents` and never leave, so a single
+  category whose torrents never release fills every slot however well the rest
+  drain.
+- **The mirror case stays a FAIL, deliberately.** Global
+  `EnableSuperSeeding` with `tv` on Stop: a torrent with no category always
+  takes the global route, so the stack can still wedge. What changed is the
+  sentence — `_note_action_routes` names which routes free no slot, and names
+  only categories carrying an action of their *own*, so a `Default` category
+  is not accused of a setting it does not have.
+- **Pinned first, then changed.** `_CATEGORY_DEFERS` × the existing `_ACTIONS`
+  truth table is 24 combinations asserting that nothing moves when a category
+  declines to decide. Exactly three cells of the full matrix change, all
+  PASS → FAIL, all in the `EnableSuperSeeding` column; the receipts are the
+  before/after tables in `docs/61-category-share-limit-action.md`.
+- **One existing test changed meaning**, and only one:
+  `test_one_readable_category_limit_settles_it_despite_an_unreadable_neighbour`
+  now asserts on `_no_category_sets_its_own_limit` directly. An unparseable
+  category body is also a category whose *action* nobody can read, so the
+  surviving verdict is ACTION's honest SKIP on a question that test was never
+  about.
+- **Mutation round** (whole suite, baseline restored between mutants): four of
+  five killed. The fifth — `is True` → `is not False` in the route naming — is
+  an **equivalent mutant** after the own-action filter, and is recorded as
+  unpinned rather than claimed as tested. A sixth, found by the round, was
+  real: resolving an unreadable category map to "no extra routes" changed no
+  verdict because `SEEDING` SKIPs on that input first and is earlier in
+  `_worst_of`. It is pinned on the predicate directly now.
+- **Left open on purpose:** a global action that frees no slot still FAILs the
+  whole client even when every category in use overrides it. Narrowing that
+  wants the arr-side fact of which categories torrents land in, which
+  `queue_liveness.check` cannot reach — it takes a bare `QbtInstance`, not a
+  `ClientInstance`. Parent-category fallback is still unread, the same known
+  limit `orphan-inevitability` carries.
+
 ## #70: the deep-JSON test no longer raises on 3.14.10
 
 - **The symptom:** on a clean `main` at 4623438 under CPython 3.14.10, the
@@ -164,6 +233,25 @@ and the nightly alert is armed.
   suppression exists. No size is reported (runtime state).
 - **Follow-ups:** conformance-test the share-limit actions in the container
   harness; then `seed-goal-conflict` (informational).
+
+### #63: the Stop + Remove Completed PASS line
+
+- **The symptom:** `_stop_with_arr_removal` reached its PASS by asking
+  `can_fire_unrecognised`, which is False for *two* different stacks — one
+  where a limit fires and the arr recognises it, and one where no limit can
+  fire at all. Both printed "qBittorrent stops at the limit and the arr
+  removes completed downloads", so the second claimed a stop that cannot
+  happen. The verdict was always right; only the sentence was wrong.
+- **The fix:** a new `_arr_reclaims` asks `can_fire` once more and, when it is
+  False, reuses the existing "no limit can fire; seeding is unlimited" line
+  (the spec already listed it as a PASS detail). `can_fire` unknown keeps the
+  stop line: a limit may fire, and if one does the arr removes it.
+- **Pinned both ways:** a test per reason, and two mutants (fix removed; guard
+  widened to `is not None`) each leave the suite red. Receipts in
+  `docs/63-pass-detail-no-limit-fires.md`, which also renders both stacks
+  through the CLI's own `_render_findings`.
+- **No live run:** the homelab's action is RemoveWithContent, which settles
+  every pair before this line is reachable, so its PASS detail is unchanged.
 
 ## `hardlink-futility`: the first shared check
 
