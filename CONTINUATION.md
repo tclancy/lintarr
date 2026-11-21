@@ -12,10 +12,44 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
 3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
-`IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
-— `..` in a path no longer reads as a mount. Pluggable backends are merged and
-deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the
-nightly alert is armed.
+`IN PROGRESS:` lintarr#67 on `claude/67-run-py-failed-arr-skip-wording-keyed-on`
+— the failed-arr SKIP detail comes from the arr-dependent entry itself, not from
+which table its id was in. #60 and #61 are merged (main e3383d3). Pluggable
+backends are merged and deployed (lintarr#56, homelab#692). P2 slices 1 and 2
+are merged, and the nightly alert is armed.
+
+## #67: each arr-dependent check owns its failed-arr SKIP wording
+
+- **The symptom:** `run._resolve_failed_arr` chose the SKIP detail by asking
+  whether the invariant id was in `checks.SHARED_ARR_DEPENDENT`. Shared ids got
+  `hardlink-futility`'s "...its **imports** could not be checked"; everything
+  else got `orphan-inevitability`'s "...its **downloads** could not be checked".
+  Right by accident while each table holds one entry, and wrong for the second
+  shared arr-dependent check, which would report about imports whatever it
+  checks. Measured on e3383d3 with a second shared check registered: it was
+  declared with a sentence about seeding ratios and reported one about imports
+  (`docs/67-failed-arr-skip-wording.md`, section A).
+- **The fix:** the mapping value is `ArrDependency(premise, detail)` from
+  `clients/base.py`, so each entry carries its own sentence beside its own
+  premise and `run` reads both instead of guessing one. The sentences live at
+  the registration sites — `checks.SHARED_ARR_DEPENDENT` and
+  `BACKEND.arr_dependent` — because that is where the next check will be added.
+- **The clash, separately:** `backend.arr_dependent | SHARED_ARR_DEPENDENT`
+  answered a key collision silently and in the shared table's favour, dropping
+  a backend's own premise and wording from its own finding. `_arr_dependent`
+  now raises `ValueError` naming the ids; `tests/clients/test_registry.py`
+  pins the in-tree tables disjoint. Raising rather than ordering the merge is
+  deliberate: only one of the two checks ran, so there is no right winner.
+- **Byte-identical where it ships:** both shipped checks' CLI output is
+  unchanged, diffed against e3383d3 over the same stub stack (23 lines, no
+  diff). The alert key is built from labels, and a SKIP detail change would
+  re-page a persisting finding.
+- **Mutation round** (five mutants, control between every one, restored in a
+  `finally`): hardcoding the shared detail back, taking the premise from the
+  detail, removing the clash guard, and rewording either shipped sentence are
+  all killed. Receipts and the runner: `docs/67-mutation-round.py`.
+- **Nothing on homelab changes.** There is still one shared arr-dependent
+  check, and no backend reuses its id.
 
 ## #60: a `..` segment makes a path unplaceable, not a verdict
 
