@@ -1,11 +1,38 @@
 # CONTINUATION — lintarr
 
-**Last updated:** 2026-11-19 (UTC)
-**State:** `hardlink-futility` is merged (lintarr#57, main 2f664da) and
-deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:` the
-`orphan-inevitability` slice on `claude/orphan-inevitability` (spec and plan
-dated 2026-11-19). Pluggable backends are merged and deployed (lintarr#56,
+**Last updated:** 2026-11-21 (UTC)
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#70 on
+`claude/70-pre-push-gate-is-red-on-python-3-14-10-t` — a test-only fix for the
+3.14.10 pre-push red. Pluggable backends are merged and deployed (lintarr#56,
 homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
+
+## #70: the deep-JSON test no longer raises on 3.14.10
+
+- **The symptom:** on a clean `main` at 4623438 under CPython 3.14.10, the
+  whole pre-push battery is red on one test. `collect/http.py`'s `get_json`
+  catches `RecursionError` beside `ValueError`, and the test provoked it with a
+  body nested 20,000 deep.
+- **Why it broke:** the depth a CPython can parse is not a constant. Measured,
+  default recursion limit 1000 on both: **3.13.7 raises at 20,000**; **3.14.10
+  parses 20,000** and raises at 100,000. The guard was never wrong — the
+  *provocation* was interpreter-dependent.
+- **The fix is test-only.** Nothing in `src/` changed. A
+  `_RecursionErrorOnDecode(httpx.Response)` subclass raises from `.json()`
+  directly, so the `except` arm is reached on any interpreter at any recursion
+  limit; a second test keeps a real 200,000-deep body and asserts only the
+  version-independent property (returns a value **or** raises `ServiceError`,
+  never `RecursionError`), asserting in both branches.
+- **Mutation round** (whole suite, both interpreters, control between every
+  mutant): dropping `RecursionError` from the `except` kills the named test on
+  3.13.7 and 3.14.10 alike; the mirror mutant dropping `ValueError` is killed
+  only by the *other* tests, so the new pair is specific to its arm. Receipts
+  in `docs/70-recursion-error-provocation.md`.
+- **Left alone on purpose:** CI still pins `python-version: "3.13"` /
+  `UV_PYTHON: "3.13"`. Testing 3.14 in CI is a separate decision for Tom, and
+  the walkthrough shows the suite green on both so the matrix is cheap if he
+  wants it.
 
 ## `orphan-inevitability`: does anything remove finished downloads?
 
