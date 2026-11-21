@@ -85,7 +85,7 @@ Measured live on homelab, 2026-11-19:
 | Fact | Source | Homelab |
 |---|---|---|
 | Arr "Remove Completed" | arr `GET /api/v3/downloadclient` → top-level `removeCompletedDownloads` | `false` (both) |
-| Global action | qBittorrent prefs `max_ratio_act` (0 Stop, 1 Remove, 2 EnableSuperSeeding, 3 RemoveWithContent; `-1` Default is observable) | `3` |
+| Global action | qBittorrent prefs `max_ratio_act` (0 Stop, 1 Remove, 2 EnableSuperSeeding, 3 RemoveWithContent; `-1` Default is **not** observable here — measured 2026-11-21, a written `-1` reads back as `0`, so the check's `-1` arm is defensive only) | `3` |
 | Category action | `GET /api/v2/torrents/categories` → `share_limit_action` (string) | `"Default"` (both) |
 | Global limits | `max_ratio_enabled`/`max_ratio`, `max_seeding_time_enabled`/`max_seeding_time`, `max_inactive_seeding_time_enabled`/`max_inactive_seeding_time` | on: 1.5 / 20160 min / off |
 | Category limits | categories → `ratio_limit`, `seeding_time_limit`, `inactive_seeding_time_limit` | `-2` (inherit) |
@@ -274,16 +274,23 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
 
 ## Axioms
 
+Conformance-tested rows are pinned nightly by
+`tests/conformance/test_share_limit_actions.py` against the image
+`tests/conformance/image.py` names, and the run they come from is
+`docs/measurements/2026-11-21-qbt-share-limit-actions.md` (lintarr#62).
+
 | Axiom | Status |
 |---|---|
 | `ShareLimitAction` values; `Default` matches no branch | measured from source (existing `_RELEASING_ACTIONS`) |
-| Category `share_limit_action` strings and the `Default` redirect to the global | assumed from qBittorrent 5.x source |
+| Category `share_limit_action` strings | conformance-tested, 2026-11-21: the endpoint reports `Stop`, `Remove`, `EnableSuperSeeding`, `RemoveWithContent` and `Default` verbatim, and `ACTION_BY_NAME` maps exactly the four non-`Default` ones |
+| A category's action overrides the global `max_ratio_act`, and `Default` redirects to it | conformance-tested, 2026-11-21: each of the four actions is measured in a category under two contradicting globals, and the `Default` category takes whichever fate the global names |
 | The arr removes a torrent only when it is stopped and has reached a torrent-level or global limit, never a category limit (a category stop counts only when the same-arm global is at or below it) | read from Sonarr source, 2026-11-19 |
 | A post-import category hides the torrent from the arr | read from Sonarr source, 2026-11-19 |
-| Remove (1) deletes the torrent and keeps its files | qBittorrent semantics; not conformance-tested |
-
-No new conformance test in this slice. Container-testing the share-limit
-actions is the follow-up.
+| Remove (1) deletes the torrent and keeps its files | conformance-tested, 2026-11-21 (globally and per category) |
+| RemoveWithContent (3) deletes the torrent and its files | conformance-tested, 2026-11-21 (per category; globally since 2026-11-13) |
+| Stop (0) leaves the torrent `stoppedUP` with its files | conformance-tested, 2026-11-21 (globally and per category) |
+| EnableSuperSeeding (2) leaves the torrent seeding with its files, so nothing reclaims | conformance-tested, 2026-11-21 (globally and per category): the torrent stays `stalledUP` and `super_seeding` turns on |
+| The global action can itself be `Default` (-1) | **false on 5.2.3** (measured 2026-11-21): a written `-1` reads back as `0`, because qBittorrent coerces the stored global to Stop (`sessionimpl.cpp:554-555`). The check still reads `-1` as an action that reclaims nothing, which is unreachable from this input rather than wrong |
 
 ## Deploy impact
 

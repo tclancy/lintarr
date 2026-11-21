@@ -1,6 +1,14 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-21 (UTC)
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438) and
+#70's 3.14.10 test fix is merged (#71, main 6c436c3).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#62 on
+`claude/62-conformance-test-qbittorrent-share-limit` — container tests for the
+qBittorrent share-limit actions (tests and docs only, nothing in `src/`).
+Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2
+slices 1 and 2 are merged, and the nightly alert is armed.
 **State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. The 3.14.10 pre-push red is fixed and merged
@@ -20,6 +28,44 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
 3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
+`IN PROGRESS:` lintarr#67 on `claude/67-run-py-failed-arr-skip-wording-keyed-on`
+— the failed-arr SKIP detail comes from the arr-dependent entry itself, not from
+which table its id was in. #60 and #61 are merged (main e3383d3). Pluggable
+backends are merged and deployed (lintarr#56, homelab#692). P2 slices 1 and 2
+are merged, and the nightly alert is armed.
+
+## #67: each arr-dependent check owns its failed-arr SKIP wording
+
+- **The symptom:** `run._resolve_failed_arr` chose the SKIP detail by asking
+  whether the invariant id was in `checks.SHARED_ARR_DEPENDENT`. Shared ids got
+  `hardlink-futility`'s "...its **imports** could not be checked"; everything
+  else got `orphan-inevitability`'s "...its **downloads** could not be checked".
+  Right by accident while each table holds one entry, and wrong for the second
+  shared arr-dependent check, which would report about imports whatever it
+  checks. Measured on e3383d3 with a second shared check registered: it was
+  declared with a sentence about seeding ratios and reported one about imports
+  (`docs/67-failed-arr-skip-wording.md`, section A).
+- **The fix:** the mapping value is `ArrDependency(premise, detail)` from
+  `clients/base.py`, so each entry carries its own sentence beside its own
+  premise and `run` reads both instead of guessing one. The sentences live at
+  the registration sites — `checks.SHARED_ARR_DEPENDENT` and
+  `BACKEND.arr_dependent` — because that is where the next check will be added.
+- **The clash, separately:** `backend.arr_dependent | SHARED_ARR_DEPENDENT`
+  answered a key collision silently and in the shared table's favour, dropping
+  a backend's own premise and wording from its own finding. `_arr_dependent`
+  now raises `ValueError` naming the ids; `tests/clients/test_registry.py`
+  pins the in-tree tables disjoint. Raising rather than ordering the merge is
+  deliberate: only one of the two checks ran, so there is no right winner.
+- **Byte-identical where it ships:** both shipped checks' CLI output is
+  unchanged, diffed against e3383d3 over the same stub stack (23 lines, no
+  diff). The alert key is built from labels, and a SKIP detail change would
+  re-page a persisting finding.
+- **Mutation round** (five mutants, control between every one, restored in a
+  `finally`): hardcoding the shared detail back, taking the premise from the
+  detail, removing the clash guard, and rewording either shipped sentence are
+  all killed. Receipts and the runner: `docs/67-mutation-round.py`.
+- **Nothing on homelab changes.** There is still one shared arr-dependent
+  check, and no backend reuses its id.
 `IN PROGRESS:` lintarr#64 on
 `claude/64-share-limits-cite-one-sonarr-version-per` — `share_limits` now cites
 one pinned Sonarr version per claim. lintarr#60 is merged (lintarr#73).
@@ -326,8 +372,47 @@ and the nightly alert is armed.
   category fallback; older arrs not knowing `stoppedUP`; Sonarr v5's
   season-pack ratio/goal toggle; Cleanuparr-reliant stacks FAIL until
   suppression exists. No size is reported (runtime state).
-- **Follow-ups:** conformance-test the share-limit actions in the container
-  harness; then `seed-goal-conflict` (informational).
+- **Follow-ups:** `seed-goal-conflict` (informational). The share-limit
+  actions are now conformance-tested (lintarr#62, below).
+
+## #62: the share-limit actions are measured, not assumed
+
+- **What it adds:** `tests/conformance/test_share_limit_actions.py`, 16
+  container items in the nightly, pinning what each `ShareLimitAction` does to
+  the torrent *and* to its files. The table lives in
+  `tests/conformance/firing.py` (`FATES`) and the check's `ACTION_BY_NAME` is
+  asserted against it, so an action nobody measured cannot be mapped silently.
+- **Measured 2026-11-21** (`docs/measurements/2026-11-21-qbt-share-limit-actions.md`,
+  reproduce with `uv run python tools/probe_qbt_share_limits.py`): Stop (0)
+  leaves the torrent `stoppedUP` with its files; Remove (1) drops the torrent
+  and **keeps** them (the orphan `remove-keeps-files` is about);
+  RemoveWithContent (3) takes both; EnableSuperSeeding (2) leaves it seeding
+  with `super_seeding` on. A category's action overrides the global — each of
+  the four measured under two contradicting globals — and a `Default` category
+  takes whichever fate the global names.
+- **Why the harness writes `categories.json`:** qBittorrent 5.2.3's WebAPI
+  cannot set a category's share-limit action (`createCategory` /
+  `editCategory` read only the paths), so the category test pre-seeds
+  `<config>/qBittorrent/categories.json` before the container starts.
+  `start_qbt` gained an optional `/config` mount for it.
+- **One spec correction:** the *global* `max_ratio_act` can never read back
+  `Default`. Set to `-1` it reads back `0`, because qBittorrent coerces the
+  stored global to Stop (`sessionimpl.cpp:554-555`). The check's `-1` arm is
+  unreachable from this input rather than wrong; the spec's Inputs table said
+  "`-1` Default is observable" and now says otherwise.
+- **Local gate 2026-11-21:** non-container suite 2853 passed; the 16 new items
+  passed in 88.6 s on their own; the whole nightly ran 56 items in 21 min 12 s
+  with one failure, `test_uploading_seeders[U0-off]`, the documented macOS
+  bring-up flake (classified `harness-error`), which passed on its own in
+  144.9 s.
+- **Re-measured after merging main (e3383d3), 2026-11-21:** non-container
+  suite 2931 passed; the 16 new items passed in 89.7 s on their own; the whole
+  nightly ran 56 items, all passing, in 1352 s = 22 min 32 s (79 s slower than
+  the run the workflow comment quotes; the 35 min step timeout is unchanged).
+  The `Remove` row mutated to "deletes its files" fails both the global and
+  the category `Remove` case on `file_exists`. Not measured: the `/config`
+  bind mount on the Linux CI runner — the first nightly after merge is that
+  test. Not pushed; no PR yet.
 
 ### #63: the Stop + Remove Completed PASS line
 
@@ -451,8 +536,8 @@ consistency.
   `(0,0,3,2,0)->(3,0,2,3,0)`. Uploading seeders yield `max_active_torrents`
   slots exactly as idle ones do, the slow exemption made no difference, and
   `_WEDGED`'s limits do not wedge through seeders on 5.2.3. The nightly now
-  runs 38 items, ~21 min measured locally (worst case with retries ~32 min vs
-  the 35 min step timeout). **Watch item:** a `missingFiles` on the first
+  runs 56 items, ~21 min measured locally (38 items when this was written;
+  worst case with retries ~33 min vs the 35 min step timeout). **Watch item:** a `missingFiles` on the first
   seeder add was seen twice in ~60 adds, both after a fresh pair (macOS Docker, cause unconfirmed); seeder data is now
   fsynced before the add and the one retry absorbs a single hit.
   Decided (Tom, 2026-11-17): leave the `_WEDGED` pin as it is. Still open: the `_WEDGED` pin (`tests/test_check_cli.py`, exit

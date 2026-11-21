@@ -44,6 +44,17 @@ jobs:
     # can pass 35 min; the step timeout then fails the step and pages as before.
     # Hardlink EXDEV pair (tests/conformance/test_hardlink_exdev.py): 2 tests, 1.65 s measured
     # locally (alpine:3.20, no services); negligible against the budget.
+    # Share-limit actions (tests/conformance/test_share_limit_actions.py,
+    # lintarr#62) add 16 items on top: 4 global cases on the session container
+    # (~12 s each, one share-limit pass), a second container whose categories
+    # are pre-seeded (~18 s to start and seed the first batch) and two batched
+    # category phases (~18 s each, five torrents fired in one pass). ~1 min 30 s
+    # in total, with no retry wrapper, so a failure costs its one attempt.
+    # Measured 2026-11-21: the full local container run (56 items) took 1273 s
+    # = 21.2 min, against 1267 s for the 38-item run of 2026-11-16 on the same
+    # machine -- the new items land inside the run-to-run spread. Worst case,
+    # the sum above becomes ~31.6 + 1.5 = ~33.1 min, still under the 35 min
+    # step timeout.
     # A job-level timeout CANCELS the job, and failure() is false for a
     # cancelled job, so the pytest step carries its own 35 min timeout: that
     # fails the step, which turns any overrun into a harness-error page. The

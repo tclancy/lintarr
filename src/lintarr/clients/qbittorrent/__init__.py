@@ -2,7 +2,7 @@
 
 import httpx
 
-from lintarr.clients.base import Backend
+from lintarr.clients.base import ArrDependency, Backend
 from lintarr.clients.qbittorrent import orphan_inevitability, queue_liveness
 from lintarr.clients.qbittorrent.collect import AUTH_PATH, collect_qbt
 from lintarr.clients.qbittorrent.save_paths import save_paths
@@ -29,6 +29,9 @@ BACKEND = Backend(
     ),
     therefore=THEREFORE,
     arr_dependent={
-        orphan_inevitability.INVARIANT_ID: orphan_inevitability.PREMISE_NOTHING_RECLAIMS
+        orphan_inevitability.INVARIANT_ID: ArrDependency(
+            orphan_inevitability.PREMISE_NOTHING_RECLAIMS,
+            "an arr could not be read, so its downloads could not be checked",
+        )
     },
 )
