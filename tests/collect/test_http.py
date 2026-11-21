@@ -136,21 +136,92 @@ def test_undecodable_body_is_bad_response():
     assert "UnicodeDecodeError" in e.value.detail
 
 
-def test_deeply_nested_body_is_bad_response():
-    """``json.loads`` raises ``RecursionError``, which is not a ``ValueError``.
+class _RecursionErrorOnDecode(httpx.Response):
+    """A 200 whose JSON decode raises ``RecursionError``, by construction.
 
-    Same escape route as the undecodable body, different base class — so it
-    has to be named rather than covered by widening to ``ValueError``.
+    The fixture this replaced provoked the error by *depth*: 20,000 nested
+    lists, which raised on every interpreter the project had then run on. How
+    deep CPython can nest before its stack guard fires is the interpreter's
+    business and it moved. Measured here: 3.13.7 raises at 20,000 deep;
+    3.14.10 parses 20,000 without complaint and raises at 100,000, with the
+    recursion limit at its default 1000 in both. So the old body stopped
+    raising and the test read ``DID NOT RAISE ServiceError`` — a red pre-push
+    gate on a clean tree, over a guard that was never broken (#70).
+
+    Depth was only ever a *means* of reaching ``response.json()``'s raise, so
+    this raises from there directly: ``get_json``'s ``except`` is the subject,
+    and this fixture reaches it on any interpreter, at any recursion limit.
+    ``test_a_genuinely_deep_body_is_handled_whatever_the_interpreter_does``
+    keeps the real nested body, which is a different question.
     """
-    body = b"[" * 20_000 + b"]" * 20_000
+
+    def json(self, **kwargs: object) -> object:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON object")
+
+
+def test_a_recursion_error_from_the_json_decode_is_bad_response():
+    """``RecursionError`` is not a ``ValueError``, so it has to be named.
+
+    Same escape route as the undecodable body, different base class — so
+    widening the catch to ``ValueError`` does not cover it. Uncaught it goes
+    straight past ``collect_stack``'s ``except ServiceError`` and aborts every
+    *healthy* instance's collection.
+
+    Drop ``RecursionError`` from the ``except`` in ``get_json`` and this test
+    fails, on 3.13.7 and on 3.14.10 alike. Measured (#70).
+    """
 
     def handler(request):
-        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+        return _RecursionErrorOnDecode(
+            200, content=b"[]", headers={"content-type": "application/json"}
+        )
 
     with pytest.raises(ServiceError) as e:
         _client(handler).get_json("/x")
     assert e.value.kind == "bad-response"
     assert "RecursionError" in e.value.detail
+
+
+def _list_depth(value: object) -> int:
+    """How many nested lists deep ``value`` goes — iteratively, on purpose.
+
+    A recursive walk of a 200,000-deep list would raise the very error the
+    test around this is trying to observe the absence of.
+    """
+    depth = 0
+    while isinstance(value, list):
+        depth += 1
+        value = value[0] if value else None
+    return depth
+
+
+def test_a_genuinely_deep_body_is_handled_whatever_the_interpreter_does():
+    """A real deeply nested body never escapes as an uncaught exception.
+
+    The companion to the test above, and the half that keeps a genuine body in
+    the suite. It deliberately does **not** pin which way the interpreter goes,
+    because that is the thing that moved under #70: at this depth 3.13.7 and
+    3.14.10 both raise, a future CPython may parse it, and either is fine. What
+    must hold on all of them is that ``get_json`` returns a value or raises
+    ``ServiceError`` — never ``RecursionError``, which ``collect_stack`` does
+    not catch.
+
+    Both branches assert, so neither is a free pass: the raising branch pins
+    the kind, and the parsing branch pins that the body really was 200,000 deep
+    and came back whole rather than truncated by a lenient parser.
+    """
+    depth = 200_000
+    body = b"[" * depth + b"]" * depth
+
+    def handler(request):
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    try:
+        parsed = _client(handler).get_json("/x")
+    except ServiceError as exc:
+        assert exc.kind == "bad-response"
+    else:
+        assert _list_depth(parsed) == depth
 
 
 def test_declared_charset_with_no_bom_is_bad_response():
