@@ -227,6 +227,14 @@ and the nightly alert is armed.
   with one failure, `test_uploading_seeders[U0-off]`, the documented macOS
   bring-up flake (classified `harness-error`), which passed on its own in
   144.9 s.
+- **Re-measured after merging main (e3383d3), 2026-11-21:** non-container
+  suite 2931 passed; the 16 new items passed in 89.7 s on their own; the whole
+  nightly ran 56 items, all passing, in 1352 s = 22 min 32 s (79 s slower than
+  the run the workflow comment quotes; the 35 min step timeout is unchanged).
+  The `Remove` row mutated to "deletes its files" fails both the global and
+  the category `Remove` case on `file_exists`. Not measured: the `/config`
+  bind mount on the Linux CI runner — the first nightly after merge is that
+  test. Not pushed; no PR yet.
 
 ## `hardlink-futility`: the first shared check
 
