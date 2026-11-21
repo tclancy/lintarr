@@ -437,6 +437,50 @@ def test_stop_with_an_unreadable_global_ratio_beside_a_category_ratio_skips():
     assert finding.premises == (Premise(PREMISE_NOTHING_RECLAIMS, None),)
 
 
+# --- the global inactive limit covers a category's own one (lintarr#59) -------
+
+
+def test_stop_with_a_category_inactive_limit_the_global_covers_passes():
+    """The false FAIL lintarr#59 reported: the arr does check the global inactive limit."""
+    qbt = _qbt(
+        {"tv": {"inactive_seeding_time_limit": 60}},
+        max_ratio_act=0,
+        max_inactive_seeding_time_enabled=True,
+        max_inactive_seeding_time=30,
+    )
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == (
+        "sonarr[tv]: qBittorrent stops at the limit and the arr removes completed downloads"
+    )
+
+
+def test_stop_with_a_category_inactive_limit_the_global_does_not_cover_fails():
+    """The twin, and the FAIL this check still owes: armed above the category's value."""
+    qbt = _qbt(
+        {"tv": {"inactive_seeding_time_limit": 60}},
+        max_ratio_act=0,
+        max_inactive_seeding_time_enabled=True,
+        max_inactive_seeding_time=1440,
+    )
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.FAIL
+    assert finding.conflict == NOTHING_RECLAIMS
+    assert finding.premises == _NOTHING
+
+
+def test_stop_with_an_unreadable_global_inactive_value_skips():
+    qbt = _qbt(
+        {"tv": {"inactive_seeding_time_limit": 60}},
+        max_ratio_act=0,
+        max_inactive_seeding_time_enabled=True,
+        max_inactive_seeding_time=Unknown("insufficient-permission", "max_inactive_seeding_time"),
+    )
+    finding = check(qbt, (_arr(remove_completed=True),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.premises == (Premise(PREMISE_NOTHING_RECLAIMS, None),)
+
+
 def test_default_action_minus_one_is_named_in_the_detail():
     finding = check(_qbt(max_ratio_act=-1), (_arr(remove_completed=True),))
     assert finding.detail == (
