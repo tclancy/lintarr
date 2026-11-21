@@ -2,11 +2,11 @@ import pytest
 
 from lintarr.facts import Unknown
 from lintarr.models import ErrorRow, StackFacts
-from lintarr.outcomes import Outcome, exit_code
+from lintarr.outcomes import Finding, Outcome, exit_code
 from lintarr.run import run_checks, run_outcome
 from tests.fixtures.clients import as_client
 from tests.fixtures.homelab import qbt_with, repaired_qbt, wedged_qbt
-from tests.fixtures.homelab_paths import arr_with, homelab_arr
+from tests.fixtures.homelab_paths import arr_with, homelab_arr, homelab_qbt
 from tests.invariants.test_queue_liveness import NO_GOALS, UNCLASSIFIABLE_NO_GOALS
 
 _QBT_ONLY = frozenset({"qbittorrent"})
@@ -181,13 +181,18 @@ def test_an_unreadable_qbt_preference_is_not_relabelled_as_a_missing_arr():
 
 
 def test_a_backend_arr_dependent_check_gets_the_failed_arr_skip(monkeypatch):
+    """A backend's own entry supplies both halves: the premise and the sentence."""
     import dataclasses
 
     from lintarr.clients import BACKENDS
+    from lintarr.clients.base import ArrDependency
     from lintarr.config import ClientConfig
     from tests.fakes.backend import FAKE, collect
 
-    fake = dataclasses.replace(FAKE, arr_dependent={"fake-check": "arr.fake_premise"})
+    fake_dependency = ArrDependency(
+        "arr.fake_premise", "an arr could not be read, so the fake could not be checked"
+    )
+    fake = dataclasses.replace(FAKE, arr_dependent={"fake-check": fake_dependency})
     monkeypatch.setitem(BACKENDS, "fake", fake)
     cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
     failed = ErrorRow("arr[radarr]", "unreachable", "connection refused")
@@ -197,4 +202,78 @@ def test_a_backend_arr_dependent_check_gets_the_failed_arr_skip(monkeypatch):
     ]
     assert finding.outcome is Outcome.SKIP
     assert [p.label for p in finding.premises] == ["arr.fake_premise"]
-    assert finding.detail == "an arr could not be read, so its downloads could not be checked"
+    assert finding.detail == "an arr could not be read, so the fake could not be checked"
+
+
+# --- the failed-arr SKIP's wording and its two tables -----------------------
+
+
+def _shared_pass(invariant: str):
+    """A shared check that passes, so only the run-level correction decides it."""
+
+    def check(inst, arrs):
+        return Finding(
+            invariant=invariant, instance=f"{inst.kind}[{inst.name}]", outcome=Outcome.PASS
+        )
+
+    return check
+
+
+def test_a_second_shared_arr_dependent_check_keeps_its_own_wording(monkeypatch):
+    """The SKIP detail comes from the mapping, not from which table held the id.
+
+    hardlink-futility's "imports" sentence used to be reached by membership in
+    ``SHARED_ARR_DEPENDENT``, so a second shared arr-dependent check inherited a
+    sentence about imports whether or not it checks imports.
+    """
+    from lintarr import checks
+    from lintarr.clients.base import ArrDependency
+
+    ratios = ArrDependency(
+        "arr.second_shared_premise", "an arr could not be read, so its ratios could not be checked"
+    )
+    monkeypatch.setattr(checks, "SHARED_CHECKS", (*checks.SHARED_CHECKS, _shared_pass("ratio-sum")))
+    monkeypatch.setitem(checks.SHARED_ARR_DEPENDENT, "ratio-sum", ratios)
+
+    failed = ErrorRow("arr[radarr]", "unreachable", "connection refused")
+    facts = StackFacts(clients=(as_client(homelab_qbt()),), arrs=(homelab_arr(),), errors=(failed,))
+    by_invariant = {f.invariant: f for f in run_checks(facts, declared=_QBT_AND_SONARR)}
+
+    second = by_invariant["ratio-sum"]
+    assert second.outcome is Outcome.SKIP
+    assert [p.label for p in second.premises] == ["arr.second_shared_premise"]
+    assert second.detail == "an arr could not be read, so its ratios could not be checked"
+    # Each arr-dependent check says what *it* could not check, and the shared
+    # one already shipped says it in the bytes it shipped with.
+    assert (
+        by_invariant["hardlink-futility"].detail
+        == "an arr could not be read, so its imports could not be checked"
+    )
+    assert (
+        by_invariant["orphan-inevitability"].detail
+        == "an arr could not be read, so its downloads could not be checked"
+    )
+
+
+def test_a_backend_may_not_redeclare_a_shared_arr_dependent_invariant(monkeypatch):
+    """A key in both tables is a registration bug, not a precedence question.
+
+    Merging with ``|`` answered it silently, and in the shared table's favour:
+    a backend's own premise and wording vanished from its own finding.
+    """
+    import dataclasses
+
+    from lintarr.checks import hardlink_futility
+    from lintarr.clients import BACKENDS
+    from lintarr.clients.base import ArrDependency
+    from lintarr.config import ClientConfig
+    from tests.fakes.backend import FAKE, collect
+
+    clashing = {
+        hardlink_futility.INVARIANT_ID: ArrDependency("arr.fake_premise", "a fake sentence")
+    }
+    monkeypatch.setitem(BACKENDS, "fake", dataclasses.replace(FAKE, arr_dependent=clashing))
+    cfg = ClientConfig(name="main", kind="fake", url="http://fake", api_key="k")
+    facts = StackFacts(clients=(collect(cfg, transport=None),), arrs=())
+    with pytest.raises(ValueError, match="hardlink-futility"):
+        run_checks(facts, declared=frozenset({"fake"}))
