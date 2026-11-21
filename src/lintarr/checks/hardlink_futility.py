@@ -45,7 +45,7 @@ from lintarr.checks.arr_clients import (
     save_paths_of,
     tuple_of,
 )
-from lintarr.checks.paths import mount_of, posix_abs, translate
+from lintarr.checks.paths import mount_of, posix_abs_or_reason, translate
 from lintarr.facts import is_known
 from lintarr.invariants.combinator import conflict_if, premise
 from lintarr.models import (
@@ -157,18 +157,18 @@ def _download_path(view: _ArrView, d: ArrDownloadClient, raw: object) -> PurePos
     if not isinstance(raw, str):
         return f"{view.label}: the client's save path for {d.category!r} is not a string"
     translated = translate(raw, view.mappings, d.host)
-    path = posix_abs(translated)
-    if path is not None:
-        return path
+    parsed = posix_abs_or_reason(translated)
+    if isinstance(parsed, PurePosixPath):
+        return parsed
     source = f" (translated from {raw!r})" if translated != raw else ""
-    return f"{view.label}: save path {translated!r}{source} is not absolute POSIX"
+    return f"{view.label}: save path {translated!r}{source} {parsed}"
 
 
 def _root_path(view: _ArrView, folder: RootFolder) -> PurePosixPath | str:
-    path = posix_abs(folder.path)
-    if path is None:
-        return f"{view.label}: root folder {folder.path!r} is not absolute POSIX"
-    return path
+    parsed = posix_abs_or_reason(folder.path)
+    if isinstance(parsed, str):
+        return f"{view.label}: root folder {folder.path!r} {parsed}"
+    return parsed
 
 
 def _usable_roots(view: _ArrView) -> tuple[RootFolder, ...]:

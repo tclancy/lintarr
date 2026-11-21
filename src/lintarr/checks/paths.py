@@ -6,13 +6,34 @@ from pathlib import PurePosixPath
 from lintarr.models import RemotePathMapping
 
 _SEPARATORS = "/\\"
+_PARENT = ".."
+
+NOT_ABSOLUTE_POSIX = "is not absolute POSIX"
+HAS_PARENT_SEGMENT = "contains a .. segment, so the mount it is on cannot be read"
+
+
+def posix_abs_or_reason(raw: object) -> PurePosixPath | str:
+    """``raw`` as an absolute POSIX path, or the clause saying why it isn't one.
+
+    A ``..`` component is refused rather than resolved. Comparison here is
+    lexical (``PurePosixPath.is_relative_to``), so ``/downloads/../media/x``
+    would read as sitting under ``/downloads``; and resolving it lexically is
+    only right when no earlier component is a symlink, which the string cannot
+    say. Either way the mount is unknowable from the path alone, and a check
+    that cannot place a path must report it unknown rather than guess. Real arr
+    and qBittorrent paths do not contain ``..``.
+    """
+    if not isinstance(raw, str) or not raw.startswith("/") or "\\" in raw:
+        return NOT_ABSOLUTE_POSIX
+    if _PARENT in raw.split("/"):
+        return HAS_PARENT_SEGMENT
+    return PurePosixPath("/" + raw.lstrip("/"))
 
 
 def posix_abs(raw: object) -> PurePosixPath | None:
     """Normalise ``raw`` to an absolute POSIX path, or ``None`` if it isn't one."""
-    if not isinstance(raw, str) or not raw.startswith("/") or "\\" in raw:
-        return None
-    return PurePosixPath("/" + raw.lstrip("/"))
+    parsed = posix_abs_or_reason(raw)
+    return parsed if isinstance(parsed, PurePosixPath) else None
 
 
 def _remainder_after(raw: str, remote_path: str) -> str | None:

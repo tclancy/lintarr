@@ -398,8 +398,52 @@ def test_a_season_pack_category_seed_time_the_global_covers_is_recognised():
     assert can_fire(qbt, arr, "tv") is True
 
 
-def test_a_category_inactive_limit_stays_unrecognised_even_with_the_global_armed():
-    """Known limit: the global inactive value is not collected, so it cannot cover."""
-    armed = GLOBALS_OFF | {"max_inactive_seeding_time_enabled": True}
+# The inactive arm reads the same coverage rule as the other two (lintarr#59).
+# `HasReachedInactiveSeedingTimeLimit` has the same shape as its siblings: the
+# torrent's own limit when it is >= 0, else `config.MaxInactiveSeedingTime` when
+# the torrent's limit is -2.
+
+_INACTIVE_ARMED = GLOBALS_OFF | {"max_inactive_seeding_time_enabled": True}
+
+
+@pytest.mark.parametrize("global_inactive", [30, 60])
+def test_a_category_inactive_limit_the_global_covers_is_recognised(global_inactive):
+    armed = _INACTIVE_ARMED | {"max_inactive_seeding_time": global_inactive}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **armed)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is False
+    assert can_fire(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_a_category_inactive_limit_below_the_global_is_unrecognised():
+    armed = _INACTIVE_ARMED | {"max_inactive_seeding_time": 1440}
     qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **armed)
     assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_a_category_inactive_limit_with_the_global_off_is_unrecognised():
+    prefs = GLOBALS_OFF | {"max_inactive_seeding_time": 30}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **prefs)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreadable_global_inactive_value_leaves_recognition_unknown():
+    unreadable = Unknown("insufficient-permission", "max_inactive_seeding_time")
+    armed = _INACTIVE_ARMED | {"max_inactive_seeding_time": unreadable}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **armed)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
+    # Whether a limit fires at all is still settled: the category's own one does.
+    assert can_fire(qbt, _arr(_indexer()), "tv") is True
+
+
+def test_an_unreadable_global_inactive_flag_leaves_recognition_unknown():
+    unreadable = Unknown("insufficient-permission", "max_inactive_seeding_time_enabled")
+    prefs = GLOBALS_OFF | {"max_inactive_seeding_time_enabled": unreadable}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **prefs)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
+
+
+def test_an_absent_global_inactive_value_beside_an_armed_flag_is_unknown():
+    """A client that reports the flag reports the value, so absence here is not information."""
+    armed = _INACTIVE_ARMED | {"max_inactive_seeding_time": _absent("max_inactive_seeding_time")}
+    qbt = _qbt(tv={"inactive_seeding_time_limit": 60}, **armed)
+    assert can_fire_unrecognised(qbt, _arr(_indexer()), "tv") is None
