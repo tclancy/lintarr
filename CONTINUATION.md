@@ -1,6 +1,14 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-21 (UTC)
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. The 3.14.10 pre-push red is fixed and merged
+(lintarr#70, PR #71, merge 6c436c3). Pluggable backends are merged and deployed
+(lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the nightly alert
+is armed. `IN PROGRESS:` lintarr#63 on
+`claude/63-orphan-inevitability-pass-detail-says-a` — a wording-only fix to one
+of `orphan-inevitability`'s PASS details, committed and awaiting review.
 **State:** lintarr#70 is merged (main 6c436c3) and `orphan-inevitability`
 before it (lintarr#58). `hardlink-futility` is merged (lintarr#57) and
 deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:`
@@ -188,6 +196,25 @@ and the nightly alert is armed.
   suppression exists. No size is reported (runtime state).
 - **Follow-ups:** conformance-test the share-limit actions in the container
   harness; then `seed-goal-conflict` (informational).
+
+### #63: the Stop + Remove Completed PASS line
+
+- **The symptom:** `_stop_with_arr_removal` reached its PASS by asking
+  `can_fire_unrecognised`, which is False for *two* different stacks — one
+  where a limit fires and the arr recognises it, and one where no limit can
+  fire at all. Both printed "qBittorrent stops at the limit and the arr
+  removes completed downloads", so the second claimed a stop that cannot
+  happen. The verdict was always right; only the sentence was wrong.
+- **The fix:** a new `_arr_reclaims` asks `can_fire` once more and, when it is
+  False, reuses the existing "no limit can fire; seeding is unlimited" line
+  (the spec already listed it as a PASS detail). `can_fire` unknown keeps the
+  stop line: a limit may fire, and if one does the arr removes it.
+- **Pinned both ways:** a test per reason, and two mutants (fix removed; guard
+  widened to `is not None`) each leave the suite red. Receipts in
+  `docs/63-pass-detail-no-limit-fires.md`, which also renders both stacks
+  through the CLI's own `_render_findings`.
+- **No live run:** the homelab's action is RemoveWithContent, which settles
+  every pair before this line is reachable, so its PASS detail is unchanged.
 
 ## `hardlink-futility`: the first shared check
 
