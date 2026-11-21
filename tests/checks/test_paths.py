@@ -102,6 +102,77 @@ def test_no_mapping_returns_the_path_unchanged():
     assert translate("/data/x", [], "h") == "/data/x"
 
 
+def test_translate_folds_case_and_separators_for_a_windows_client_path():
+    """A Windows qBittorrent reporting ``c:\\downloads`` still matches ``C:\\Downloads\\``.
+
+    Sonarr's ``OsPath`` compares a Windows path case-insensitively and reads
+    ``/`` and ``\\`` as one separator. Measured, by running Sonarr's own
+    ``OsPath`` at ``v4.0.20.3014``, in
+    ``docs/measurements/2026-11-21-arr-path-mapping-edges.md``.
+    """
+    ms = [_m("h", "C:\\Downloads\\", "/data/torrents")]
+    assert translate("c:\\downloads\\tv", ms, "h") == "/data/torrents/tv"
+    assert translate("C:/Downloads/tv", ms, "h") == "/data/torrents/tv"
+    assert translate("c:\\downloads", ms, "h") == "/data/torrents"
+    mixed = [_m("h", "c:/downloads", "/data")]
+    assert translate("C:\\DOWNLOADS\\tv\\s1", mixed, "h") == "/data/tv/s1"
+
+
+def test_translate_keeps_a_posix_remote_path_case_sensitive():
+    """Only Windows paths fold case: ``/DL`` and ``/dl`` are two directories.
+
+    Same measurement. A leading ``/`` settles the kind before any backslash
+    does, so ``/dl\\x`` is a POSIX path to the arr, not a Windows one.
+    """
+    assert translate("/dl/x", [_m("h", "/DL", "/a")], "h") == "/dl/x"
+    assert translate("/DL/x", [_m("h", "/dl", "/a")], "h") == "/DL/x"
+    assert translate("/dl\\x", [_m("h", "/DL", "/a")], "h") == "/dl\\x"
+
+
+def test_a_root_remote_mapping_swallows_the_whole_path():
+    """Do not "fix" this. A ``/`` remote path leaves the arr with ``/`` itself.
+
+    Sonarr subtracts the mapping's remote path from the client's path, and ``/``
+    has no components to subtract, so the subtraction returns the mapping's own
+    remote path -- which is rooted, and a rooted right-hand side wins the join
+    outright. ``/`` -> ``/mnt`` therefore does not prefix anything with
+    ``/mnt``: it collapses every path the client reports to ``/``. Measured on
+    Sonarr's own ``OsPath`` at ``v4.0.20.3014`` in
+    ``docs/measurements/2026-11-21-arr-path-mapping-edges.md``, which is also
+    why the ``/``-swallowing is not a lintarr bug to be tidied away.
+    """
+    ms = [_m("h", "/", "/mnt")]
+    assert translate("/data", ms, "h") == "/"
+    assert translate("/data/tv/x", ms, "h") == "/"
+    assert translate("/data", [_m("h", "//", "/mnt")], "h") == "/"
+
+
+def test_a_blank_local_path_translates_to_nothing_rather_than_a_plausible_path():
+    """A mapping that names no local path cannot place a file, so lintarr does not guess.
+
+    The arr's own API refuses a blank ``localPath`` (``IsValidPath`` plus
+    ``PathExistsValidator`` on ``RemotePathMappingController``), so this comes
+    only from a hand-edited database. Sonarr's arithmetic would hand back
+    ``/tv`` for ``/downloads/tv`` -- an absolute path that reads as real and
+    would be placed on a mount. ``''`` is not placeable, so every caller
+    reports it unknown instead.
+    """
+    for local in ("", "   "):
+        ms = [_m("h", "/dl", local)]
+        assert translate("/dl/x", ms, "h") == ""
+        assert translate("/dl", ms, "h") == ""
+    assert posix_abs("") is None
+
+
+def test_an_unrooted_remote_or_client_path_never_matches():
+    """``OsPath.Contains`` is false unless both paths are rooted."""
+    assert translate("/dl/x", [_m("h", "", "/a")], "h") == "/dl/x"
+    assert translate("/dl/x", [_m("h", "dl", "/a")], "h") == "/dl/x"
+    assert translate("/dl/x", [_m("h", "dl/", "/a")], "h") == "/dl/x"
+    assert translate("dl/x", [_m("h", "/dl", "/a")], "h") == "dl/x"
+    assert translate("C:\\dl\\x", [_m("h", "dl", "/a")], "h") == "C:\\dl\\x"
+
+
 _COMP = st.sampled_from(["data", "media", "tv", "a", "b"])
 _ABS = st.lists(_COMP, min_size=0, max_size=4).map(lambda c: "/" + "/".join(c))
 

@@ -146,6 +146,56 @@ def test_remote_path_mapping_for_another_host_is_not_applied():
     )
 
 
+def test_a_windows_client_path_matches_a_mapping_whose_case_differs():
+    """A Windows qBittorrent reports ``c:\\downloads``; the mapping says ``C:\\Downloads\\``.
+
+    The arr compares Windows paths case-insensitively, so it places this
+    download on /data beside the library. Before, the prefix test was
+    case-sensitive, the mapping never applied, and the check skipped the stack
+    over a save path it called "not absolute POSIX".
+    """
+    qbt = _client(save_path="c:\\downloads\\tv", categories={})
+    arr = arr_with(
+        download_clients=(_qbt_client(category=""),),
+        remote_path_mappings=(RemotePathMapping("gluetun", "C:\\Downloads\\", "/data/torrents"),),
+    )
+    finding = check(qbt, (arr,))
+    assert finding.outcome is Outcome.PASS
+    assert finding.detail == "downloads and library folders share a mount for sonarr[tv]"
+
+
+def test_a_root_remote_mapping_leaves_the_download_on_root_not_under_the_local_path():
+    """``/`` -> ``/mnt`` collapses the path to ``/`` in the arr, so nothing is placed.
+
+    Measured on Sonarr's own ``OsPath``:
+    ``docs/measurements/2026-11-21-arr-path-mapping-edges.md``. The check must
+    not report a cross-mount FAIL about ``/mnt/downloads/tv``, a path this arr
+    never computes.
+    """
+    qbt = _split_qbt()
+    arr = _split_arr(
+        mounts=("/", "/mnt", "/tv"),
+        remote_path_mappings=(RemotePathMapping("gluetun", "/", "/mnt"),),
+    )
+    finding = check(qbt, (arr,))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: the arr reports no mount other than / for /; "
+        "either it cannot see the download or that mount is not listed "
+        "(network mounts are not)"
+    )
+
+
+def test_a_mapping_with_a_blank_local_path_is_unplaceable_not_invented():
+    """The arr's arithmetic would make this ``/tv``; lintarr refuses to invent it."""
+    mapping = RemotePathMapping("gluetun", "/downloads/", "")
+    finding = check(_split_qbt(), (_split_arr(remote_path_mappings=(mapping,)),))
+    assert finding.outcome is Outcome.SKIP
+    assert finding.detail == (
+        "sonarr[tv]: save path '' (translated from '/downloads/tv') is not absolute POSIX"
+    )
+
+
 def test_a_library_only_on_root_is_unknown_and_named():
     arr = arr_with(mounts=("/", "/data"), root_folders=(RootFolder("/tv", True),))
     finding = check(as_client(homelab_qbt()), (arr,))
