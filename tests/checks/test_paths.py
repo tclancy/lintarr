@@ -3,7 +3,7 @@ from pathlib import PurePosixPath
 from hypothesis import given
 from hypothesis import strategies as st
 
-from lintarr.checks.paths import mount_of, posix_abs, translate
+from lintarr.checks.paths import mount_of, posix_abs, posix_abs_or_reason, translate
 from lintarr.models import RemotePathMapping
 
 P = PurePosixPath
@@ -23,6 +23,35 @@ def test_trailing_slash_and_leading_double_slash_normalise():
 def test_windows_relative_empty_and_non_string_are_none():
     for raw in ("C:\\Downloads", "/data\\x", "data/x", "", None, 5, b"/data", ["/a"]):
         assert posix_abs(raw) is None
+
+
+def test_a_parent_segment_makes_a_path_unplaceable():
+    """``..`` is rejected, not resolved: comparison is lexical, so
+    ``/downloads/../media/x`` would otherwise read as sitting under ``/downloads``."""
+    assert posix_abs("/downloads/../media/x") is None
+    assert posix_abs("/data/..") is None
+    assert posix_abs("/data/../") is None
+    assert posix_abs("/..") is None
+
+
+def test_a_component_that_merely_starts_with_dots_is_a_real_directory():
+    assert posix_abs("/data/..hidden/x") == P("/data/..hidden/x")
+    assert posix_abs("/data/.../x") == P("/data/.../x")
+    assert posix_abs("/data/a..b") == P("/data/a..b")
+
+
+def test_the_reason_names_the_parent_segment_and_passes_a_good_path_through():
+    assert posix_abs_or_reason("C:\\Downloads") == "is not absolute POSIX"
+    assert posix_abs_or_reason(None) == "is not absolute POSIX"
+    assert posix_abs_or_reason("/downloads/../media") == (
+        "contains a .. segment, so the mount it is on cannot be read"
+    )
+    assert posix_abs_or_reason("/downloads/media/") == P("/downloads/media")
+
+
+def test_a_mount_with_a_parent_segment_is_not_a_mount():
+    assert mount_of(P("/data/media/x"), ("/data/../data/media",)) is None
+    assert mount_of(P("/data/media/x"), ("/", "/data/../data/media")) == P("/")
 
 
 def test_mount_is_longest_containing_prefix():
