@@ -16,7 +16,13 @@ from datetime import UTC, datetime
 
 import pytest
 
-from lintarr.cli import _fact_to_dict, _render_human, _render_nested_list, _version_label
+from lintarr.cli import (
+    _fact_to_dict,
+    _render_human,
+    _render_nested_list,
+    _renderable_facts,
+    _version_label,
+)
 from lintarr.facts import Known
 
 
@@ -265,3 +271,75 @@ def test_render_shows_each_therefore_line(conflict, premise):
     assert f"  Therefore: {_ORPHAN_THEREFORE[conflict]}" in rendered
     others = [text for name, text in _ORPHAN_THEREFORE.items() if name != conflict]
     assert all(text not in rendered for text in others)
+
+
+# ---------------------------------------------------------------------------
+# #66: the neutral facts and a backend's own facts shared one namespace.
+# ---------------------------------------------------------------------------
+
+
+def _client_with_colliding_facts():
+    """One client whose backend reports a field named like a neutral one.
+
+    No registered backend does this today — ``ClientFacts.save_paths`` against
+    qBittorrent's ``save_path`` is as close as it gets — so this is built by
+    hand rather than collected. The collision is the whole point: under the
+    old ``{**common, **instance}`` merge the backend's value won and the
+    neutral one left no trace in the output at all.
+    """
+    return {
+        "clients": [
+            {
+                "name": "main",
+                "kind": "fake",
+                "version": "1.0.0",
+                "common": {"save_paths": _fact({"": "/neutral"}, source="GET /neutral")},
+                "save_paths": _fact({"": "/backend"}, source="GET /backend"),
+            }
+        ],
+        "arrs": [],
+        "errors": [],
+    }
+
+
+def test_a_backend_fact_sharing_a_neutral_name_does_not_hide_it():
+    """Both facts reach the output, each under the name it was collected as.
+
+    Asserting on the values and on both sources, not just on the key: the
+    pre-fix renderer still printed one ``save_paths`` line, so a test that
+    only looked for the key name passed over the defect.
+    """
+    out = _render_human(_client_with_colliding_facts())
+    assert "'/neutral'" in out
+    assert "'/backend'" in out
+    assert "GET /neutral" in out
+    assert "GET /backend" in out
+
+
+def test_the_neutral_fact_is_the_one_carrying_the_namespace():
+    """``common.save_paths`` is the neutral fact; bare ``save_paths`` is the
+    backend's. Prefixing the neutral half is what makes a clash impossible,
+    and which half carries the prefix is what tells an operator whose fact it
+    is, so it is pinned rather than left to the merge order."""
+    lines = _render_human(_client_with_colliding_facts()).splitlines()
+    neutral = [line for line in lines if "common.save_paths" in line]
+    backend = [line for line in lines if line.strip().startswith("save_paths")]
+    assert len(neutral) == 1, lines
+    assert len(backend) == 1, lines
+    assert "'/neutral'" in neutral[0]
+    assert "'/backend'" in backend[0]
+
+
+def test_the_common_container_is_not_offered_to_the_renderers_as_a_fact():
+    """The mapping holds facts only: the ``common`` dict itself is dropped.
+
+    Asserted on the mapping rather than on the output because the output
+    cannot see it. The old merge left the whole ``common`` dict in there and
+    relied on both render conditions happening to reject a mapping of facts —
+    true today, and a stray line the day a neutral field is called ``known``.
+    """
+    (client,) = _client_with_colliding_facts()["clients"]
+    facts = _renderable_facts(client)
+    assert "common" not in facts
+    assert facts["common.save_paths"]["value"] == {"": "/neutral"}
+    assert facts["save_paths"]["value"] == {"": "/backend"}

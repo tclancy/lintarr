@@ -80,6 +80,31 @@ Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2 slices
 - **Receipts:** `docs/65-bad-category-names-its-field.md`, real `lintarr check`
   runs against a stub Radarr on the base commit and on this branch.
 
+## #66: the neutral facts render under their own namespace
+
+- **The symptom:** `dump-facts` human mode merged the client-neutral facts and
+  the backend's own into one mapping, `{**common, **instance}`, so a backend
+  field named like a neutral one replaced it — two facts collected, one line
+  printed. Nothing clashes today (`ClientFacts.save_paths` against
+  qBittorrent's `save_path` is the near miss), which is why the merge order was
+  never visible. Found by #57's final review.
+- **The fix:** human mode prints the neutral facts under the `common.`
+  namespace the JSON payload already nests them in (`_renderable_facts` in
+  `cli.py`). `common.save_paths` now sits above qBittorrent's `save_path`
+  instead of beside it unlabelled.
+- **Why not the other option:** the issue also offered a test asserting the two
+  key sets are disjoint across registered backends. It leaves the renderer able
+  to shadow and it forbids a backend from naming its own field after a neutral
+  one, which is a rule a backend author would have to learn by failing the
+  suite. `docs/adding-a-backend.md` now says the names may collide.
+- **Mutation round** (whole suite, control either side, throwaway worktree):
+  the flat merge, namespacing the backend half instead, a differently spelt
+  prefix, leaving the `common` container in the mapping, and dropping the
+  neutral facts entirely are all killed. Receipts in
+  `docs/66-common-fact-namespace.md`.
+- **Only the display changed.** The JSON payload, the facts and every check are
+  untouched, so nothing on homelab behaves differently.
+
 ## #60: a `..` segment makes a path unplaceable, not a verdict
 
 - **The symptom:** `posix_abs` normalised slashes but kept `..`, and
