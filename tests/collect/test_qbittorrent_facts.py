@@ -22,6 +22,7 @@ PREFS = {
     "max_seeding_time_enabled": False,
     "max_seeding_time": -1,
     "max_inactive_seeding_time_enabled": False,
+    "max_inactive_seeding_time": -1,
 }
 
 
@@ -54,6 +55,21 @@ def test_reads_all_three_active_limits():
     assert qbt.max_active_downloads.value == 6
     assert qbt.max_active_uploads.value == 3
     assert qbt.max_active_torrents.value == 10
+
+
+def test_both_halves_of_every_share_limit_pair_are_read():
+    """A flag without its value cannot answer whether the global covers a category's own
+    limit (lintarr#59), and `max_inactive_seeding_time` was the pair left half-read."""
+    qbt, _ = _collect()
+    pairs = (
+        ("max_ratio_enabled", "max_ratio"),
+        ("max_seeding_time_enabled", "max_seeding_time"),
+        ("max_inactive_seeding_time_enabled", "max_inactive_seeding_time"),
+    )
+    for flag, value in pairs:
+        assert is_known(getattr(qbt, flag)), flag
+        assert is_known(getattr(qbt, value)), value
+    assert qbt.max_inactive_seeding_time.value == -1
 
 
 def test_version_is_captured():

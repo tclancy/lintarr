@@ -70,6 +70,7 @@ WEDGED_PREFS = {
     "max_seeding_time_enabled": False,
     "max_seeding_time": -1,
     "max_inactive_seeding_time_enabled": False,
+    "max_inactive_seeding_time": -1,
 }
 
 
