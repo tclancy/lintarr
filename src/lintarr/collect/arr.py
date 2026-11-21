@@ -378,8 +378,14 @@ def _read_remote_path_mappings(
 _CATEGORY_FIELDS = ("tvCategory", "movieCategory")
 
 
-def _client_field(entry: dict[str, Any], names: tuple[str, ...]) -> Any:
-    """The value of the first of *names* this client's ``fields`` list carries."""
+def _named_client_field(entry: dict[str, Any], names: tuple[str, ...]) -> tuple[str, Any] | None:
+    """The name and value of the first of *names* this client's ``fields`` list carries.
+
+    The name comes back with the value so a complaint about the value can say
+    which field it read: a Sonarr carries ``tvCategory`` and a Radarr
+    ``movieCategory``, and naming the wrong one sends the operator looking for
+    a field their app does not have.
+    """
     fields = entry.get("fields", [])
     if not isinstance(fields, list) or not all(isinstance(f, dict) for f in fields):
         raise ServiceError(
@@ -388,17 +394,26 @@ def _client_field(entry: dict[str, Any], names: tuple[str, ...]) -> Any:
     for name in names:
         for f in fields:
             if f.get("name") == name:
-                return f.get("value")
+                return name, f.get("value")
     return None
+
+
+def _client_field(entry: dict[str, Any], names: tuple[str, ...]) -> Any:
+    """The value of the first of *names* this client's ``fields`` list carries."""
+    found = _named_client_field(entry, names)
+    return found[1] if found is not None else None
 
 
 def _optional_str_field(entry: dict[str, Any], names: tuple[str, ...], absent: str | None):
     """A client field that is a string, or *absent* when missing or null; junk is bad-response."""
-    value = _client_field(entry, names)
+    found = _named_client_field(entry, names)
+    if found is None:
+        return absent
+    name, value = found
     if value is None:
         return absent
     if not isinstance(value, str):
-        raise ServiceError("bad-response", f"{_DOWNLOAD_CLIENT}: {names[0]!r} is not a string")
+        raise ServiceError("bad-response", f"{_DOWNLOAD_CLIENT}: {name!r} is not a string")
     return value
 
 

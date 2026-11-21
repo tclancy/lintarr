@@ -1,6 +1,14 @@
 # CONTINUATION — lintarr
 
 **Last updated:** 2026-11-21 (UTC)
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. The 3.14.10 pre-push red is fixed and merged
+(lintarr#70, PR #71, merge 6c436c3). Pluggable backends are merged and deployed
+(lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the nightly alert
+is armed. `IN PROGRESS:` lintarr#63 on
+`claude/63-orphan-inevitability-pass-detail-says-a` — a wording-only fix to one
+of `orphan-inevitability`'s PASS details, committed and awaiting review.
 **State:** lintarr#70 is merged (main 6c436c3) and `orphan-inevitability`
 before it (lintarr#58). `hardlink-futility` is merged (lintarr#57) and
 deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:`
@@ -12,10 +20,65 @@ homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
 3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
 `hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
 passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
-`IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
-— `..` in a path no longer reads as a mount. Pluggable backends are merged and
-deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the
-nightly alert is armed.
+`IN PROGRESS:` lintarr#64 on
+`claude/64-share-limits-cite-one-sonarr-version-per` — `share_limits` now cites
+one pinned Sonarr version per claim. lintarr#60 is merged (lintarr#73).
+Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2 slices
+1 and 2 are merged, and the nightly alert is armed.
+
+## #64: one pinned Sonarr version per verified claim
+
+- **The symptom:** `share_limits`'s module docstring said the removal rule was
+  read on Sonarr `v5-develop`, while `_season_pack_arm` two hundred lines down
+  said `main` (v4) — and the #58 PR body and spec said `v5-develop` too. Both
+  reads were made on 2026-11-19 and both were probably true, which is exactly
+  why neither told a reader which version the check is right about. Flagged by
+  the PR review bot on #58.
+- **What settled it:** re-read on **release tags**, not branches, the way
+  `docs/measurements/2026-10-05-sonarr-seed-ratio-range.md` already does.
+  `CanBeRemoved`, `HasReachedSeedLimit` and the seeding-time and inactive
+  siblings are **byte-identical** on Sonarr `v4.0.20.3014` (homelab's build and
+  the latest stable release), Sonarr `v5.0.0.2997` and Radarr
+  `v6.4.4.10685`. So that claim needs one citation, and it is v4 — the version
+  the check runs against.
+- **Where v5 really differs, and it is only here:** the season pack. v4 is
+  `fullSeason ? SeasonPackSeedTime : SeedTime` with the ratio always
+  `SeedRatio`. v5 adds a per-indexer `SeasonPackSeedGoal` toggle **and** a
+  `SeasonPackSeedRatio`, and gates both the time and the ratio on the toggle —
+  which defaults to `UseStandardSeedGoal = 0`, so a default-configured v5
+  season pack uses the ordinary `seedTime`/`seedRatio`, the opposite of v4.
+- **Not modelled, on purpose:** lintarr collects no `seasonPackSeedGoal`, so
+  against a v5 arr `_season_pack_arm` can read the wrong field and v5's
+  season-pack ratio is a fourth arm nothing reads. Closing either is a
+  collection change plus a v5 arr to read from; homelab runs v4, so neither gap
+  is live. Named in `share_limits`, `orphan_inevitability` and the spec's
+  "Known limits".
+- **Receipts:** `docs/measurements/2026-11-21-sonarr-removal-rule-versions.md`
+  (the C# quoted, the identical-member table, and the pinned curl commands to
+  re-derive it) and `docs/64-one-sonarr-version-per-claim.md` (the walkthrough:
+  the citations before and after, and the suite green).
+- **No behaviour change.** Nothing outside docstrings and docs moved; the
+  2855-test suite is unchanged and green.
+
+## #65: a bad category names the field it read
+
+- **The symptom:** `_optional_str_field` formatted its `bad-response` from
+  `names[0]`, the first *candidate* field, not the field it found. The category
+  candidates are `("tvCategory", "movieCategory")`, so a Radarr serving junk in
+  `movieCategory` was reported as `'tvCategory' is not a string` — pointing the
+  operator at a field Radarr does not have. Cosmetic; the refusal itself was
+  right.
+- **The fix:** `_named_client_field` returns `(name, value)` for the first
+  candidate present, and `_optional_str_field` formats from that name.
+  `_client_field` stays as the value-only reader its other two callers want, so
+  nothing else moved.
+- **Why not `names[-1]`:** it would name `movieCategory` on a Sonarr instead —
+  the same bug mirrored. The new test is parametrised over both flavours and
+  also asserts the *other* candidate's name is absent, so a message hedging by
+  naming both would fail too. Measured: the `names[-1]` mutation turns the
+  Sonarr case red.
+- **Receipts:** `docs/65-bad-category-names-its-field.md`, real `lintarr check`
+  runs against a stub Radarr on the base commit and on this branch.
 
 ## #66: the neutral facts render under their own namespace
 
@@ -86,8 +149,10 @@ and the nightly alert is armed.
 - **The fix:** collect `max_inactive_seeding_time` and send the inactive arm
   through the one shared `_global_covers`. Verified against source before
   coding: Sonarr's `HasReachedInactiveSeedingTimeLimit` has the same
-  own-limit-then-global shape as its siblings (`develop` and `main`, read
-  2026-11-21), and qBittorrent publishes both keys, deriving the flag as
+  own-limit-then-global shape as its siblings (read on Sonarr `v4.0.20.3014`,
+  and byte-identical on `v5.0.0.2997` — see
+  `docs/measurements/2026-11-21-sonarr-removal-rule-versions.md`), and
+  qBittorrent publishes both keys, deriving the flag as
   `(shareLimits.inactiveSeedingTimeLimit >= 0)` and clamping the value to `-1`
   (`appcontroller.cpp`, `sessionimpl.cpp`, `sharelimits.h` on `master`).
 - **Why the flag survives beside the value:** `_not_inactive_gate` resolves a
@@ -213,6 +278,25 @@ and the nightly alert is armed.
   suppression exists. No size is reported (runtime state).
 - **Follow-ups:** conformance-test the share-limit actions in the container
   harness; then `seed-goal-conflict` (informational).
+
+### #63: the Stop + Remove Completed PASS line
+
+- **The symptom:** `_stop_with_arr_removal` reached its PASS by asking
+  `can_fire_unrecognised`, which is False for *two* different stacks — one
+  where a limit fires and the arr recognises it, and one where no limit can
+  fire at all. Both printed "qBittorrent stops at the limit and the arr
+  removes completed downloads", so the second claimed a stop that cannot
+  happen. The verdict was always right; only the sentence was wrong.
+- **The fix:** a new `_arr_reclaims` asks `can_fire` once more and, when it is
+  False, reuses the existing "no limit can fire; seeding is unlimited" line
+  (the spec already listed it as a PASS detail). `can_fire` unknown keeps the
+  stop line: a limit may fire, and if one does the arr removes it.
+- **Pinned both ways:** a test per reason, and two mutants (fix removed; guard
+  widened to `is not None`) each leave the suite red. Receipts in
+  `docs/63-pass-detail-no-limit-fires.md`, which also renders both stacks
+  through the CLI's own `_render_findings`.
+- **No live run:** the homelab's action is RemoveWithContent, which settles
+  every pair before this line is reachable, so its PASS detail is unchanged.
 
 ## `hardlink-futility`: the first shared check
 
