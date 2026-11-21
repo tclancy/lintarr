@@ -87,7 +87,7 @@ Measured live on homelab, 2026-11-19:
 | Arr "Remove Completed" | arr `GET /api/v3/downloadclient` → top-level `removeCompletedDownloads` | `false` (both) |
 | Global action | qBittorrent prefs `max_ratio_act` (0 Stop, 1 Remove, 2 EnableSuperSeeding, 3 RemoveWithContent; `-1` Default is **not** observable here — measured 2026-11-21, a written `-1` reads back as `0`, so the check's `-1` arm is defensive only) | `3` |
 | Category action | `GET /api/v2/torrents/categories` → `share_limit_action` (string) | `"Default"` (both) |
-| Global limits | `max_ratio_enabled`/`max_ratio`, `max_seeding_time_enabled`/`max_seeding_time`, `max_inactive_seeding_time_enabled` | on: 1.5 / 20160 min / off |
+| Global limits | `max_ratio_enabled`/`max_ratio`, `max_seeding_time_enabled`/`max_seeding_time`, `max_inactive_seeding_time_enabled`/`max_inactive_seeding_time` | on: 1.5 / 20160 min / off |
 | Category limits | categories → `ratio_limit`, `seeding_time_limit`, `inactive_seeding_time_limit` | `-2` (inherit) |
 | Indexer seed criteria | existing `IndexerFacts` | all unset (defer) |
 
@@ -169,15 +169,16 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
    This reuses `queue-liveness`'s helpers by import.
 4. **`can_fire_unrecognised`:** like `can_fire`, but it counts only arms the arr
    does **not** recognise. An indexer goal or an inherited global is
-   recognised. An arm reached through the category's own `ratio_limit` or
-   `seeding_time_limit` (including the season-pack arm) is **unrecognised**
-   unless the same-arm global is reachable and its value is at or below the
-   category's value; then it is recognised. An unreadable global flag or value
-   makes that arm's recognition unknown, which makes `can_fire_unrecognised`
-   unknown unless another arm settles it (`can_fire` is unaffected: the arm
-   fires either way). An arm reached through the category's own
-   `inactive_seeding_time_limit` is always unrecognised (see Known limits).
-   Concretely: some enabled torrent indexer has an arm reached through a
+   recognised. An arm reached through the category's own `ratio_limit`,
+   `seeding_time_limit` or `inactive_seeding_time_limit` (including the
+   season-pack arm) is **unrecognised** unless the same-arm global is reachable
+   and its value is at or below the category's value; then it is recognised.
+   The inactive arm reads `max_inactive_seeding_time` for that, which Sonarr's
+   `HasReachedInactiveSeedingTimeLimit` reads for a `-2` torrent exactly as its
+   siblings read theirs (lintarr#59). An unreadable global flag or value makes
+   that arm's recognition unknown, which makes `can_fire_unrecognised` unknown
+   unless another arm settles it (`can_fire` is unaffected: the arm fires either
+   way). Concretely: some enabled torrent indexer has an arm reached through a
    category's own limit that the global does not cover.
 
 **Aggregation** (one finding per client, built like `hardlink-futility`'s):
@@ -227,10 +228,16 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
   Stop path never reclaims there. That isn't modelled.
 - **Stacks relying on Cleanuparr** with a keep-files action FAIL honestly, until
   suppression (P1) exists.
-- **Global inactive value.** The global inactive-seeding-time *value* is not
-  collected, so a category's own inactive limit is always unrecognised, even
-  when the global inactive limit is armed at or below it. That case is a
-  possible false FAIL.
+- **A global inactive limit armed above a category's own.** Closed by
+  lintarr#59 for the covering case: `max_inactive_seeding_time` is now
+  collected, and a global inactive limit at or below a category's own value
+  makes that arm recognised, like the other two. The *remaining* case is a
+  global armed **above** it, which still reads as unrecognised. The arr
+  compares `now - last_activity`, which — unlike a ratio or an accumulated
+  seeding time — keeps growing after qBittorrent stops the torrent, so the
+  global may be reached later and the arr remove it then. Whether a stopped
+  torrent keeps reporting a growing `last_activity` gap is unmeasured, so that
+  narrower case stays a possible false FAIL rather than a guessed PASS.
 - **Arrs without top-level `removeCompletedDownloads`.** An arr too old to
   report it reads Remove Completed as unknown, so a Stop action with a
   reachable limit SKIPs on every strict run.
@@ -241,7 +248,11 @@ in `save_paths`, `""` for blank). That rule is moved to a public helper in
   - `remove_completed: bool | None`, from the top-level `removeCompletedDownloads`. Absent, null or non-bool reads as `None`, never `bad-response`, so a junk value can't ERROR the whole arr.
   - `imported_category: str`, from the `tvImportedCategory` or `movieImportedCategory` field. Absent, null or empty reads as `""`, and a non-string reads as `""` too. The value is only consulted when non-empty, so the default is harmless.
 - `Backend` gains `arr_dependent: Mapping[str, str]`, mapping invariant id to the premise used for the failed-arr SKIP. It defaults to empty. `lintarr.checks` gains `SHARED_ARR_DEPENDENT` (hardlink-futility's entry). `run._resolve_failed_arr` reads both instead of naming `hardlink_futility`. Its existing hardlink output stays byte-identical.
-- No new qBittorrent prefs.
+- One new qBittorrent pref, added by lintarr#59: `max_inactive_seeding_time`,
+  beside the flag already collected. `appcontroller.cpp` publishes both keys and
+  derives the flag as `(shareLimits.inactiveSeedingTimeLimit >= 0)`, so the flag
+  still answers reachability on its own and the value is read only when the flag
+  is on.
 
 ## Axioms
 

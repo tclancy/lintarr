@@ -9,6 +9,141 @@ passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#62 on
 qBittorrent share-limit actions (tests and docs only, nothing in `src/`).
 Pluggable backends are merged and deployed (lintarr#56, homelab#692). P2
 slices 1 and 2 are merged, and the nightly alert is armed.
+**State:** lintarr#70 is merged (main 6c436c3) and `orphan-inevitability`
+before it (lintarr#58). `hardlink-futility` is merged (lintarr#57) and
+deployed; its first homelab run passed 2026-11-19 19:08 UTC. `IN PROGRESS:`
+lintarr#61 on `claude/61-queue-liveness-action-route-ignores-per` —
+`queue-liveness`'s ACTION route now reads each category's own
+`share_limit_action`. Pluggable backends are merged and deployed (lintarr#56,
+homelab#692). P2 slices 1 and 2 are merged, and the nightly alert is armed.
+**State:** `orphan-inevitability` is merged (lintarr#58, main 4623438) and #70's
+3.14.10 gate fix is merged (lintarr#71, main 6c436c3).
+`hardlink-futility` is merged (lintarr#57) and deployed; its first homelab run
+passed 2026-11-19 19:08 UTC. lintarr#70 is merged (main 6c436c3).
+`IN PROGRESS:` lintarr#60 on `claude/60-hardlink-futility-paths-containing-are-c`
+— `..` in a path no longer reads as a mount. Pluggable backends are merged and
+deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged, and the
+nightly alert is armed.
+
+## #60: a `..` segment makes a path unplaceable, not a verdict
+
+- **The symptom:** `posix_abs` normalised slashes but kept `..`, and
+  `mount_of` compares with `PurePosixPath.is_relative_to`, which is lexical.
+  A save path `/downloads/../media/tv` was placed on mount `/downloads` though
+  it reaches `/media`. Measured both directions on 6c436c3: a **FAIL** over a
+  pair that really shares a mount, and a **PASS** over a pair that does not.
+- **The fix:** refuse `..` rather than resolve it. Resolving lexically
+  (`posixpath.normpath`) is the other option the issue offered, and it is right
+  only when no earlier component is a symlink — which the string cannot say.
+  Unknown is the honest answer, so the triple is unknown and the finding SKIPs.
+  `posix_abs_or_reason` carries the clause the SKIP detail prints; `posix_abs`
+  is a thin reader of it.
+- **Why the detail changed:** the old wording for an unparseable path was
+  "is not absolute POSIX", which is false of `/downloads/../media/tv`. The new
+  clause names the `..`.
+- **Mutation round** (whole suite, control between every mutant, in a throwaway
+  worktree): dropping the guard, resolving with `normpath`, testing `..` as a
+  substring, and swapping the reason text are all killed. Receipts in
+  `docs/60-dotdot-paths-are-unplaceable.md`.
+- **Nothing on homelab changes:** real arr and qBittorrent paths have no `..`.
+passed 2026-11-19 19:08 UTC. `IN PROGRESS:` lintarr#59 on
+`claude/59-orphan-inevitability-category-inactive-l-1795261877` — the category
+inactive-limit false FAIL, committed and awaiting a PR. Pluggable backends are
+merged and deployed (lintarr#56, homelab#692). P2 slices 1 and 2 are merged,
+and the nightly alert is armed.
+
+## #59: a category inactive limit the global already covers
+
+- **The symptom:** a stack running the Stop action with the arr's Remove
+  Completed ON, where a qBittorrent category sets its own
+  `inactive_seeding_time_limit`, got a FAIL `nothing-reclaims` even when the
+  global inactive limit was armed at or below the category's value — a stack
+  that reclaims perfectly well. Found by #58's final review and the PR review
+  bot.
+- **Why:** `orphan-inevitability` recognises a category's own limit only when
+  the same-arm global covers it (the arr reads the global for a `-2` torrent).
+  Ratio and seeding time did that; `_global_inactive_covers` hard-returned
+  `False`, because `max_inactive_seeding_time` was collected as a flag with no
+  value beside it. The flag alone answers *can the gate fire*, which is all
+  `queue-liveness` ever needed, so the value had never been collected.
+- **The fix:** collect `max_inactive_seeding_time` and send the inactive arm
+  through the one shared `_global_covers`. Verified against source before
+  coding: Sonarr's `HasReachedInactiveSeedingTimeLimit` has the same
+  own-limit-then-global shape as its siblings (`develop` and `main`, read
+  2026-11-21), and qBittorrent publishes both keys, deriving the flag as
+  `(shareLimits.inactiveSeedingTimeLimit >= 0)` and clamping the value to `-1`
+  (`appcontroller.cpp`, `sessionimpl.cpp`, `sharelimits.h` on `master`).
+- **Why the flag survives beside the value:** `_not_inactive_gate` resolves a
+  `field-absent` flag as "no third arm" on purpose, because the preference
+  postdates qBittorrent 4.6. Replacing the flag with the value would have
+  broken that resolution and turned every pre-4.6 client into a SKIP.
+- **The narrower limit left behind, on purpose:** a global armed *above* the
+  category's value still reads as unrecognised and still FAILs. Sonarr compares
+  `now - LastActivity`, which keeps growing after the stop — unlike a ratio or
+  an accumulated seeding time, which freeze — so such a torrent may be removed
+  later. Whether a stopped torrent keeps reporting a growing `last_activity`
+  gap is **unmeasured** here, so it stays a possible false FAIL rather than a
+  guessed PASS. `DECISION NEEDED:` if Tom wants that closed, it is a container
+  measurement (does `last_activity` keep moving on a stopped torrent?), not a
+  code change.
+- **Receipts:** `docs/59-category-inactive-limit-coverage.md` — the same
+  scenario FAILing at 6c436c3 and PASSing here, the three neighbouring stacks
+  (PASS / FAIL / SKIP), the collected preference pair, and a three-mutant round
+  over the whole suite with a control between every mutant.
+
+## #61: the ACTION route reads each category's share-limit action
+
+- **The symptom:** `_action_frees_no_slot` read the global `max_ratio_act`
+  alone, and its docstring said that one value decided everything. It does
+  not. `effectiveShareLimitAction()` asks the torrent, then the category, then
+  the global, and a qBittorrent 5.x category carries its own
+  `share_limit_action`. Global Stop beside category `tv` on
+  `EnableSuperSeeding` was a **PASS** on a stack whose `tv` seeders hold their
+  slots forever — while `orphan-inevitability`, one check lower in the same
+  output, named that exact setting on that exact category.
+- **Why the flagship could not see it:** `effective_action` lived in
+  `share_limits.py`, which imports *from* `queue_liveness`. Reaching it meant
+  moving it up beside the rest of this file's measured qBittorrent semantics
+  (`_can_be_reached`, `USE_GLOBAL`, `_RELEASING_ACTIONS`), which is where
+  `share_limits`' own docstring already says qBittorrent's side comes from.
+  `share_limits` re-exports it, so `orphan_inevitability` and its tests are
+  untouched.
+- **The shape:** a three-valued OR over *routes* — the uncategorised/global
+  one, plus each named category. One route that frees nothing is enough,
+  because the wedge argument is the same monotone one as everywhere else here:
+  seeders accumulate in `max_active_torrents` and never leave, so a single
+  category whose torrents never release fills every slot however well the rest
+  drain.
+- **The mirror case stays a FAIL, deliberately.** Global
+  `EnableSuperSeeding` with `tv` on Stop: a torrent with no category always
+  takes the global route, so the stack can still wedge. What changed is the
+  sentence — `_note_action_routes` names which routes free no slot, and names
+  only categories carrying an action of their *own*, so a `Default` category
+  is not accused of a setting it does not have.
+- **Pinned first, then changed.** `_CATEGORY_DEFERS` × the existing `_ACTIONS`
+  truth table is 24 combinations asserting that nothing moves when a category
+  declines to decide. Exactly three cells of the full matrix change, all
+  PASS → FAIL, all in the `EnableSuperSeeding` column; the receipts are the
+  before/after tables in `docs/61-category-share-limit-action.md`.
+- **One existing test changed meaning**, and only one:
+  `test_one_readable_category_limit_settles_it_despite_an_unreadable_neighbour`
+  now asserts on `_no_category_sets_its_own_limit` directly. An unparseable
+  category body is also a category whose *action* nobody can read, so the
+  surviving verdict is ACTION's honest SKIP on a question that test was never
+  about.
+- **Mutation round** (whole suite, baseline restored between mutants): four of
+  five killed. The fifth — `is True` → `is not False` in the route naming — is
+  an **equivalent mutant** after the own-action filter, and is recorded as
+  unpinned rather than claimed as tested. A sixth, found by the round, was
+  real: resolving an unreadable category map to "no extra routes" changed no
+  verdict because `SEEDING` SKIPs on that input first and is earlier in
+  `_worst_of`. It is pinned on the predicate directly now.
+- **Left open on purpose:** a global action that frees no slot still FAILs the
+  whole client even when every category in use overrides it. Narrowing that
+  wants the arr-side fact of which categories torrents land in, which
+  `queue_liveness.check` cannot reach — it takes a bare `QbtInstance`, not a
+  `ClientInstance`. Parent-category fallback is still unread, the same known
+  limit `orphan-inevitability` carries.
 
 ## #70: the deep-JSON test no longer raises on 3.14.10
 

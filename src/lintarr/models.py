@@ -30,6 +30,7 @@ class QbtInstance:
     max_seeding_time_enabled: Fact[bool]
     max_seeding_time: Fact[int]
     max_inactive_seeding_time_enabled: Fact[bool]
+    max_inactive_seeding_time: Fact[int]
     categories: Fact[dict[str, Any]]
     save_path: Fact[str]
     auto_tmm_enabled: Fact[bool]

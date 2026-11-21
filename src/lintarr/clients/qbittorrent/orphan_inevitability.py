@@ -22,8 +22,10 @@ counted; parent categories are not followed; older arr builds that miss
 qBittorrent 5's ``stoppedUP`` are not modelled; Cleanuparr-style external
 cleanup is not seen and FAILs honestly; an arr too old to report top-level
 ``removeCompletedDownloads`` reads Remove Completed as unknown, so a Stop action
-with a reachable limit SKIPs on every strict run; a category's own inactive
-limit is never counted as covered by the global (its value is not collected).
+with a reachable limit SKIPs on every strict run; a global inactive limit armed
+*above* a category's own inactive limit still reads as unrecognised, because
+whether a stopped torrent's inactive timer keeps accruing is unmeasured
+(``share_limits``).
 
 The "an arr failed to collect" SKIP lives in ``run.py``, keyed by
 ``BACKEND.arr_dependent``: this check sees no collection errors.
